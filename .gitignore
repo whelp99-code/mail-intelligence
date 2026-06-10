@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Local data & caches
+.mail-cache.json
+.outlook-accounts.json
+.attachment-archive.json
+.attachment-archive-meta.json
+.oauth-states.json
+.outlook-config.json
+data/
+
+# Local backups & settings
+.codex-backups/
+.cursor/
+.DS_Store
+
+# Environment config
+.env
+.env.local
+.env.*.local

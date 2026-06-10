@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mail Intelligence</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div>
+        <p class="eyebrow">Outlook Work OS</p>
+        <h1>Mail Intelligence</h1>
+        <p class="lede">Outlook 메일을 요약하고 다음 액션까지 정리합니다.</p>
+      </div>
+      <nav class="nav" aria-label="분석 섹션">
+        <a href="#messages">메일</a>
+        <a href="#messageDetail">요약</a>
+        <a href="#actions">액션</a>
+      </nav>
+      <div class="connector">
+        <span class="dot"></span>
+        <span id="connectionStatus">Outlook 연결 확인 중</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="topbar">
+        <div>
+          <h2>메일 업무함</h2>
+          <p id="fetchStatus">아직 Outlook을 가져오지 않았습니다.</p>
+        </div>
+        <div class="actions">
+          <label class="search-field" aria-label="메일 검색">
+            <span>Search</span>
+            <input id="mailSearch" type="search" placeholder="제목, 보낸사람, 본문, 액션 검색" />
+          </label>
+          <label class="field-inline">
+            최근
+            <select id="mailLimit">
+              <option value="10">10개</option>
+              <option value="25" selected>25개</option>
+              <option value="50">50개</option>
+            </select>
+          </label>
+          <button id="loadOutlook" type="button" class="primary">Outlook 가져오기</button>
+          <button id="loadSample" type="button">데모</button>
+        </div>
+      </section>
+
+      <details class="config-panel">
+        <summary>
+          <span>Outlook 연결 설정</span>
+          <strong id="configStatus">미설정</strong>
+        </summary>
+        <div class="notice">
+          Outlook 로그인 방식에서는 Client Secret을 비워두세요. 개인 Outlook.com 계정은 App registration의 Supported account types가
+          Personal Microsoft accounts를 허용해야 합니다. 메일 발송 기능을 쓰려면 Microsoft 권한에 Mail.Send가 승인되어야 합니다.
+        </div>
+        <form id="configForm" class="config-grid">
+          <label>
+            Login Tenant
+            <select id="loginTenant" name="loginTenant">
+              <option value="common" selected>회사/개인 계정 모두</option>
+              <option value="organizations">회사 계정만</option>
+              <option value="consumers">Outlook.com 개인 계정만</option>
+            </select>
+          </label>
+          <label>
+            Access Token
+            <input id="accessToken" name="accessToken" type="password" autocomplete="off" />
+          </label>
+          <label>
+            Tenant ID
+            <input id="tenantId" name="tenantId" type="text" autocomplete="off" />
+          </label>
+          <label>
+            Application Client ID
+            <input id="clientId" name="clientId" type="text" autocomplete="off" />
+          </label>
+          <label>
+            Client Secret, 앱 권한 방식 전용
+            <input id="clientSecret" name="clientSecret" type="password" autocomplete="off" />
+          </label>
+          <label>
+            Mailbox User
+            <input id="mailboxUser" name="mailboxUser" type="email" autocomplete="off" />
+          </label>
+          <label>
+            Google AI Studio API Key
+            <input id="geminiApiKey" name="geminiApiKey" type="password" autocomplete="off" />
+          </label>
+          <label>
+            Gemini Model
+            <input id="geminiModel" name="geminiModel" type="text" autocomplete="off" value="gemini-2.5-flash" />
+          </label>
+          <div class="config-actions">
+            <button id="loginOutlook" type="button">Outlook으로 로그인</button>
+            <button id="saveConfig" type="submit" class="primary">저장 후 가져오기</button>
+            <button id="clearConfig" type="button">입력 지우기</button>
+          </div>
+        </form>
+      </details>
+
+      <section class="kpi-strip" aria-live="polite">
+        <button class="metric urgent" type="button" data-filter="urgent"><span>긴급</span><strong id="urgentCount">0</strong></button>
+        <button class="metric active" type="button" data-filter="active"><span>진행중</span><strong id="activeCount">0</strong></button>
+        <button class="metric waiting" type="button" data-filter="waiting"><span>대기</span><strong id="waitingCount">0</strong></button>
+        <button class="metric done" type="button" data-filter="done"><span>완료</span><strong id="doneCount">0</strong></button>
+      </section>
+
+      <section class="mail-shell">
+        <aside id="messages" class="mail-list-panel">
+          <div class="panel-head compact">
+            <h3>메일 목록</h3>
+            <span id="messageCount">0건</span>
+          </div>
+          <div id="messageList" class="message-list"></div>
+        </aside>
+
+        <article id="messageDetail" class="detail-panel">
+          <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
+        </article>
+
+        <aside class="action-column">
+          <section id="actions" class="panel">
+            <div class="panel-head compact">
+              <h3>다음 액션</h3>
+              <span id="actionCount">0건</span>
+            </div>
+            <div id="actionList" class="stack"></div>
+          </section>
+          <section id="calendar" class="panel">
+            <div class="panel-head compact">
+              <h3>일정</h3>
+              <span id="calendarCount">0건</span>
+            </div>
+            <div id="calendarList" class="stack"></div>
+          </section>
+          <section id="reminders" class="panel">
+            <div class="panel-head compact">
+              <h3>알림 후보</h3>
+              <span id="reminderCount">0건</span>
+            </div>
+            <div id="reminderList" class="stack"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
