@@ -21,6 +21,9 @@ const loginTenant = document.querySelector('#loginTenant');
 const loginOutlook = document.querySelector('#loginOutlook');
 const geminiApiKey = document.querySelector('#geminiApiKey');
 const geminiModel = document.querySelector('#geminiModel');
+const aiProvider = document.querySelector('#aiProvider');
+const faiosServerUrl = document.querySelector('#faiosServerUrl');
+const lmstudioModel = document.querySelector('#lmstudioModel');
 
 const counts = {
   urgent: document.querySelector('#urgentCount'),
@@ -531,6 +534,10 @@ async function loadStatus() {
     clientId.value = status.clientId || '';
     mailboxUser.value = status.mailboxUser || '';
     geminiModel.value = status.geminiModel || 'gemini-2.5-flash';
+    // AI Provider settings
+    aiProvider.value = status.aiProvider || 'f-aios-v3';
+    faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3200';
+    lmstudioModel.value = status.lmstudioModel || 'qwen/qwen3.5-9b';
     accessToken.placeholder = status.hasAccessToken ? '저장된 토큰 사용 중' : '';
     clientSecret.placeholder = status.hasClientSecret ? '저장된 client secret 사용 중' : '';
     geminiApiKey.placeholder = status.hasGeminiApiKey ? '저장된 Gemini API key 사용 중' : '';
@@ -555,6 +562,9 @@ async function saveConfig(event) {
       loginTenant: loginTenant.value,
       geminiApiKey: geminiApiKey.value,
       geminiModel: geminiModel.value,
+      aiProvider: aiProvider.value,
+      faiosServerUrl: faiosServerUrl.value,
+      lmstudioModel: lmstudioModel.value,
       persist: true
     })
   });
@@ -597,7 +607,7 @@ async function loadOutlookMessages() {
       : `${payload.messages.length}개 메일`;
     const ai = payload.result?.ai;
     const aiLabel = ai?.enabled
-      ? `Gemini AI 적용 (${ai.model}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
+      ? `${ai.provider === 'f-aios-v3' ? 'F-AIOS-v3' : ai.provider === 'gemini' ? 'Gemini' : 'LM Studio'} AI 적용 (${ai.model}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
       : '규칙 기반';
     fetchStatus.textContent = payload.connected
       ? `${syncLabel} 분석 완료 · ${aiLabel} · ${new Date(payload.analyzedAt).toLocaleString('ko-KR')}`
@@ -644,6 +654,9 @@ clearConfig.addEventListener('click', async () => {
   loginTenant.value = 'common';
   geminiApiKey.value = '';
   geminiModel.value = 'gemini-2.5-flash';
+  aiProvider.value = 'f-aios-v3';
+  faiosServerUrl.value = 'http://localhost:3200';
+  lmstudioModel.value = 'qwen/qwen3.5-9b';
   await fetch('/api/outlook/config', { method: 'DELETE' });
   configStatus.textContent = '저장값 초기화';
   connectionStatus.textContent = 'Outlook 인증값 필요';
@@ -660,3 +673,60 @@ mailSearch.addEventListener('input', () => {
 });
 
 loadStatus();
+
+// --- Column Resize (Drag & Drop) ---
+(function initColumnResize() {
+  const shell = document.getElementById('mailShell');
+  if (!shell) return;
+  const resizers = shell.querySelectorAll('.col-resizer');
+  const columns = () => [...shell.children].filter(el => 
+    el.classList.contains('mail-list-panel') || 
+    el.classList.contains('detail-panel') || 
+    el.classList.contains('action-column')
+  );
+  
+  resizers.forEach((resizer) => {
+    let startX, startWidths, colIndex;
+    
+    resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      colIndex = parseInt(resizer.dataset.col, 10);
+      startX = e.clientX;
+      startWidths = columns().map(col => col.getBoundingClientRect().width);
+      resizer.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      
+      const onMouseMove = (e) => {
+        const dx = e.clientX - startX;
+        const cols = columns();
+        if (cols[colIndex] && cols[colIndex + 1]) {
+          const newWidth1 = Math.max(200, startWidths[colIndex] + dx);
+          const newWidth2 = Math.max(200, startWidths[colIndex + 1] - dx);
+          cols[colIndex].style.flex = `0 0 ${newWidth1}px`;
+          cols[colIndex + 1].style.flex = `0 0 ${newWidth2}px`;
+          shell.style.gridTemplateColumns = [...cols].map(c => 
+            c.style.flex || `0 0 ${c.getBoundingClientRect().width}px`
+          ).join(' ');
+        }
+      };
+      
+      const onMouseUp = () => {
+        resizer.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+      
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+    
+    resizer.addEventListener('dblclick', () => {
+      const cols = columns();
+      shell.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
+      cols.forEach(col => col.style.flex = '');
+    });
+  });
+})();

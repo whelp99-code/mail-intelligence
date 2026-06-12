@@ -195,6 +195,9 @@ textarea {
   font-weight: 850;
 }
 .config-grid input, .config-grid select { margin-top: 6px; }
+.config-grid .full-width {
+  grid-column: 1 / -1;
+}
 .config-actions {
   align-items: end;
   display: flex;
@@ -237,21 +240,52 @@ textarea {
 .metric.done strong { color: var(--green); }
 
 .mail-shell {
-  min-height: 720px;
+  height: calc(100vh - 280px);
+  min-height: 500px;
   display: grid;
-  grid-template-columns: minmax(310px, 0.9fr) minmax(440px, 1.35fr) minmax(300px, 0.8fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
-.mail-list-panel, .detail-panel, .action-column {
+.mail-shell > * {
   min-height: 0;
   overflow: hidden;
 }
-.mail-list-panel, .detail-panel {
-  max-height: 78vh;
-}
-.mail-list-panel, .detail-panel, .panel {
+.mail-list-panel, .detail-panel, .action-column {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+.mail-list-panel, .detail-panel {
+  max-height: none;
+}
+.mail-list-panel > .panel-head,
+.detail-panel > .detail-head,
+.action-column > .panel-head {
+  flex-shrink: 0;
+}
+.mail-list-panel > .message-list,
+.detail-panel > .detail-scroll,
+.action-column > .stack {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+/* 리사이저 핸들 */
+.col-resizer {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.col-resizer:hover,
+.col-resizer.active {
+  background: var(--green);
+}
+.action-column {
+  display: grid;
+  grid-template-rows: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+  gap: 12px;
 }
 .panel-head {
   align-items: center;

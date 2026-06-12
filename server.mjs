@@ -31,7 +31,11 @@ const runtimeConfig = {
   geminiApiKey: '',
   geminiModel: 'gemini-2.5-flash',
   refreshToken: '',
-  expiresAt: 0
+  expiresAt: 0,
+  // F-AIOS-v3 Integration
+  aiProvider: 'f-aios-v3',  // 'f-aios-v3' | 'gemini' | 'lmstudio'
+  faiosServerUrl: 'http://localhost:3200',
+  lmstudioModel: 'qwen/qwen3.5-9b'
 };
 const pendingOAuth = new Map();
 
@@ -203,6 +207,10 @@ function configStatus() {
     tenantId: getConfigValue('tenantId', 'MICROSOFT_TENANT_ID') || '',
     clientId: getConfigValue('clientId', 'MICROSOFT_CLIENT_ID') || '',
     geminiModel: runtimeConfig.geminiModel || 'gemini-2.5-flash',
+    // AI Provider settings
+    aiProvider: runtimeConfig.aiProvider || 'f-aios-v3',
+    faiosServerUrl: runtimeConfig.faiosServerUrl || 'http://localhost:3200',
+    lmstudioModel: runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b',
     hasAccessToken: hasToken,
     hasTenantId: Boolean(getConfigValue('tenantId', 'MICROSOFT_TENANT_ID')),
     hasClientId: Boolean(getConfigValue('clientId', 'MICROSOFT_CLIENT_ID')),
@@ -451,12 +459,16 @@ async function getGraphAccessToken() {
   if (directToken && (!runtimeConfig.expiresAt || Date.now() < runtimeConfig.expiresAt - 60_000)) return directToken;
 
   if (runtimeConfig.refreshToken && runtimeConfig.clientId && runtimeConfig.tenantId) {
-    const body = new URLSearchParams({
+    const refreshParams = {
       client_id: runtimeConfig.clientId,
       grant_type: 'refresh_token',
       refresh_token: runtimeConfig.refreshToken,
       scope: delegatedScopes
-    });
+    };
+    if (runtimeConfig.clientSecret) {
+      refreshParams.client_secret = runtimeConfig.clientSecret;
+    }
+    const body = new URLSearchParams(refreshParams);
     const response = await fetch(`https://login.microsoftonline.com/${runtimeConfig.tenantId}/oauth2/v2.0/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -718,11 +730,10 @@ function normalizeActionScenarios(message, actions = [], summaries = []) {
   }));
 }
 
-async function enrichWithGemini(messages, result) {
-  const apiKey = getConfigValue('geminiApiKey', 'GEMINI_API_KEY');
-  if (!apiKey || messages.length === 0) return { ...result, ai: { enabled: false, provider: 'rules' } };
-
-  const model = runtimeConfig.geminiModel || 'gemini-2.5-flash';
+async function enrichWithAI(messages, result) {
+  const provider = runtimeConfig.aiProvider || 'f-aios-v3';
+  if (messages.length === 0) return { ...result, ai: { enabled: false, provider: 'rules' } };
+  
   const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
   const cache = await loadMailCache();
   const cacheKey = mailboxCacheKey(mailboxUser);
@@ -732,28 +743,29 @@ async function enrichWithGemini(messages, result) {
   const feedbackExamples = feedbackForPrompt(feedback);
   const cachedById = new Map();
   const messagesForAi = [];
-
+  
+  // 캐시된 분석 결과 사용
   for (const message of messages) {
-    const cached = analysisCache[analysisCacheKey(message, model)];
+    const cached = analysisCache[analysisCacheKey(message, provider)];
     if (cached) {
       cachedById.set(message.id, cached);
     } else {
       messagesForAi.push(message);
     }
   }
-
+  
   if (messagesForAi.length === 0) {
     const cachedInsights = result.messageInsights.map((insight) => {
       const cached = cachedById.get(insight.id);
       const message = messages.find((item) => item.id === insight.id) || insight;
       return cached
         ? {
-          ...insight,
-          ...cached,
-          nextActions: normalizeActionScenarios(message, cached.nextActions || insight.nextActions, cached.summary || insight.summary),
-          aiEnhanced: true,
-          aiCached: true
-        }
+            ...insight,
+            ...cached,
+            nextActions: normalizeActionScenarios(message, cached.nextActions || insight.nextActions, cached.summary || insight.summary),
+            aiEnhanced: true,
+            aiCached: true
+          }
         : insight;
     });
     return {
@@ -772,80 +784,34 @@ async function enrichWithGemini(messages, result) {
           receivedAt: action.receivedAt,
           webLink: action.webLink
         })),
-      ai: { enabled: true, provider: 'gemini', model, cached: messages.length }
+      ai: { enabled: true, provider, model: getModelName(provider), cached: messages.length }
     };
   }
-
-  const prompt = `You are an executive email triage assistant. Analyze each email and return ONLY valid JSON.
-
-Language: Korean.
-Classify status as one of: urgent, active, waiting, done, reference.
-For each email, provide concise summary bullets and exactly 3 next action scenarios.
-Scenario 1 should be a direct confirmation/progress reply.
-Scenario 2 should request missing details or clarify blockers.
-Scenario 3 should share or reference Sangfor pages/manuals/related documents when relevant, otherwise propose a document-backed follow-up.
-Do not invent facts. If no action is needed, create one action that says whether to archive, monitor, or review later.
-Use the user's prior correction examples as preference guidance. If a similar sender, subject token, or reason pattern appears, align with the user's corrected status unless the current email has explicit contradictory evidence.
-
-Recent user correction examples:
-${JSON.stringify(feedbackExamples, null, 2)}
-
-JSON schema:
-{
-  "messages": [
-    {
-      "id": "same id",
-      "status": "urgent|active|waiting|done|reference",
-      "summary": ["2-4 Korean bullets"],
-      "nextActions": [
-        {
-          "recommendedAction": "concrete Korean action",
-          "owner": "owner or 미지정",
-          "due": "explicit due date/time or empty",
-          "priority": 1,
-          "lane": "urgent|active|waiting|done",
-          "evidence": "short supporting sentence from email",
-          "intent": "why this scenario is useful",
-          "to": "recipient email",
-          "subject": "draft email subject",
-          "body": "editable Korean email draft"
-        }
-      ],
-      "evidenceItems": ["supporting facts, not raw long paragraphs"],
-      "aiRationale": "why this status/action was chosen"
+  
+  const prompt = buildAnalysisPrompt(feedbackExamples, messagesForAi);
+  let aiText = '';
+  
+  try {
+    if (provider === 'f-aios-v3') {
+      aiText = await callFaiosServer(prompt);
+    } else if (provider === 'gemini') {
+      aiText = await callGeminiApi(prompt);
+    } else {
+      aiText = await callLmStudio(prompt);
     }
-  ]
-}
-
-Emails:
-${JSON.stringify(messagesForAi.map((message) => ({
-    id: message.id,
-    subject: message.subject,
-    from: message.fromName || message.from,
-    receivedAt: message.receivedAt,
-    body: clip(message.body || message.bodyPreview, 4500)
-  })), null, 2)}`;
-
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }
-    })
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Gemini API error: ${response.status} ${text}`);
+  } catch (error) {
+    // F-AIOS-v3 실패 시 LM Studio로 폴백
+    if (provider === 'f-aios-v3') {
+      try {
+        aiText = await callLmStudio(prompt);
+        console.log('F-AIOS-v3 fallback to LM Studio succeeded');
+      } catch (fallbackError) {
+        throw new Error(`AI analysis failed: ${error.message}. Fallback also failed: ${fallbackError.message}`);
+      }
+    } else {
+      throw error;
+    }
   }
-
-  const payload = await response.json();
-  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
-  const ai = extractJson(text);
   const byId = new Map((ai.messages || []).map((item) => [item.id, item]));
   const aiMessageIds = new Set(messagesForAi.map((message) => message.id));
   const enhancedInsights = result.messageInsights.map((insight) => {
@@ -974,7 +940,7 @@ async function handleApi(req, res) {
     if (req.method === 'POST') {
       try {
         const body = await readJsonBody(req);
-        for (const key of ['tenantId', 'clientId', 'mailboxUser', 'loginTenant', 'geminiModel']) {
+        for (const key of ['tenantId', 'clientId', 'mailboxUser', 'loginTenant', 'geminiModel', 'aiProvider', 'faiosServerUrl', 'lmstudioModel']) {
           if (typeof body[key] === 'string') runtimeConfig[key] = body[key].trim();
         }
         for (const key of ['accessToken', 'clientSecret', 'geminiApiKey']) {
@@ -1052,10 +1018,10 @@ async function handleApi(req, res) {
       let result = baseResult;
       let aiError = null;
       try {
-        result = await enrichWithGemini(data.messages, baseResult);
+        result = await enrichWithAI(data.messages, baseResult);
         result = applyFeedbackToResult(result, data.messages, feedback, { allowLearnedOverride: false });
       } catch (error) {
-        aiError = error instanceof Error ? error.message : 'Gemini enhancement failed.';
+        aiError = error instanceof Error ? error.message : 'AI enhancement failed.';
         result = { ...baseResult, ai: { enabled: false, provider: 'rules', error: aiError } };
       }
       return json(res, 200, {
@@ -1092,14 +1058,18 @@ const server = createServer(async (req, res) => {
     }
 
     try {
-      const body = new URLSearchParams({
+      const tokenParams = {
         client_id: pending.clientId,
         grant_type: 'authorization_code',
         code,
         redirect_uri: pending.redirectUri,
         code_verifier: pending.codeVerifier,
         scope: delegatedScopes
-      });
+      };
+      if (runtimeConfig.clientSecret) {
+        tokenParams.client_secret = runtimeConfig.clientSecret;
+      }
+      const body = new URLSearchParams(tokenParams);
       const response = await fetch(`https://login.microsoftonline.com/${pending.tenantId}/oauth2/v2.0/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1166,3 +1136,140 @@ await loadPersistedConfig();
 server.listen(port, () => {
   console.log(`Mail Intelligence app running at http://localhost:${port}`);
 });
+
+// --- AI Helper Functions ---
+
+function getModelName(provider) {
+  if (provider === 'f-aios-v3') return 'F-AIOS-v3 (via LM Studio)';
+  if (provider === 'gemini') return runtimeConfig.geminiModel || 'gemini-2.5-flash';
+  return runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
+}
+
+function buildAnalysisPrompt(feedbackExamples, messagesForAi) {
+  return `You are an executive email triage assistant. Analyze each email and return ONLY valid JSON.
+
+Language: Korean.
+Classify status as one of: urgent, active, waiting, done, reference.
+For each email, provide concise summary bullets and exactly 3 next action scenarios.
+Scenario 1 should be a direct confirmation/progress reply.
+Scenario 2 should request missing details or clarify blockers.
+Scenario 3 should share or reference Sangfor pages/manuals/related documents when relevant, otherwise propose a document-backed follow-up.
+Do not invent facts. If no action is needed, create one action that says whether to archive, monitor, or review later.
+Use the user's prior correction examples as preference guidance. If a similar sender, subject token, or reason pattern appears, align with the user's corrected status unless the current email has explicit contradictory evidence.
+
+Recent user correction examples:
+${JSON.stringify(feedbackExamples, null, 2)}
+
+JSON schema:
+{
+  "messages": [
+    {
+      "id": "same id",
+      "status": "urgent|active|waiting|done|reference",
+      "summary": ["2-4 Korean bullets"],
+      "nextActions": [
+        {
+          "recommendedAction": "concrete Korean action",
+          "owner": "owner or 미지정",
+          "due": "explicit due date/time or empty",
+          "priority": 1,
+          "lane": "urgent|active|waiting|done",
+          "evidence": "short supporting sentence from email",
+          "intent": "why this scenario is useful",
+          "to": "recipient email",
+          "subject": "draft email subject",
+          "body": "editable Korean email draft"
+        }
+      ],
+      "evidenceItems": ["supporting facts, not raw long paragraphs"],
+      "aiRationale": "why this status/action was chosen"
+    }
+  ]
+}
+
+Emails:
+${JSON.stringify(messagesForAi.map((message) => ({
+    id: message.id,
+    subject: message.subject,
+    from: message.fromName || message.from,
+    receivedAt: message.receivedAt,
+    body: clip(message.body || message.bodyPreview, 4500)
+  })), null, 2)}`;
+}
+
+async function callFaiosServer(prompt) {
+  const serverUrl = runtimeConfig.faiosServerUrl || 'http://localhost:3200';
+  
+  const response = await fetch(`${serverUrl}/api/workflow/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workflow: 'email-analysis',
+      input: {
+        prompt,
+        model: runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b',
+        temperature: 0.2,
+        max_tokens: 8192
+      }
+    })
+  });
+  
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`F-AIOS-v3 server error: ${response.status} ${text}`);
+  }
+  
+  const payload = await response.json();
+  return payload.output?.response || payload.response || JSON.stringify(payload);
+}
+
+async function callGeminiApi(prompt) {
+  const apiKey = getConfigValue('geminiApiKey', 'GEMINI_API_KEY');
+  if (!apiKey) throw new Error('Gemini API key not configured');
+  
+  const model = runtimeConfig.geminiModel || 'gemini-2.5-flash';
+  
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
+    },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }
+    })
+  });
+  
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Gemini API error: ${response.status} ${text}`);
+  }
+  
+  const payload = await response.json();
+  return payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
+}
+
+async function callLmStudio(prompt) {
+  const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
+  
+  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+      max_tokens: 8192,
+      response_format: { type: 'json_object' }
+    })
+  });
+  
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LM Studio error: ${response.status} ${text}`);
+  }
+  
+  const payload = await response.json();
+  return payload.choices?.[0]?.message?.content || '';
+}

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server.mjs"
+    "dev": "PORT=10200 node server.mjs"
   }
 }

@@ -94,6 +94,22 @@
             Gemini Model
             <input id="geminiModel" name="geminiModel" type="text" autocomplete="off" value="gemini-2.5-flash" />
           </label>
+          <label>
+            AI 프로바이더
+            <select id="aiProvider" name="aiProvider">
+              <option value="f-aios-v3" selected>F-AIOS-v3 (로컬 LM Studio)</option>
+              <option value="lmstudio">LM Studio (직접 연결)</option>
+              <option value="gemini">Google Gemini (API 키 필요)</option>
+            </select>
+          </label>
+          <label>
+            F-AIOS-v3 서버 URL
+            <input id="faiosServerUrl" name="faiosServerUrl" type="text" autocomplete="off" value="http://localhost:3200" />
+          </label>
+          <label>
+            LM Studio 모델
+            <input id="lmstudioModel" name="lmstudioModel" type="text" autocomplete="off" value="qwen/qwen3.5-9b" />
+          </label>
           <div class="config-actions">
             <button id="loginOutlook" type="button">Outlook으로 로그인</button>
             <button id="saveConfig" type="submit" class="primary">저장 후 가져오기</button>
@@ -109,7 +125,7 @@
         <button class="metric done" type="button" data-filter="done"><span>완료</span><strong id="doneCount">0</strong></button>
       </section>
 
-      <section class="mail-shell">
+      <section class="mail-shell" id="mailShell">
         <aside id="messages" class="mail-list-panel">
           <div class="panel-head compact">
             <h3>메일 목록</h3>
@@ -117,11 +133,11 @@
           </div>
           <div id="messageList" class="message-list"></div>
         </aside>
-
+        <div class="col-resizer" data-col="0"></div>
         <article id="messageDetail" class="detail-panel">
           <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
         </article>
-
+        <div class="col-resizer" data-col="1"></div>
         <aside class="action-column">
           <section id="actions" class="panel">
             <div class="panel-head compact">
