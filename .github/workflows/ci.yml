@@ -73,7 +73,7 @@ jobs:
 
       - name: Check JSON syntax
         run: |
-          for f in package.json .outlook-config.json.example .env.example 2>/dev/null; do
+          for f in package.json .outlook-config.json.example .env.example; do
             if [ -f "$f" ]; then
               echo "Validating $f"
               node -e "JSON.parse(require('fs').readFileSync('$f', 'utf8'))"
