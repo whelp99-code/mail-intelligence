@@ -80,7 +80,7 @@ jobs:
             fi
           done
 
-      - name: Check .gitignore coverage
+      - name: Check .gitignore coverage (report only)
         run: |
           if [ -f .gitignore ]; then
             echo "Checking .gitignore..."
