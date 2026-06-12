@@ -71,9 +71,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check JSON syntax
+      - name: Check JSON syntax (package.json, *.json.example)
         run: |
-          for f in package.json .outlook-config.json.example .env.example; do
+          for f in package.json .outlook-config.json.example; do
             if [ -f "$f" ]; then
               echo "Validating $f"
               node -e "JSON.parse(require('fs').readFileSync('$f', 'utf8'))"
