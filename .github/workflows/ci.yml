@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npx eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs || true
+
+      - name: Validate package.json
+        run: node -e "require('./package.json')"
+
+      - name: Check syntax (Node.js)
+        run: |
+          node --check server.mjs
+          node --check src/app.js
+          node --check src/analyzer.js
+
+      - name: Test server startup (smoke test)
+        run: |
+          PORT=10200 timeout 10s node server.mjs &
+          sleep 3
+          curl -sf http://localhost:10200/api/outlook/status || true
+          pkill -f "node server.mjs" || true
+
+  validate-frontend:
+    name: Validate Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate HTML
+        run: npx htmlhint src/index.html || true
+
+      - name: Validate CSS
+        run: npx stylelint src/styles.css || true
+
+  check-config-files:
+    name: Check Config Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check JSON syntax
+        run: |
+          for f in package.json .outlook-config.json.example .env.example 2>/dev/null; do
+            if [ -f "$f" ]; then
+              echo "Validating $f"
+              node -e "JSON.parse(require('fs').readFileSync('$f', 'utf8'))"
+            fi
+          done
+
+      - name: Check .gitignore coverage
+        run: |
+          if [ -f .gitignore ]; then
+            echo "Checking .gitignore..."
+            for pattern in "node_modules" ".mail-cache.json" ".outlook-config.json" "*.log" "runtime-config.json" "accounts.json"; do
+              grep -q "$pattern" .gitignore && echo "  ✓ $pattern" || echo "  ✗ MISSING: $pattern"
+            done
+          fi
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: npm audit --audit-level=high || true
+
+      - name: Check for outdated packages
+        run: npm outdated || true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true

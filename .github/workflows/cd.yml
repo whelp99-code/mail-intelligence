@@ -1,0 +1,196 @@
+name: CD - Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  APP_NAME: mail-intelligence
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --production=false
+
+      - name: Create deployment package
+        id: package
+        run: |
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          COMMIT_SHA=${{ github.sha }}
+          ARTIFACT_NAME="${APP_NAME}-${COMMIT_SHA:0:7}-${TIMESTAMP}"
+          
+          mkdir -p dist
+          # Copy production files
+          cp -r server.mjs src package.json package-lock.json dist/ 2>/dev/null || cp -r server.mjs src package.json dist/
+          # Copy config templates (not actual configs)
+          cp .outlook-config.json.example dist/ 2>/dev/null || true
+          cp .env.example dist/ 2>/dev/null || true
+          
+          # Create version info
+          cat > dist/VERSION.json <<EOF
+          {
+            "name": "${APP_NAME}",
+            "version": "1.0.0",
+            "commit": "${COMMIT_SHA}",
+            "branch": "${{ github.ref_name }}",
+            "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "builtBy": "${{ github.actor }}"
+          }
+          EOF
+          
+          # Create tarball
+          tar -czf "${ARTIFACT_NAME}.tar.gz" -C dist .
+          echo "artifact_name=${ARTIFACT_NAME}.tar.gz" >> $GITHUB_OUTPUT
+          
+          # Upload to GitHub Release (optional)
+          gh release upload "build-${COMMIT_SHA:0:7}" "${ARTIFACT_NAME}.tar.gz" --clobber 2>/dev/null || true
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_name }}
+          retention-days: 30
+
+  deploy-production:
+    name: Deploy Production
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event.inputs.environment != 'staging'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: ./deploy
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to VPS
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: /opt/${{ env.APP_NAME }}
+        run: |
+          scp -o StrictHostKeyChecking=no ./deploy/${{ needs.build.outputs.artifact_name }} ${SSH_USER}@${SSH_HOST}:/tmp/
+          
+          ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'EOF'
+            set -e
+            APP_DIR="/opt/mail-intelligence"
+            ARTIFACT="/tmp/${{ needs.build.outputs.artifact_name }}"
+            
+            # Backup current version
+            if [ -d "$APP_DIR" ]; then
+              mv "$APP_DIR" "${APP_DIR}.backup.$(date +%Y%m%d-%H%M%S)"
+            fi
+            
+            # Extract new version
+            mkdir -p "$APP_DIR"
+            tar -xzf "$ARTIFACT" -C "$APP_DIR"
+            
+            # Install production dependencies
+            cd "$APP_DIR"
+            npm ci --production
+            
+            # Restore config files from backup
+            if [ -f "${APP_DIR}.backup."*/.outlook-config.json ]; then
+              cp "${APP_DIR}.backup."*/.outlook-config.json "$APP_DIR/" 2>/dev/null || true
+            fi
+            if [ -f "${APP_DIR}.backup."*/runtime-config.json ]; then
+              cp "${APP_DIR}.backup."*/runtime-config.json "$APP_DIR/" 2>/dev/null || true
+            fi
+            
+            # Restart via systemd or PM2
+            if systemctl is-active --quiet mail-intelligence 2>/dev/null; then
+              sudo systemctl restart mail-intelligence
+            elif command -v pm2 &> /dev/null; then
+              pm2 restart mail-intelligence || pm2 start server.mjs --name mail-intelligence
+            else
+              # Fallback: direct process restart
+              pkill -f "node server.mjs" || true
+              PORT=10200 nohup node server.mjs > /var/log/mail-intelligence.log 2>&1 &
+            fi
+            
+            # Health check
+            sleep 5
+            curl -sf http://localhost:10200/api/outlook/status || exit 1
+            
+            echo "Deployment successful!"
+            rm -f "$ARTIFACT"
+          EOF
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Production deployment successful"
+          else
+            echo "❌ Production deployment failed"
+            exit 1
+          fi
+
+  deploy-staging:
+    name: Deploy Staging
+    needs: build
+    if: github.event.inputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: ./deploy
+
+      - name: Deploy to Staging
+        run: |
+          echo "🚀 Staging deployment (manual step required)"
+          echo "Artifact: ${{ needs.build.outputs.artifact_name }}"
+          echo "Deploy to your staging environment manually or configure SSH secrets"
+
+  rollback:
+    name: Rollback
+    if: failure()
+    needs: [deploy-production, deploy-staging]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rollback notification
+        run: |
+          echo "⚠️ Deployment failed - manual rollback required"
+          echo "Previous version backed up on server as /opt/mail-intelligence.backup.*"
+          echo "To rollback: ssh to server and swap directories"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false

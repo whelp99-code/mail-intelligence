@@ -1,0 +1,14 @@
+{
+  "tenantId": "your-azure-ad-tenant-id",
+  "clientId": "your-azure-ad-app-client-id",
+  "clientSecret": "your-azure-ad-app-client-secret",
+  "mailboxUser": "",
+  "loginTenant": "common",
+  "geminiApiKey": "",
+  "geminiModel": "gemini-2.5-flash",
+  "refreshToken": "",
+  "expiresAt": 0,
+  "aiProvider": "f-aios-v3",
+  "faiosServerUrl": "http://localhost:3200",
+  "lmstudioModel": "qwen/qwen3.5-9b"
+}

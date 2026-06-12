@@ -4,6 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "PORT=10200 node server.mjs"
+    "dev": "PORT=10200 node server.mjs",
+    "start": "PORT=10200 node server.mjs",
+    "check": "node --check server.mjs && node --check src/app.js && node --check src/analyzer.js",
+    "lint": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs",
+    "lint:fix": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs --fix",
+    "validate:html": "htmlhint src/index.html",
+    "validate:css": "stylelint src/styles.css",
+    "audit": "npm audit --audit-level=high"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "htmlhint": "^1.1.4",
+    "stylelint": "^16.0.0",
+    "stylelint-config-standard": "^36.0.0"
   }
 }
