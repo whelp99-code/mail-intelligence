@@ -9,7 +9,8 @@ const OWNER_PATTERN = /(담당|owner|pic)\s*[:：]\s*([^\n,]+)/i;
 const DATE_PATTERN = /(\d{4}[.-]\d{1,2}[.-]\d{1,2}|\d{1,2}\/\d{1,2}|오늘|내일|금일|이번\s*주|다음\s*주|월요일|화요일|수요일|목요일|금요일)/g;
 const ACTION_PATTERN = /부탁|요청|확인|공유|회신|답변|검토|승인|준비|발송|전달|일정|마감|need|please|confirm|review|share|send|approve|schedule|follow/i;
 
-export const sampleMailText = `Subject: [Acme] HCI 제안서 최종본 및 PoC 일정 확인
+export function generateDemoMailText() {
+  return `Subject: [Acme] HCI 제안서 최종본 및 PoC 일정 확인
 From: 김현우 <hwkim@acme.example.com>
 Date: 2026-05-18 09:20
 
@@ -26,6 +27,7 @@ Date: 2026-05-17 16:40
 
 다음 주 화요일까지 데이터 샘플을 공유해 주세요. API 권한은 내부 승인 대기 중입니다.
 긴급 이슈는 아니지만 일정 지연 가능성이 있어 리마인드가 필요합니다.`;
+}
 
 function messageToText(message) {
   return [

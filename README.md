@@ -256,23 +256,28 @@ saveClassificationFeedback()
 
 ## 실행 방법
 
+# 실행 (기본 포트 3010 — `package.json` scripts; 레거시 문서는 10200 참고)
+
 ```bash
-# 설치
-cd mail-intelligence
 npm install
+npm run dev          # PORT=3010 (package.json)
+# 레거시 포트: PORT=10200 npm run dev
 
-# 실행 (포트 10200)
-PORT=10200 npm run dev
+open http://localhost:3010
+```
 
-# 브라우저에서 열기
-open http://localhost:10200
+검증:
+
+```bash
+npm run verify:health       # syntax only (서버 불필요)
+npm run verify:health:full  # 기동 후 /api/outlook/status 프로브
 ```
 
 ## 환경 변수
 
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
-| `PORT` | 서버 포트 | `10200` |
+| `PORT` | 서버 포트 | `3010` (`server.mjs` fallback; 레거시 배포는 `10200`) |
 | `OUTLOOK_GRAPH_ACCESS_TOKEN` | Graph API 토큰 | - |
 | `MICROSOFT_TENANT_ID` | Azure AD 테넌트 ID | - |
 | `MICROSOFT_CLIENT_ID` | Azure AD 앱 ID | - |

@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "PORT=10200 node server.mjs",
-    "start": "PORT=10200 node server.mjs",
+    "dev": "PORT=3010 node server.mjs",
+    "start": "PORT=3010 node server.mjs",
     "check": "node --check server.mjs && node --check src/app.js && node --check src/analyzer.js",
+    "verify:health": "node scripts/verify-health.mjs",
+    "verify:health:full": "node scripts/verify-health.mjs --full",
     "lint": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs",
     "lint:fix": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs --fix",
     "validate:html": "htmlhint src/index.html",

@@ -1,4 +1,4 @@
-import { analyzeMessages, sampleMailText } from './analyzer.js';
+import { analyzeMessages } from './analyzer.js';
 
 const loadSample = document.querySelector('#loadSample');
 const loadOutlook = document.querySelector('#loadOutlook');
@@ -622,24 +622,8 @@ async function loadOutlookMessages() {
   }
 }
 
-function demoMessages() {
-  return sampleMailText.split(/\n(?=Subject:)/).map((chunk, index) => ({
-    id: `demo-${index + 1}`,
-    subject: chunk.match(/^Subject:\s*(.+)$/m)?.[1] || `Demo mail ${index + 1}`,
-    from: chunk.match(/^From:\s*(.+)$/m)?.[1] || 'demo@example.com',
-    fromName: chunk.match(/^From:\s*([^<]+)/m)?.[1]?.trim() || 'Demo',
-    receivedAt: chunk.match(/^Date:\s*(.+)$/m)?.[1] || new Date().toISOString(),
-    importance: /긴급|오늘|마감/.test(chunk) ? 'high' : 'normal',
-    bodyPreview: chunk.replace(/^Subject:.*$/m, '').replace(/^From:.*$/m, '').replace(/^Date:.*$/m, '').trim().slice(0, 260),
-    body: chunk,
-    webLink: ''
-  }));
-}
-
 loadSample.addEventListener('click', () => {
-  const messages = demoMessages();
-  fetchStatus.textContent = '데모 메일을 분석했습니다.';
-  render(analyzeMessages(messages), messages);
+  fetchStatus.textContent = '데모 데이터 버튼은 비활성화되었습니다. 실제 Outlook 연동 후 사용하세요.';
 });
 
 loadOutlook.addEventListener('click', loadOutlookMessages);

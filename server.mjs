@@ -3,7 +3,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { analyzeMessages, sampleMailText } from './src/analyzer.js';
+import { analyzeMessages } from './src/analyzer.js';
 
 const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
@@ -434,26 +434,6 @@ function applyFeedbackToResult(result, messages, feedback = {}, options = {}) {
   };
 }
 
-function demoMessages() {
-  return sampleMailText.split(/\n(?=Subject:)/).map((chunk, index) => {
-    const subject = chunk.match(/^Subject:\s*(.+)$/m)?.[1] || `Demo mail ${index + 1}`;
-    const from = chunk.match(/^From:\s*(.+)$/m)?.[1] || 'demo@example.com';
-    const receivedAt = chunk.match(/^Date:\s*(.+)$/m)?.[1] || new Date().toISOString();
-    return {
-      id: `demo-${index + 1}`,
-      subject,
-      from,
-      fromName: from.split('<')[0].trim(),
-      receivedAt,
-      importance: /긴급|오늘|마감/.test(chunk) ? 'high' : 'normal',
-      isRead: false,
-      bodyPreview: chunk.replace(/^Subject:.*$/m, '').replace(/^From:.*$/m, '').replace(/^Date:.*$/m, '').trim().slice(0, 220),
-      body: chunk,
-      webLink: ''
-    };
-  });
-}
-
 async function getGraphAccessToken() {
   const directToken = getConfigValue('accessToken', 'OUTLOOK_GRAPH_ACCESS_TOKEN');
   if (directToken && (!runtimeConfig.expiresAt || Date.now() < runtimeConfig.expiresAt - 60_000)) return directToken;
@@ -546,9 +526,9 @@ async function fetchOutlookMessages(top = 25) {
   if (!accessToken) {
     return {
       connected: false,
-      mode: 'demo',
-      message: 'Microsoft Graph credentials are not configured.',
-      messages: demoMessages()
+      mode: 'error',
+      message: 'Microsoft Graph credentials are not configured. Please configure Outlook integration in settings.',
+      messages: []
     };
   }
 
