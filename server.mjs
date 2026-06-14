@@ -125,16 +125,33 @@ function feedbackForPrompt(feedback = {}) {
 function feedbackSimilarity(message, feedbackItem) {
   let score = 0;
   const sender = emailAddress(message.from || '').toLowerCase();
-  if (sender && sender === String(feedbackItem.sender || '').toLowerCase()) score += 2;
+  const feedbackSender = String(feedbackItem.sender || '').toLowerCase();
+  
+  // 발신자 일치 (가중치 증가: 2 → 4)
+  if (sender && sender === feedbackSender) score += 4;
+  
+  // 발신자 도메인 일치 (새로 추가)
+  const senderDomain = sender.split('@')[1] || '';
+  const feedbackDomain = feedbackSender.split('@')[1] || '';
+  if (senderDomain && senderDomain === feedbackDomain) score += 2;
+  
+  // 제목 토큰 일치
   const currentTokens = new Set(subjectTokens(message.subject));
   for (const token of feedbackItem.subjectTokens || []) {
     if (currentTokens.has(String(token).toLowerCase())) score += 1;
   }
+  
+  // 본문 패턴 매칭
   const text = `${message.subject || ''} ${message.bodyPreview || ''} ${message.body || ''}`.toLowerCase();
   if (feedbackItem.reasonCode === 'waiting' && /승인|회신|자료|대기|확인\s*부탁|pending|waiting/.test(text)) score += 2;
   if (feedbackItem.reasonCode === 'urgent' && /긴급|마감|오늘|금일|장애|critical|asap/.test(text)) score += 2;
   if (feedbackItem.reasonCode === 'done' && /완료|발송|처리|종료|resolved|completed|done/.test(text)) score += 2;
   if (feedbackItem.reasonCode === 'active' && /진행|검토|준비|공유|작성|review|follow/.test(text)) score += 1;
+  
+  // 피드백 빈도 기반 신뢰도 (새로 추가)
+  const feedbackCount = feedbackItem.count || 1;
+  score += Math.min(feedbackCount - 1, 3); // 최대 +3
+  
   return score;
 }
 
@@ -145,6 +162,79 @@ function inferredFeedbackStatus(message, feedback = {}) {
     .filter(({ score }) => score >= 3)
     .sort((a, b) => b.score - a.score);
   return candidates[0] || null;
+}
+
+// 스마트 규칙 학습: 발신자별 패턴 분석
+function analyzeSenderPatterns(feedback = {}) {
+  const senderStats = {};
+  
+  Object.values(feedback).forEach(item => {
+    const sender = String(item.sender || '').toLowerCase();
+    if (!sender) return;
+    
+    if (!senderStats[sender]) {
+      senderStats[sender] = { total: 0, statuses: {}, lastUsed: null };
+    }
+    
+    senderStats[sender].total++;
+    senderStats[sender].statuses[item.userStatus] = (senderStats[sender].statuses[item.userStatus] || 0) + 1;
+    senderStats[sender].lastUsed = item.savedAt;
+  });
+  
+  // 발신자별 선호 상태 계산
+  const senderRules = {};
+  Object.entries(senderStats).forEach(([sender, stats]) => {
+    if (stats.total >= 2) { // 최소 2회 이상 피드백
+      const sortedStatuses = Object.entries(stats.statuses)
+        .sort(([,a], [,b]) => b - a);
+      if (sortedStatuses.length > 0) {
+        senderRules[sender] = {
+          preferredStatus: sortedStatuses[0][0],
+          confidence: sortedStatuses[0][1] / stats.total,
+          totalFeedback: stats.total
+        };
+      }
+    }
+  });
+  
+  return senderRules;
+}
+
+// 스마트 규칙 적용
+function applySmartRules(message, feedback = {}) {
+  const sender = emailAddress(message.from || '').toLowerCase();
+  const senderRules = analyzeSenderPatterns(feedback);
+  
+  // 발신자별 규칙 적용
+  if (senderRules[sender] && senderRules[sender].confidence >= 0.7) {
+    return {
+      status: senderRules[sender].preferredStatus,
+      confidence: senderRules[sender].confidence,
+      source: 'sender-pattern'
+    };
+  }
+  
+  // 도메인별 규칙 적용
+  const domain = sender.split('@')[1] || '';
+  const domainRules = Object.entries(senderRules)
+    .filter(([s]) => s.endsWith(`@${domain}`))
+    .reduce((acc, [, rule]) => {
+      acc[rule.preferredStatus] = (acc[rule.preferredStatus] || 0) + rule.totalFeedback;
+      return acc;
+    }, {});
+  
+  const domainStatus = Object.entries(domainRules)
+    .sort(([,a], [,b]) => b - a)[0];
+  
+  if (domainStatus && domainStatus[1] >= 3) {
+    return {
+      status: domainStatus[0],
+      confidence: 0.6,
+      source: 'domain-pattern'
+    };
+  }
+  
+  return null;
 }
 
 function mailboxPathForCurrentUser(messageId = '') {
