@@ -37,9 +37,9 @@ jobs:
 
       - name: Test server startup (smoke test)
         run: |
-          PORT=10200 timeout 10s node server.mjs &
+          PORT=3010 timeout 10s node server.mjs &
           sleep 3
-          curl -sf http://localhost:10200/api/outlook/status || true
+          curl -sf http://localhost:3010/api/outlook/status || true
           pkill -f "node server.mjs" || true
 
   validate-frontend:

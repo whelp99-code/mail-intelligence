@@ -9,6 +9,6 @@
   "refreshToken": "",
   "expiresAt": 0,
   "aiProvider": "f-aios-v3",
-  "faiosServerUrl": "http://localhost:3200",
+  "faiosServerUrl": "http://localhost:3201",
   "lmstudioModel": "qwen/qwen3.5-9b"
 }

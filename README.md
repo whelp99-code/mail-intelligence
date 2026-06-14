@@ -1,294 +1,179 @@
 # Mail Intelligence
 
-Outlook 메일을 요약하고 다음 액션까지 정리하는 AI 기반 이메일 트라이아지 시스템.
+Outlook 메일을 AI로 분석하여 요약, 다음 액션, 일정을 정리하는 워크 OS.
 
-## 아키텍처 개요
+## 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Mail Intelligence                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
-│  │   Browser   │◄──►│   Server    │◄──►│  MS Graph   │◄──►│  Outlook    │  │
-│  │  (Frontend) │    │  (server.mjs)│    │     API     │    │  (Outlook)  │  │
-│  └─────────────┘    └──────┬──────┘    └─────────────┘    └─────────────┘  │
-│                            │                                               │
-│                            ▼                                               │
-│                    ┌───────────────┐                                       │
-│                    │  AI Provider  │                                       │
-│                    │  (하이브리드)  │                                       │
-│                    └───────┬───────┘                                       │
-│                            │                                               │
-│            ┌───────────────┼───────────────┐                               │
-│            ▼               ▼               ▼                               │
-│    ┌───────────────┐ ┌───────────────┐ ┌───────────────┐                   │
-│    │  F-AIOS-v3    │ │  LM Studio    │ │    Gemini     │                   │
-│    │  (localhost:  │ │  (localhost:  │ │  (Google API) │                   │
-│    │     3200)     │ │     1234)     │ │               │                   │
-│    └───────────────┘ └───────────────┘ └───────────────┘                   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   프론트엔드     │    │    서버           │    │   외부 API      │
+│  (src/app.js)   │───▶│  (server.mjs)    │───▶│  Microsoft Graph│
+│  index.html     │    │  port: 3010      │    │  /me/messages   │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌──────────────┐
+                       │  AI 분석     │
+                       │  1) 규칙 기반 │  (analyzer.js)
+                       │  2) F-AIOS-v3│  (localhost:3201)
+                       │  3) LM Studio│  (localhost:1234)
+                       │  4) Gemini   │  (API Key 필요)
+                       └──────────────┘
 ```
-
-## 기술 스택
-
-| 구분 | 기술 | 설명 |
-|------|------|------|
-| **서버** | Node.js (ESM) | vanilla HTTP 서버 (`createServer`) |
-| **프론트엔드** | Vanilla JS | CSS Grid 레이아웃, 모듈 JS |
-| **데이터 저장** | JSON 파일 | 데이터베이스 없음 |
-| **AI 통합** | 하이브리드 | F-AIOS-v3 → LM Studio → Gemini |
-| **인증** | OAuth 2.0 | Microsoft Graph API (PKCE) |
 
 ## 파일 구조
 
 ```
 mail-intelligence/
-├── server.mjs              # 메인 서버 (1275줄)
-├── package.json            # 프로젝트 설정
-├── .outlook-config.json    # OAuth 설정 (clientId, clientSecret)
-├── .mail-cache.json        # 이메일 캐시
+├── server.mjs              # Node.js HTTP 서버 (메인)
+├── package.json            # 의존성 없음, type:module
+├── .outlook-config.json    # Azure AD 설정 (clientId, clientSecret, tenantId)
+├── .mail-cache.json        # 메일 캐시 + 분석 결과 + 사용자 피드백
+│
 ├── src/
-│   ├── index.html          # 메인 HTML (169줄)
-│   ├── app.js              # 프론트엔드 로직 (732줄)
-│   ├── analyzer.js         # 이메일 분석 엔진 (312줄)
-│   └── styles.css          # 스타일링 (688줄)
+│   ├── index.html          # 메인 HTML (설정, 메일목록, 상세, 액션)
+│   ├── app.js              # 프론트엔드 로직 (DOM 조작, API 호출)
+│   ├── analyzer.js         # 규칙 기반 메일 분석 엔진
+│   └── styles.css          # 스타일 (dark sidebar, 3칼럼 레이아웃)
+│
 └── data/
-    ├── runtime-config.json # 런타임 설정
-    ├── mail-cache.json     # 이메일 캐시
-    ├── accounts.json       # 계정 설정
-    ├── attachment-archive.json    # 첨부파일 아카이브
-    ├── attachment-archive-meta.json # 첨부파일 메타데이터
-    └── oauth-states.json   # OAuth 상태
+    ├── accounts.json       # Outlook 계정 정보 (다중 계정 지원)
+    ├── runtime-config.json # 런타임 설정 (토큰, 설정값)
+    ├── oauth-states.json   # OAuth 상태 관리
+    └── *.json              # 기타 데이터
 ```
 
 ## API 엔드포인트
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| `GET` | `/api/outlook/status` | 연결 상태 확인 |
-| `GET` | `/api/outlook/config` | 설정 조회 |
+| `GET` | `/api/outlook/config` | 설정 상태 조회 |
 | `POST` | `/api/outlook/config` | 설정 저장 |
 | `DELETE` | `/api/outlook/config` | 설정 초기화 |
-| `GET` | `/api/outlook/oauth/start` | OAuth 로그인 시작 |
-| `GET` | `/api/outlook/messages` | 메일 목록 조회 |
-| `GET` | `/api/outlook/analyze` | 메일 분석 (AI 적용) |
+| `GET` | `/api/outlook/status` | 연결 상태 확인 |
+| `GET` | `/api/outlook/messages?top=25` | 메일 목록 조회 |
+| `GET` | `/api/outlook/analyze?top=25` | 메일 분석 (AI 포함) |
 | `POST` | `/api/outlook/send` | 메일 발송 |
-| `POST` | `/api/outlook/read` | 읽음 표시 |
-| `POST` | `/api/outlook/feedback` | 분류 피드백 저장 |
+| `POST` | `/api/outlook/read` | 읽음 상태 업데이트 |
+| `POST` | `/api/outlook/feedback` | 분류 보정 피드백 저장 |
+| `GET` | `/api/outlook/oauth/start` | OAuth 로그인 시작 |
+| `GET` | `/auth/callback` | OAuth 콜백 |
 
 ## 데이터 흐름
 
-### 1. 메일 동기화
-
+### 1. 메일 동기화 (fetchOutlookMessages)
 ```
-사용자가 "Outlook 가져오기" 클릭
-    ↓
-프론트엔드: fetch('/api/outlook/analyze?top=25')
-    ↓
-서버: fetchOutlookMessages(top)
-    ↓
-[캐시 확인] → .mail-cache.json에서 기존 메일 로드
-    ↓
-[동기화 모드 결정]
-  - 첫 동기화: since 없음 (전체 메일)
-  - 이후: since = 마지막 수신일 (증분 동기화)
-    ↓
-Microsoft Graph API 호출
-    ↓
-메일 병합 (mergeMessages)
-    ↓
-캐시 저장 (.mail-cache.json)
+1. 캐시에서 기존 메일 로드
+2. shouldFetchOnlyNew 판단:
+   - 캐시 >= 요청수 → since(마지막 수신일) 이후만
+   - 캐시 < 요청수 → 전체
+3. Microsoft Graph API 호출
+4. mergeMessages: 새 메일 추가, 변경 메일 업데이트
+5. 캐시 저장 (.mail-cache.json)
 ```
 
-### 2. 메일 분석
-
+### 2. 메일 분석 (analyzeMessages + enrichWithAI)
 ```
-분석 요청 수신
-    ↓
-[규칙 기반 분석] analyzeMessages()
-  - STATUS_RULES 패턴 매칭
-  - 태그 추출 (담당자, 일정, 액션)
-  - 요약 생성
-    ↓
-[AI 향상] enrichWithAI()
-  - 프롬프트 생성 (buildAnalysisPrompt)
-  - AI 프로바이더 선택
-    ↓
-┌─────────────────────────────────────┐
-│  F-AIOS-v3 (기본)                   │
-│    ↓ 실패 시                        │
-│  LM Studio (폴백)                   │
-│    ↓ 실패 시                        │
-│  규칙 기반만 적용                   │
-└─────────────────────────────────────┘
-    ↓
-[피드백 적용] applyFeedbackToResult()
-  - 사용자 보정 반영
-  - 학습된 패턴 적용
-    ↓
-결과 반환
+1. 규칙 기반 분석 (analyzer.js):
+   - STATUS_RULES 패턴 매칭 (urgent/active/waiting/done)
+   - OWNER_PATTERN, DATE_PATTERN, ACTION_PATTERN 추출
+   - actionScenariosForMessage: 3가지 시나리오 생성
+
+2. AI 강화 (enrichWithAI):
+   - 캐시된 분석 결과 먼저 확인
+   - 프로바이더 선택: f-aios-v3 → lmstudio → gemini
+   - 프롬프트: 피드백 예시 + 메일 내용 → JSON 응답
+   - normalizeActionScenarios: 3가지 시나리오 보정
+   - 분석 결과 캐시 저장
 ```
 
-### 3. 사용자 피드백
-
+### 3. 사용자 피드백 (saveClassificationFeedback)
 ```
-사용자가 분류 보정 클릭
-    ↓
-POST /api/outlook/feedback
-    ↓
-saveClassificationFeedback()
-  - 메시지 ID, 사용자 상태, 이유 저장
-    ↓
-다음 분석 시 feedbackExamples로 활용
-    ↓
-유사 패턴 자동 학습
+1. 사용자가 메일 분류 보정 (urgent/active/waiting/done)
+2. feedback 객체에 저장 (messageId → userStatus, reasonCode, note)
+3. 유사 메일 판단 시 feedbackHint 제공
+4. 다음 분석 시 피드백 예시로 활용
 ```
 
-## 핵심 함수 목록
-
-### 서버 (server.mjs)
-
-| 함수 | 설명 |
-|------|------|
-| `loadPersistedConfig()` | 설정 파일 로드 |
-| `savePersistedConfig()` | 설정 파일 저장 |
-| `loadMailCache()` | 메일 캐시 로드 |
-| `saveMailCache()` | 메일 캐시 저장 |
-| `getGraphAccessToken()` | Graph API 토큰 획득 |
-| `fetchGraphMessages()` | Graph API에서 메일 가져오기 |
-| `fetchOutlookMessages()` | 메일 동기화 (캐시 + Graph) |
-| `sendOutlookMail()` | 메일 발송 |
-| `markOutlookMessageRead()` | 읽음 표시 |
-| `saveClassificationFeedback()` | 피드백 저장 |
-| `analyzeMessages()` | 규칙 기반 분석 |
-| `enrichWithAI()` | AI 향상 (하이브리드) |
-| `applyFeedbackToResult()` | 피드백 적용 |
-| `normalizeGraphMessage()` | Graph 메시지 정규화 |
-| `mergeMessages()` | 메일 병합 |
-| `demoMessages()` | 데모 메일 생성 |
-
-### 프론트엔드 (app.js)
-
-| 함수 | 설명 |
-|------|------|
-| `loadStatus()` | 설정 상태 로드 |
-| `saveConfig()` | 설정 저장 |
-| `loadOutlookMessages()` | 메일 가져오기 |
-| `render()` | 전체 렌더링 |
-| `renderFilteredView()` | 필터링된 뷰 렌더링 |
-| `renderActionPanel()` | 액션 패널 렌더링 |
-| `selectMessage()` | 메시지 선택 |
-| `saveFeedback()` | 피드백 저장 |
-| `sendComposedMail()` | 메일 발송 |
-| `messageCard()` | 메시지 카드 생성 |
-| `actionCard()` | 액션 카드 생성 |
-| `feedbackPanel()` | 피드백 패널 생성 |
-| `mailComposer()` | 메일 편집기 생성 |
-
-### 분석기 (analyzer.js)
-
-| 함수 | 설명 |
-|------|------|
-| `analyzeMail()` | 단일 메일 분석 |
-| `analyzeMessages()` | 다중 메일 분석 |
-| `splitCandidates()` | 후보 줄 분리 |
-| `inferLane()` | 상태 추론 |
-| `inferOwner()` | 담당자 추론 |
-| `inferDates()` | 일정 추론 |
-| `summaryBullets()` | 요약 생성 |
-| `actionScenariosForMessage()` | 액션 시나리오 생성 |
-
-## 설정 옵션
-
-### 런타임 설정 (runtimeConfig)
+## 런타임 설정 (runtimeConfig)
 
 ```javascript
 {
-  accessToken: '',           // Graph API 토큰
-  tenantId: '',              // Azure AD 테넌트 ID
-  clientId: '',              // Azure AD 앱 ID
-  clientSecret: '',          // Azure AD 시크릿
-  mailboxUser: '',           // 메일박스 사용자
-  loginTenant: 'common',     // 로그인 테넌트
-  geminiApiKey: '',          // Gemini API 키
-  geminiModel: 'gemini-2.5-flash', // Gemini 모델
-  refreshToken: '',          // 리프레시 토큰
-  expiresAt: 0,              // 토큰 만료 시간
-  
-  // AI 프로바이더 설정
-  aiProvider: 'f-aios-v3',   // 'f-aios-v3' | 'gemini' | 'lmstudio'
-  faiosServerUrl: 'http://localhost:3200', // F-AIOS-v3 서버
-  lmstudioModel: 'qwen/qwen3.5-9b'       // LM Studio 모델
+  accessToken: '',          // Microsoft Graph 액세스 토큰
+  tenantId: '',             // Azure AD Tenant ID
+  clientId: '',             // Azure AD Application Client ID
+  clientSecret: '',         // Azure AD Client Secret
+  mailboxUser: '',          // 메일박스 사용자 (비어있으면 /me)
+  loginTenant: 'common',    // common | organizations | consumers
+  geminiApiKey: '',         // Google AI Studio API Key
+  geminiModel: 'gemini-2.5-flash',
+  refreshToken: '',         // OAuth Refresh Token
+  expiresAt: 0,             // 토큰 만료 시간
+  aiProvider: 'f-aios-v3',  // f-aios-v3 | gemini | lmstudio
+  faiosServerUrl: 'http://localhost:3201',
+  lmstudioModel: 'qwen/qwen3.5-9b'
 }
 ```
 
-### 분석 상태 분류
+## UI 구성
 
-| 상태 | 의미 | 패턴 |
-|------|------|------|
-| `urgent` | 긴급 | 긴급, 오늘 중, 마감, 장애, critical, urgent, asap |
-| `active` | 진행중 | 진행, 준비, 검토, 작성, 공유, follow-up |
-| `waiting` | 대기 | 대기, 회신 대기, 승인 대기, 확인 부탁 |
-| `done` | 완료 | 완료, 종료, 처리했습니다, 발송했습니다 |
-| `reference` | 참고 | 위 조건에 해당하지 않는 경우 |
-
-## 주요 기능
-
-### 1. 3칼럼 레이아웃
-- **메일 목록**: 그룹별 분류, 읽지않음 표시, 검색
-- **메일 상세**: 요약, 본문, 피드백 패널
-- **액션 패널**: 다음 액션, 일정, 알림 후보
-
-### 2. 드래그 리사이저
-- 칼럼 너비 마우스로 조절
-- 더블클릭으로 초기화
-
-### 3. AI 하이브리드 시스템
-- F-AIOS-v3 (기본) → LM Studio (폴백) → 규칙 기반
-- 비용 제로, 무제한, 로컬 처리
-
-### 4. 사용자 피드백 학습
-- 분류 보정 저장
-- 유사 패턴 자동 적용
-- 다음 분석 기준 개선
-
-## 실행 방법
-
-# 실행 (기본 포트 3010 — `package.json` scripts; 레거시 문서는 10200 참고)
-
-```bash
-npm install
-npm run dev          # PORT=3010 (package.json)
-# 레거시 포트: PORT=10200 npm run dev
-
-open http://localhost:3010
+### 3칼럼 레이아웃 (mail-shell)
+```
+┌─────────────┬─────────────┬─────────────┐
+│  메일 목록   │   상세 패널   │   액션 패널   │
+│  (messages) │ (detail)    │  (actions)  │
+│             │             │  (calendar) │
+│             │             │ (reminders) │
+└─────────────┴─────────────┴─────────────┘
 ```
 
-검증:
+### 설정 패널 (config-panel)
+- Login Tenant: common/organizations/consumers
+- Access Token, Tenant ID, Client ID, Client Secret
+- Mailbox User
+- Google AI Studio API Key, Gemini Model
+- AI 프로바이더: F-AIOS-v3 / LM Studio / Gemini
+- F-AIOS-v3 서버 URL, LM Studio 모델
+
+## 동기화 로직
+
+### 초기 동기화
+- 캐시가 비어있거나 요청 수보다 적을 때
+- `since` 파라미터 없이 전체 메일 가져오기
+
+### 増量 동기화
+- 캐시가 요청 수 이상일 때
+- `since`: 마지막 수신일 이후만 가져오기
+- mergeMessages: 새 메일 추가, 변경 메일 업데이트
+
+## 주요 함수
+
+### 서버 (server.mjs)
+- `fetchGraphMessages()`: Microsoft Graph API에서 메일 가져오기
+- `fetchOutlookMessages()`: 캐시 + 동기화 로직
+- `mergeMessages()`: 메일 병합 (새 메일/변경 메일)
+- `enrichWithAI()`: AI 분석 강화 (프로바이더 선택)
+- `saveClassificationFeedback()`: 사용자 피드백 저장
+- `applyFeedbackToResult()`: 피드백 적용
+
+### 프론트엔드 (app.js)
+- `loadStatus()`: 설정 상태 로드
+- `saveConfig()`: 설정 저장
+- `loadOutlookMessages()`: 메일 가져오기 + 분석
+- `selectMessage()`: 메일 선택 + 상세 표시
+- `saveFeedback()`: 분류 보정 저장
+- `sendComposedMail()`: 메일 발송
+
+### 분석기 (analyzer.js)
+- `analyzeMessages()`: 규칙 기반 분석
+- `actionScenariosForMessage()`: 3가지 액션 시나리오 생성
+- `summaryBullets()`: 메일 요약 생성
+
+## 실행
 
 ```bash
-npm run verify:health       # syntax only (서버 불필요)
-npm run verify:health:full  # 기동 후 /api/outlook/status 프로브
+cd /Users/jmpark/Documents/Playground/apps/mail-intelligence
+PORT=3010 node server.mjs
 ```
 
-## 환경 변수
-
-| 변수 | 설명 | 기본값 |
-|------|------|--------|
-| `PORT` | 서버 포트 | `3010` (`server.mjs` fallback; 레거시 배포는 `10200`) |
-| `OUTLOOK_GRAPH_ACCESS_TOKEN` | Graph API 토큰 | - |
-| `MICROSOFT_TENANT_ID` | Azure AD 테넌트 ID | - |
-| `MICROSOFT_CLIENT_ID` | Azure AD 앱 ID | - |
-| `MICROSOFT_CLIENT_SECRET` | Azure AD 시크릿 | - |
-| `OUTLOOK_MAILBOX_USER` | 메일박스 사용자 | - |
-| `GEMINI_API_KEY` | Gemini API 키 | - |
-
-## 참고사항
-
-1. **첫 동기화**: `since` 없이 전체 메일 가져옴
-2. **이후 동기화**: `lastReceivedAt` 이후 새 메일만 증분 동기화
-3. **OAuth 흐름**: PKCE 사용, Azure AD 앱은 confidential client 타입
-4. **캐시**: `.mail-cache.json`에 메일과 분석 결과 저장
-5. **피드백**: 사용자 보정은 다음 분석 시 학습 기반으로 활용
+접속: http://localhost:3010

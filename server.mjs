@@ -34,7 +34,7 @@ const runtimeConfig = {
   expiresAt: 0,
   // F-AIOS-v3 Integration
   aiProvider: 'f-aios-v3',  // 'f-aios-v3' | 'gemini' | 'lmstudio'
-  faiosServerUrl: 'http://localhost:3200',
+  faiosServerUrl: 'http://localhost:3201',
   lmstudioModel: 'qwen/qwen3.5-9b'
 };
 const pendingOAuth = new Map();
@@ -209,7 +209,7 @@ function configStatus() {
     geminiModel: runtimeConfig.geminiModel || 'gemini-2.5-flash',
     // AI Provider settings
     aiProvider: runtimeConfig.aiProvider || 'f-aios-v3',
-    faiosServerUrl: runtimeConfig.faiosServerUrl || 'http://localhost:3200',
+    faiosServerUrl: runtimeConfig.faiosServerUrl || 'http://localhost:3201',
     lmstudioModel: runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b',
     hasAccessToken: hasToken,
     hasTenantId: Boolean(getConfigValue('tenantId', 'MICROSOFT_TENANT_ID')),
@@ -1178,7 +1178,7 @@ ${JSON.stringify(messagesForAi.map((message) => ({
 }
 
 async function callFaiosServer(prompt) {
-  const serverUrl = runtimeConfig.faiosServerUrl || 'http://localhost:3200';
+  const serverUrl = runtimeConfig.faiosServerUrl || 'http://localhost:3201';
   
   const response = await fetch(`${serverUrl}/api/workflow/execute`, {
     method: 'POST',

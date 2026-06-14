@@ -536,7 +536,7 @@ async function loadStatus() {
     geminiModel.value = status.geminiModel || 'gemini-2.5-flash';
     // AI Provider settings
     aiProvider.value = status.aiProvider || 'f-aios-v3';
-    faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3200';
+    faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3201';
     lmstudioModel.value = status.lmstudioModel || 'qwen/qwen3.5-9b';
     accessToken.placeholder = status.hasAccessToken ? '저장된 토큰 사용 중' : '';
     clientSecret.placeholder = status.hasClientSecret ? '저장된 client secret 사용 중' : '';
@@ -639,7 +639,7 @@ clearConfig.addEventListener('click', async () => {
   geminiApiKey.value = '';
   geminiModel.value = 'gemini-2.5-flash';
   aiProvider.value = 'f-aios-v3';
-  faiosServerUrl.value = 'http://localhost:3200';
+  faiosServerUrl.value = 'http://localhost:3201';
   lmstudioModel.value = 'qwen/qwen3.5-9b';
   await fetch('/api/outlook/config', { method: 'DELETE' });
   configStatus.textContent = '저장값 초기화';

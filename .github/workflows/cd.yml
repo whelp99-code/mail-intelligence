@@ -139,12 +139,12 @@ jobs:
             else
               # Fallback: direct process restart
               pkill -f "node server.mjs" || true
-              PORT=10200 nohup node server.mjs > /var/log/mail-intelligence.log 2>&1 &
+              PORT=3010 nohup node server.mjs > /var/log/mail-intelligence.log 2>&1 &
             fi
             
             # Health check
             sleep 5
-            curl -sf http://localhost:10200/api/outlook/status || exit 1
+            curl -sf http://localhost:3010/api/outlook/status || exit 1
             
             echo "Deployment successful!"
             rm -f "$ARTIFACT"
