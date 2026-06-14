@@ -3,6 +3,7 @@ import { initKanban } from './kanban.js';
 import { initKeyboard } from './keyboard.js';
 import { initStats } from './stats.js';
 import { initTheme } from './theme.js';
+import { initSearch } from './search.js';
 
 // 전역 상태 노출 (Kanban 모듈에서 접근용)
 window.selectMessage = null;
@@ -680,6 +681,7 @@ initKanban();
 initKeyboard();
 initStats();
 initTheme();
+initSearch();
 
 // --- Column Resize (Drag & Drop) ---
 (function initColumnResize() {
