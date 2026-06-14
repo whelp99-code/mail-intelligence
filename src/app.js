@@ -1,4 +1,12 @@
 import { analyzeMessages } from './analyzer.js';
+import { initKanban } from './kanban.js';
+
+// 전역 상태 노출 (Kanban 모듈에서 접근용)
+window.selectMessage = null;
+window.saveFeedback = null;
+window.renderFilteredView = null;
+window.currentMessages = [];
+window.currentResult = null;
 
 const loadSample = document.querySelector('#loadSample');
 const loadOutlook = document.querySelector('#loadOutlook');
@@ -517,6 +525,9 @@ function renderActionPanel() {
 function render(result, messages = []) {
   currentResult = result;
   currentMessages = messages;
+  // 전역 상태 업데이트 (Kanban 모듈에서 접근용)
+  window.currentMessages = messages;
+  window.currentResult = result;
   activeFilter = 'all';
   searchQuery = '';
   mailSearch.value = '';
@@ -656,7 +667,13 @@ mailSearch.addEventListener('input', () => {
   renderFilteredView();
 });
 
+// 전역 함수 노출 (Kanban 모듈에서 접근용)
+window.selectMessage = selectMessage;
+window.saveFeedback = saveFeedback;
+window.renderFilteredView = renderFilteredView;
+
 loadStatus();
+initKanban();
 
 // --- Column Resize (Drag & Drop) ---
 (function initColumnResize() {
