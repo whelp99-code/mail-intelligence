@@ -1330,3 +1330,19 @@ body.stats-mode .kpi-strip {
   background: #1e293b;
   border-color: #334155;
 }
+
+/* Reminder Menu */
+.kanban-move-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+
+.reminder-option {
+  color: var(--amber);
+  font-size: 12px;
+}
+
+.reminder-option:hover {
+  background: var(--soft-amber);
+}

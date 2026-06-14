@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml, safeSelector, showToast, delegateEvent } from './utils.js';
+import { setReminder } from './notifications.js';
 
 const VALID_LANES = ['urgent', 'active', 'waiting', 'done'];
 
@@ -208,6 +209,7 @@ function showMoveMenu(messageId, card) {
   const menu = document.createElement('div');
   menu.className = 'kanban-move-menu';
 
+  // 상태 변경 옵션
   VALID_LANES.forEach(lane => {
     if (lane === currentLane) return;
     const config = LANE_CONFIG[lane];
@@ -218,14 +220,42 @@ function showMoveMenu(messageId, card) {
     menu.appendChild(btn);
   });
 
+  // 구분선
+  const divider = document.createElement('div');
+  divider.className = 'kanban-move-divider';
+  menu.appendChild(divider);
+
+  // 리마인더 옵션
+  const reminderOptions = [
+    { hours: 1, label: '⏰ 1시간 후 리마인더' },
+    { hours: 3, label: '⏰ 3시간 후 리마인더' },
+    { hours: 24, label: '⏰ 내일 리마인더' }
+  ];
+
+  reminderOptions.forEach(option => {
+    const btn = document.createElement('button');
+    btn.className = 'kanban-move-option reminder-option';
+    btn.dataset.hours = option.hours;
+    btn.textContent = option.label;
+    menu.appendChild(btn);
+  });
+
   card.appendChild(menu);
 
   // 메뉴 클릭 이벤트 위임
   delegateEvent(menu, 'click', '.kanban-move-option', (e, btn) => {
-    const targetLane = btn.dataset.targetLane;
-    if (targetLane && VALID_LANES.includes(targetLane)) {
-      moveKanbanCard(messageId, targetLane);
+    if (btn.classList.contains('reminder-option')) {
+      const hours = parseInt(btn.dataset.hours);
+      const message = (window.currentMessages || []).find(m => m.id === messageId);
+      const subject = message?.subject || '메일';
+      setReminder(messageId, hours, `${subject} - 확인이 필요합니다.`);
       menu.remove();
+    } else {
+      const targetLane = btn.dataset.targetLane;
+      if (targetLane && VALID_LANES.includes(targetLane)) {
+        moveKanbanCard(messageId, targetLane);
+        menu.remove();
+      }
     }
   });
 
