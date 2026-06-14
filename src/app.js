@@ -1,5 +1,6 @@
 import { analyzeMessages } from './analyzer.js';
 import { initKanban } from './kanban.js';
+import { initKeyboard } from './keyboard.js';
 
 // 전역 상태 노출 (Kanban 모듈에서 접근용)
 window.selectMessage = null;
@@ -674,6 +675,7 @@ window.renderFilteredView = renderFilteredView;
 
 loadStatus();
 initKanban();
+initKeyboard();
 
 // --- Column Resize (Drag & Drop) ---
 (function initColumnResize() {

@@ -919,3 +919,71 @@ textarea {
 body.kanban-mode .kpi-strip {
   display: none;
 }
+
+/* Keyboard Shortcut Help Panel */
+.keyboard-help-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.keyboard-help-content {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.keyboard-help-content h3 {
+  margin: 0 0 16px 0;
+  font-size: 18px;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.shortcut-item:last-child {
+  border-bottom: none;
+}
+
+kbd {
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: monospace;
+  font-size: 14px;
+  min-width: 32px;
+  text-align: center;
+}
+
+.close-help {
+  margin-top: 16px;
+  width: 100%;
+}
+
+/* Keyboard Focus Indicator */
+.keyboard-focused {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
