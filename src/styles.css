@@ -88,10 +88,10 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .main {
   min-height: 100vh;
   min-width: 0;
-  overflow: visible;
+  overflow: hidden;
   padding: 16px;
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 .topbar, .config-panel, .kpi-strip, .mail-list-panel, .detail-panel, .panel {
@@ -240,14 +240,17 @@ textarea {
 .metric.done strong { color: var(--green); }
 
 .mail-shell {
-  height: calc(100vh - 280px);
-  min-height: 500px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.mail-shell > * {
+  flex: 1 1 0;
   min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.mail-shell > .mail-list-panel,
+.mail-shell > .detail-panel,
+.mail-shell > .action-column {
+  min-height: 0;
+  min-width: 200px;
   overflow: hidden;
 }
 .mail-list-panel, .detail-panel, .action-column {
@@ -255,8 +258,16 @@ textarea {
   flex-direction: column;
   overflow: hidden;
 }
-.mail-list-panel, .detail-panel {
-  max-height: none;
+.mail-list-panel {
+  flex: 0.95 1 0;
+}
+.detail-panel {
+  flex: 1.2 1 0;
+}
+.action-column {
+  flex: 0.85 1 0;
+  min-width: 240px;
+  gap: 12px;
 }
 .mail-list-panel > .panel-head,
 .detail-panel > .detail-head,
@@ -270,22 +281,25 @@ textarea {
   min-height: 0;
   overflow: auto;
 }
-/* 리사이저 핸들 */
+/* Column resize handles sit between flex panes */
 .col-resizer {
+  flex: 0 0 6px;
   width: 6px;
   cursor: col-resize;
   background: transparent;
   transition: background 0.15s;
-  flex-shrink: 0;
+  align-self: stretch;
 }
 .col-resizer:hover,
 .col-resizer.active {
   background: var(--green);
 }
-.action-column {
-  display: grid;
-  grid-template-rows: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
-  gap: 12px;
+.action-column > .panel {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .panel-head {
   align-items: center;
@@ -625,11 +639,6 @@ textarea {
   justify-content: flex-end;
 }
 
-.action-column {
-  display: grid;
-  grid-template-rows: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
-  gap: 12px;
-}
 .stack {
   display: grid;
   align-content: start;
@@ -678,9 +687,18 @@ textarea {
   body { grid-template-columns: 1fr; overflow: auto; }
   .sidebar { display: none; }
   .main { height: auto; min-height: 100vh; overflow: visible; }
-  .mail-shell { grid-template-columns: 1fr; }
-  .mail-list-panel, .detail-panel, .panel { max-height: 620px; }
-  .action-column { grid-template-rows: auto; }
+  .mail-shell {
+    flex-direction: column;
+    flex: none;
+    min-height: auto;
+  }
+  .mail-shell > .col-resizer { display: none; }
+  .mail-list-panel, .detail-panel, .action-column {
+    flex: none;
+    max-height: 620px;
+    min-width: 0;
+  }
+  .action-column > .panel { flex: none; max-height: 420px; }
   .config-grid, .kpi-strip { grid-template-columns: 1fr; }
   .feedback-summary, .feedback-buttons, .feedback-form { grid-template-columns: 1fr; }
   .search-field { min-width: 100%; }

@@ -802,6 +802,7 @@ function normalizeActionScenarios(message, actions = [], summaries = []) {
 
 async function enrichWithAI(messages, result) {
   const provider = runtimeConfig.aiProvider || 'f-aios-v3';
+  const modelName = getModelName(provider);
   if (messages.length === 0) return { ...result, ai: { enabled: false, provider: 'rules' } };
   
   const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
@@ -816,7 +817,7 @@ async function enrichWithAI(messages, result) {
   
   // 캐시된 분석 결과 사용
   for (const message of messages) {
-    const cached = analysisCache[analysisCacheKey(message, provider)];
+    const cached = analysisCache[analysisCacheKey(message, modelName)];
     if (cached) {
       cachedById.set(message.id, cached);
     } else {
@@ -854,11 +855,15 @@ async function enrichWithAI(messages, result) {
           receivedAt: action.receivedAt,
           webLink: action.webLink
         })),
-      ai: { enabled: true, provider, model: getModelName(provider), cached: messages.length }
+      ai: { enabled: true, provider, model: modelName, cached: messages.length }
     };
   }
   
-  const prompt = buildAnalysisPrompt(feedbackExamples, messagesForAi);
+  const maxAiMessages = Math.max(1, Math.min(Number(process.env.MAIL_AI_ANALYSIS_LIMIT || 3), 10));
+  const requestMessages = messagesForAi.slice(0, maxAiMessages);
+  const prompt = provider === 'lmstudio'
+    ? buildLmStudioAnalysisPrompt(feedbackExamples, requestMessages)
+    : buildAnalysisPrompt(feedbackExamples, requestMessages);
   let aiText = '';
   
   try {
@@ -882,8 +887,9 @@ async function enrichWithAI(messages, result) {
       throw error;
     }
   }
+  const ai = extractJson(aiText);
   const byId = new Map((ai.messages || []).map((item) => [item.id, item]));
-  const aiMessageIds = new Set(messagesForAi.map((message) => message.id));
+  const aiMessageIds = new Set(requestMessages.map((message) => message.id));
   const enhancedInsights = result.messageInsights.map((insight) => {
     const message = messages.find((item) => item.id === insight.id) || insight;
     const cachedInsight = cachedById.get(insight.id);
@@ -934,7 +940,7 @@ async function enrichWithAI(messages, result) {
     if (!aiMessageIds.has(insight.id) || !insight.aiEnhanced) continue;
     const message = messages.find((item) => item.id === insight.id);
     if (!message) continue;
-    analysisCache[analysisCacheKey(message, model)] = {
+    analysisCache[analysisCacheKey(message, modelName)] = {
       status: insight.status,
       summary: insight.summary,
       nextActions: insight.nextActions,
@@ -967,7 +973,14 @@ async function enrichWithAI(messages, result) {
     messageInsights: enhancedInsights,
     nextActions,
     reminders,
-    ai: { enabled: true, provider: 'gemini', model, analyzed: messagesForAi.length, cached: cachedById.size }
+    ai: {
+      enabled: true,
+      provider,
+      model: modelName,
+      analyzed: requestMessages.length,
+      pending: Math.max(messagesForAi.length - requestMessages.length, 0),
+      cached: cachedById.size
+    }
   };
 }
 
@@ -1215,7 +1228,7 @@ function getModelName(provider) {
   return runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
 }
 
-function buildAnalysisPrompt(feedbackExamples, messagesForAi) {
+function buildAnalysisPrompt(feedbackExamples, messagesForAi, maxBodyLength = 4500) {
   return `You are an executive email triage assistant. Analyze each email and return ONLY valid JSON.
 
 Language: Korean.
@@ -1263,7 +1276,41 @@ ${JSON.stringify(messagesForAi.map((message) => ({
     subject: message.subject,
     from: message.fromName || message.from,
     receivedAt: message.receivedAt,
-    body: clip(message.body || message.bodyPreview, 4500)
+    body: clip(message.body || message.bodyPreview, maxBodyLength)
+  })), null, 2)}`;
+}
+
+function buildLmStudioAnalysisPrompt(feedbackExamples, messagesForAi) {
+  return `Return ONLY valid JSON. No markdown.
+
+Analyze each email in Korean. Keep the output compact.
+Classify status as one of: urgent, active, waiting, done, reference.
+Do not draft replies. Put "nextActions": [] and let the app generate default action scenarios.
+
+Recent user correction examples:
+${JSON.stringify(feedbackExamples.slice(0, 5), null, 2)}
+
+Required JSON shape:
+{
+  "messages": [
+    {
+      "id": "same id",
+      "status": "urgent|active|waiting|done|reference",
+      "summary": ["1-2 short Korean bullets"],
+      "nextActions": [],
+      "evidenceItems": ["1-2 short supporting facts"],
+      "aiRationale": "short Korean rationale"
+    }
+  ]
+}
+
+Emails:
+${JSON.stringify(messagesForAi.map((message) => ({
+    id: message.id,
+    subject: clip(message.subject, 180),
+    from: clip(message.fromName || message.from, 120),
+    receivedAt: message.receivedAt,
+    body: clip(message.body || message.bodyPreview, 400)
   })), null, 2)}`;
 }
 
@@ -1330,8 +1377,34 @@ async function callLmStudio(prompt) {
       model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
-      max_tokens: 8192,
-      response_format: { type: 'json_object' }
+      max_tokens: 1024,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'mail_analysis',
+          schema: {
+            type: 'object',
+            properties: {
+              messages: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    status: { type: 'string' },
+                    summary: { type: 'array', items: { type: 'string' } },
+                    nextActions: { type: 'array', items: { type: 'object' } },
+                    evidenceItems: { type: 'array', items: { type: 'string' } },
+                    aiRationale: { type: 'string' }
+                  },
+                  required: ['id', 'status', 'summary', 'evidenceItems', 'aiRationale']
+                }
+              }
+            },
+            required: ['messages']
+          }
+        }
+      }
     })
   });
   

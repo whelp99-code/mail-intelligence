@@ -716,9 +716,6 @@ initNotifications();
           const newWidth2 = Math.max(200, startWidths[colIndex + 1] - dx);
           cols[colIndex].style.flex = `0 0 ${newWidth1}px`;
           cols[colIndex + 1].style.flex = `0 0 ${newWidth2}px`;
-          shell.style.gridTemplateColumns = [...cols].map(c => 
-            c.style.flex || `0 0 ${c.getBoundingClientRect().width}px`
-          ).join(' ');
         }
       };
       
@@ -736,8 +733,9 @@ initNotifications();
     
     resizer.addEventListener('dblclick', () => {
       const cols = columns();
-      shell.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
-      cols.forEach(col => col.style.flex = '');
+      cols.forEach((col) => {
+        col.style.flex = '';
+      });
     });
   });
 })();
