@@ -9,6 +9,8 @@ const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
 const configPath = join(appRoot, '.outlook-config.json');
 const mailCachePath = join(appRoot, '.mail-cache.json');
+const attachmentArchivePath = join(appRoot, '.attachment-archive.json');
+const attachmentArchiveMetaPath = join(appRoot, '.attachment-archive-meta.json');
 const port = Number(process.env.PORT || 3010);
 const graphBaseUrl = 'https://graph.microsoft.com/v1.0';
 const delegatedScopes = 'openid profile offline_access User.Read Mail.Read Mail.Send';
@@ -80,6 +82,15 @@ async function saveMailCache(cache) {
     await chmod(mailCachePath, 0o600);
   } catch {
     // Some filesystems do not support chmod; ignore.
+  }
+}
+
+async function readJsonFile(filePath, fallback) {
+  try {
+    const raw = await readFile(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
   }
 }
 
@@ -337,16 +348,25 @@ function normalizeGraphMessage(message) {
   return {
     id: message.id,
     changeKey: message.changeKey || '',
+    conversationId: message.conversationId || '',
+    internetMessageId: message.internetMessageId || '',
+    lastModifiedAt: message.lastModifiedDateTime || message.receivedDateTime || '',
+    mailFolder: 'inbox',
     subject: message.subject || '(제목 없음)',
     from: message.from?.emailAddress?.address || message.sender?.emailAddress?.address || 'unknown',
     fromName: message.from?.emailAddress?.name || message.sender?.emailAddress?.name || '',
+    to: (message.toRecipients || []).map((item) => item.emailAddress?.address).filter(Boolean),
     cc: (message.ccRecipients || []).map((item) => item.emailAddress?.address).filter(Boolean),
     receivedAt: message.receivedDateTime,
     importance: message.importance,
     isRead: message.isRead,
+    hasAttachments: Boolean(message.hasAttachments),
+    attachmentNames: [],
     isPromotional: isPromotionalMessage(message),
     bodyPreview: message.bodyPreview || '',
     body: stripHtml(message.body?.content || message.bodyPreview || ''),
+    bodyHtml: message.body?.contentType === 'html' ? String(message.body?.content || '') : '',
+    bodyContentType: message.body?.contentType || 'text',
     webLink: message.webLink
   };
 }
@@ -357,6 +377,17 @@ function sortMessages(messages) {
 
 function latestReceivedAt(messages) {
   return sortMessages(messages).find((message) => message.receivedAt)?.receivedAt || '';
+}
+
+function latestModifiedAt(messages) {
+  return sortMessages(
+    [...messages].sort((a, b) => new Date(b.lastModifiedAt || b.receivedAt || 0) - new Date(a.lastModifiedAt || a.receivedAt || 0))
+  ).find((message) => message.lastModifiedAt || message.receivedAt)?.lastModifiedAt || latestReceivedAt(messages);
+}
+
+function sliceDisplayMessages(messages, top) {
+  const requestedTop = Math.min(Math.max(Number(top) || 25, 1), 100);
+  return sortMessages(messages).slice(0, requestedTop);
 }
 
 function mergeMessages(existingMessages, incomingMessages) {
@@ -582,36 +613,75 @@ async function getGraphAccessToken() {
   return payload.access_token;
 }
 
-async function fetchGraphMessages({ accessToken, mailboxPath, top, since }) {
+async function fetchGraphMessages({ accessToken, mailboxPath, top, modifiedSince, initialSync = false }) {
+  const pageSize = Math.min(Math.max(Number(process.env.MAIL_GRAPH_PAGE_SIZE || 100), 10), 500);
+  const maxPages = Math.max(1, Number(process.env.MAIL_GRAPH_MAX_PAGES || (initialSync ? 100 : 20)));
   const params = new URLSearchParams({
-    '$top': String(Math.min(Math.max(top, 1), 50)),
-    '$orderby': 'receivedDateTime desc',
-    '$select': 'id,changeKey,subject,from,sender,ccRecipients,receivedDateTime,importance,isRead,bodyPreview,body,webLink'
+    '$top': String(pageSize),
+    '$select': 'id,changeKey,conversationId,internetMessageId,lastModifiedDateTime,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,importance,isRead,hasAttachments,bodyPreview,body,webLink'
   });
-  if (since) {
-    const sinceDate = new Date(since);
+  if (initialSync) {
+    params.set('$orderby', 'receivedDateTime desc');
+  }
+  if (!initialSync && modifiedSince) {
+    const sinceDate = new Date(modifiedSince);
     if (!Number.isNaN(sinceDate.getTime())) {
-      params.set('$filter', `receivedDateTime gt ${sinceDate.toISOString()}`);
+      params.set('$filter', `lastModifiedDateTime ge ${sinceDate.toISOString()}`);
     }
   }
 
-  const response = await fetch(`${graphBaseUrl}${mailboxPath}?${params}`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Prefer: 'outlook.body-content-type="text"'
-    }
-  });
+  let nextUrl = `${graphBaseUrl}${mailboxPath}?${params}`;
+  const messages = [];
+  let pageCount = 0;
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Microsoft Graph messages request failed: ${response.status} ${text}`);
+  while (nextUrl && pageCount < maxPages) {
+    const response = await fetch(nextUrl, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Prefer: 'outlook.body-content-type="text"'
+      }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Microsoft Graph messages request failed: ${response.status} ${text}`);
+    }
+
+    const payload = await response.json();
+    messages.push(...(payload.value || []).map(normalizeGraphMessage));
+    nextUrl = payload['@odata.nextLink'] || '';
+    pageCount += 1;
+
+    if (!initialSync && messages.length >= Math.max(top * 4, pageSize)) break;
   }
 
-  const payload = await response.json();
-  return (payload.value || []).map(normalizeGraphMessage);
+  return messages;
 }
 
-async function fetchOutlookMessages(top = 25) {
+async function loadCachedMailbox(top = 25) {
+  const status = configStatus();
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  const cacheKey = mailboxCacheKey(mailboxUser);
+  const cache = await loadMailCache();
+  const mailboxCache = cache.mailboxes[cacheKey] || { messages: [], lastSyncedAt: '', lastReceivedAt: '' };
+  const allMessages = sortMessages(Array.isArray(mailboxCache.messages) ? mailboxCache.messages : []);
+  const messages = sliceDisplayMessages(allMessages, top);
+
+  return {
+    connected: status.connected,
+    mode: mailboxUser ? 'application-mailbox' : status.connected ? 'delegated-me' : 'not-configured',
+    message: messages.length ? 'Loaded from local mail cache.' : 'Local mail cache is empty.',
+    messages,
+    sync: {
+      mailbox: cacheKey,
+      mode: 'cache',
+      totalCached: allMessages.length,
+      lastSyncedAt: mailboxCache.lastSyncedAt || null
+    }
+  };
+}
+
+async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
   const accessToken = await getGraphAccessToken();
   if (!accessToken) {
     return {
@@ -628,30 +698,37 @@ async function fetchOutlookMessages(top = 25) {
   const cacheKey = mailboxCacheKey(mailboxUser);
   const mailboxCache = cache.mailboxes[cacheKey] || { messages: [], lastSyncedAt: '', lastReceivedAt: '' };
   const cachedMessages = Array.isArray(mailboxCache.messages) ? mailboxCache.messages : [];
-  const requestedTop = Math.min(Math.max(top, 1), 50);
-  const shouldFetchOnlyNew = cachedMessages.length >= requestedTop;
-  const since = shouldFetchOnlyNew ? latestReceivedAt(cachedMessages) : '';
-  const incomingMessages = await fetchGraphMessages({ accessToken, mailboxPath, top, since });
+  const requestedTop = Math.min(Math.max(top, 1), 100);
+  const isInitialSync = forceInitial || cachedMessages.length === 0;
+  const modifiedSince = isInitialSync ? '' : (mailboxCache.lastModifiedAt || latestModifiedAt(cachedMessages) || '');
+  const incomingMessages = await fetchGraphMessages({
+    accessToken,
+    mailboxPath,
+    top: requestedTop,
+    modifiedSince,
+    initialSync: isInitialSync
+  });
   const merged = mergeMessages(cachedMessages, incomingMessages);
   cache.mailboxes[cacheKey] = {
     ...mailboxCache,
     messages: merged.messages,
     lastSyncedAt: new Date().toISOString(),
-    lastReceivedAt: latestReceivedAt(merged.messages)
+    lastReceivedAt: latestReceivedAt(merged.messages),
+    lastModifiedAt: latestModifiedAt(merged.messages)
   };
   await saveMailCache(cache);
 
   return {
     connected: true,
     mode: mailboxUser ? 'application-mailbox' : 'delegated-me',
-    message: cachedMessages.length
-      ? 'Outlook inbox incrementally synced from Microsoft Graph.'
-      : 'Outlook inbox loaded from Microsoft Graph.',
-    messages: merged.messages,
+    message: isInitialSync
+      ? 'Outlook inbox loaded from Microsoft Graph.'
+      : 'Outlook inbox incrementally synced from Microsoft Graph.',
+    messages: sliceDisplayMessages(merged.messages, requestedTop),
     sync: {
       mailbox: cacheKey,
-      mode: shouldFetchOnlyNew ? 'incremental' : 'initial',
-      requestedAfter: since || null,
+      mode: isInitialSync ? 'initial' : 'incremental',
+      requestedAfter: modifiedSince || null,
       fetchedFromGraph: incomingMessages.length,
       cachedBefore: cachedMessages.length,
       newCount: merged.newCount,
@@ -709,6 +786,221 @@ async function sendOutlookMail({ to, cc = '', subject, body }) {
   return { sent: true, savedToSentItems: true, sentAt: new Date().toISOString() };
 }
 
+async function loadAttachmentArchive() {
+  const [archive, meta] = await Promise.all([
+    readJsonFile(attachmentArchivePath, { version: 1, entries: [] }),
+    readJsonFile(attachmentArchiveMetaPath, { version: 1, tagsByEntryId: {} })
+  ]);
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  const accountEmail = (mailboxUser || '').toLowerCase();
+  const entries = Array.isArray(archive.entries) ? archive.entries : [];
+  const filtered = accountEmail
+    ? entries.filter((entry) => String(entry.accountEmail || '').toLowerCase() === accountEmail)
+    : entries;
+  const enriched = filtered
+    .map((entry) => ({
+      ...entry,
+      tags: meta.tagsByEntryId?.[entry.id]?.userTags || [],
+      aiTags: meta.tagsByEntryId?.[entry.id]?.aiTags || []
+    }))
+    .sort((a, b) => new Date(b.receivedAt || 0) - new Date(a.receivedAt || 0));
+
+  return {
+    entries: enriched,
+    counts: {
+      total: enriched.length,
+      downloadable: enriched.filter((entry) => entry.hasDownload).length,
+      byCategory: enriched.reduce((acc, entry) => {
+        const key = entry.category || 'other';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {})
+    }
+  };
+}
+
+function findRelatedMessages(mailboxMessages, message) {
+  if (!message) return [];
+  const subjectKey = String(message.aiGroupKey || normalizedSubjectKey(message.subject)).toLowerCase();
+  const conversationId = String(message.conversationId || '');
+  return sortMessages(
+    mailboxMessages.filter((item) => {
+      if (item.id === message.id) return true;
+      if (conversationId && item.conversationId === conversationId) return true;
+      return String(item.aiGroupKey || normalizedSubjectKey(item.subject)).toLowerCase() === subjectKey;
+    })
+  );
+}
+
+function normalizedSubjectKey(subject = '') {
+  return compactText(subject, 200)
+    .toLowerCase()
+    .replace(/^(re|fw|fwd)\s*:\s*/gi, '')
+    .replace(/\[[^\]]+\]/g, ' ')
+    .replace(/\s+/g, '-')
+    .trim();
+}
+
+function buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries }) {
+  const recentThread = relatedMessages
+    .slice(0, 8)
+    .map((item) => ({
+      id: item.id,
+      folder: item.mailFolder || 'inbox',
+      from: item.fromName || item.from,
+      to: item.to || [],
+      receivedAt: item.receivedAt,
+      subject: item.subject,
+      body: clip(item.body || item.bodyPreview, 600)
+    }));
+  const attachmentContext = attachmentEntries.slice(0, 8).map((entry) => ({
+    name: entry.name,
+    category: entry.categoryLabel,
+    subject: entry.subject,
+    from: entry.fromName || entry.from,
+    tags: [...(entry.tags || []), ...(entry.aiTags || [])].slice(0, 6)
+  }));
+
+  return `Return ONLY valid JSON. No markdown.
+
+You are drafting the single best Korean business email reply for the selected message.
+Use the mailbox history and past sent emails as style/context evidence.
+Do not invent promises, dates, attachments, or technical facts not grounded in the context.
+If something is missing, ask for it briefly.
+
+Required JSON shape:
+{
+  "to": "recipient email",
+  "cc": "",
+  "subject": "reply subject",
+  "body": "full Korean email draft",
+  "reasoning": "short Korean explanation",
+  "recommendedAttachments": ["attachment names or document hints"]
+}
+
+Selected message:
+${JSON.stringify({
+    id: message.id,
+    from: message.fromName || message.from,
+    to: message.to || [],
+    cc: message.cc || [],
+    receivedAt: message.receivedAt,
+    subject: message.subject,
+    body: clip(message.body || message.bodyPreview, 1000)
+  }, null, 2)}
+
+Related thread and past mailbox history:
+${JSON.stringify(recentThread, null, 2)}
+
+Possible attachment references:
+${JSON.stringify(attachmentContext, null, 2)}`;
+}
+
+async function callLmStudioReplyDraft(prompt) {
+  const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
+  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15000),
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.15,
+      max_tokens: 1400,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'mail_reply_draft',
+          schema: {
+            type: 'object',
+            properties: {
+              to: { type: 'string' },
+              cc: { type: 'string' },
+              subject: { type: 'string' },
+              body: { type: 'string' },
+              reasoning: { type: 'string' },
+              recommendedAttachments: { type: 'array', items: { type: 'string' } }
+            },
+            required: ['to', 'cc', 'subject', 'body', 'reasoning', 'recommendedAttachments']
+          }
+        }
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LM Studio reply draft error: ${response.status} ${text}`);
+  }
+
+  const payload = await response.json();
+  return extractJson(payload.choices?.[0]?.message?.content || '');
+}
+
+function buildFallbackReplyDraft(message, relatedMessages, attachmentEntries) {
+  const recentSent = relatedMessages.find((item) => item.mailFolder === 'sent');
+  const senderName = message.fromName || '담당자';
+  const attachmentHints = attachmentEntries.slice(0, 3).map((entry) => entry.name);
+  return {
+    to: emailAddress(message.from || ''),
+    cc: '',
+    subject: replySubject(message.subject || ''),
+    body: [
+      `안녕하세요, ${senderName}님.`,
+      '',
+      '메일 내용 확인했습니다.',
+      '',
+      recentSent?.body
+        ? `이전 회신 이력을 참고해 동일한 흐름으로 정리하겠습니다.\n- ${compactText(recentSent.body, 180)}`
+        : `요청하신 내용 기준으로 필요한 확인 사항과 진행 일정을 정리해 회신드립니다.`,
+      '',
+      '추가로 필요한 자료나 확인 항목이 있으면 회신 부탁드립니다.',
+      '',
+      '감사합니다.'
+    ].join('\n'),
+    reasoning: '로컬 메일 캐시의 동일 스레드/발신 이력을 기준으로 기본 회신 초안을 구성했습니다.',
+    recommendedAttachments: attachmentHints.length ? attachmentHints : ['관련 제안서/매뉴얼/기존 발송자료 확인']
+  };
+}
+
+async function generateReplyDraft(messageId) {
+  const { mailboxCache } = await readFeedbackContext();
+  const mailboxMessages = Array.isArray(mailboxCache.messages) ? mailboxCache.messages : [];
+  const message = mailboxMessages.find((item) => item.id === messageId);
+  if (!message) {
+    const error = new Error('선택한 메일을 캐시에서 찾지 못했습니다.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const relatedMessages = findRelatedMessages(mailboxMessages, message);
+  const { entries } = await loadAttachmentArchive();
+  const attachmentEntries = entries.filter((entry) => {
+    if (entry.messageId === message.id) return true;
+    if (message.conversationId && entry.subject && normalizedSubjectKey(entry.subject) === normalizedSubjectKey(message.subject)) return true;
+    return String(entry.subject || '').trim() === String(message.subject || '').trim();
+  });
+
+  try {
+    const prompt = buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries });
+    const draft = await callLmStudioReplyDraft(prompt);
+    return {
+      ...draft,
+      messageId,
+      source: 'lmstudio',
+      relatedCount: relatedMessages.length
+    };
+  } catch (error) {
+    return {
+      ...buildFallbackReplyDraft(message, relatedMessages, attachmentEntries),
+      messageId,
+      source: 'fallback',
+      warning: error instanceof Error ? error.message : 'LM Studio draft generation failed.',
+      relatedCount: relatedMessages.length
+    };
+  }
+}
+
 function clip(value = '', max = 5000) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
@@ -744,38 +1036,45 @@ function replySubject(subject = '') {
 function normalizeActionScenarios(message, actions = [], summaries = []) {
   const recipient = emailAddress(message.from || '');
   const subject = replySubject(message.subject);
+  const text = `${message.subject || ''} ${message.body || message.bodyPreview || ''}`.toLowerCase();
   const summaryLines = (summaries.length ? summaries : [message.bodyPreview || message.subject || '메일 내용을 확인했습니다.'])
     .slice(0, 3)
     .map((item) => `- ${item}`)
     .join('\n');
   const base = actions.length ? actions : [];
+  const primaryLane = normalizeAiStatus(base[0]?.lane || 'active');
+  const hasAttachmentContext = Boolean(message.hasAttachments || message.attachmentNames?.length);
+  const asksForInfo = /문의|확인|요청|부탁|가능|견적|회신|질문|검토/.test(text);
+  const hasDateContext = Boolean(base[0]?.due || /오늘|내일|금일|이번 주|다음 주|\d{4}[.-]\d{1,2}[.-]\d{1,2}/.test(text));
   const scenarioDefaults = [
     {
-      title: '확인 및 진행 회신',
+      title: primaryLane === 'urgent' ? '긴급 우선 회신' : asksForInfo ? '요청 사항 확인 회신' : '진행 상태 공유',
       intent: '요청을 접수하고 우리가 진행할 다음 단계를 명확히 알립니다.',
       recommendedAction: base[0]?.recommendedAction || '요청 사항을 확인하고 처리 예정 일정을 회신',
-      lane: normalizeAiStatus(base[0]?.lane || 'active'),
+      lane: primaryLane,
       priority: Number(base[0]?.priority || 3),
       evidence: base[0]?.evidence || summaries[0] || message.bodyPreview || '',
       body: `안녕하세요.\n\n메일 내용 확인했습니다.\n\n핵심 내용은 아래와 같이 이해했습니다.\n${summaryLines}\n\n저희 쪽 다음 액션은 다음과 같습니다.\n- ${base[0]?.recommendedAction || '요청사항을 검토 후 진행 가능 여부와 일정을 회신드리겠습니다.'}\n\n확인 후 진행 상황을 업데이트드리겠습니다.\n\n감사합니다.`
     },
     {
-      title: '추가 정보 요청',
+      title: hasDateContext ? '일정/범위 재확인' : '추가 정보 요청',
       intent: '판단에 필요한 정보가 부족할 때 누락 정보를 요청합니다.',
-      recommendedAction: base[1]?.recommendedAction || '진행 전 필요한 조건, 일정, 담당자, 범위를 추가 확인',
+      recommendedAction: base[1]?.recommendedAction || (hasDateContext ? '마감 시점, 적용 범위, 우선순위를 다시 확인' : '진행 전 필요한 조건, 일정, 담당자, 범위를 추가 확인'),
       lane: normalizeAiStatus(base[1]?.lane || 'waiting'),
       priority: Number(base[1]?.priority || 4),
       evidence: base[1]?.evidence || base[0]?.evidence || '',
       body: `안녕하세요.\n\n메일 내용 확인했습니다. 정확히 진행하기 위해 아래 사항을 추가로 확인 부탁드립니다.\n\n1. 요청 범위 또는 대상 시스템\n2. 희망 일정 및 마감 시점\n3. 관련 담당자 또는 승인 필요 여부\n\n현재 확인한 내용:\n${summaryLines}\n\n확인 주시면 그 기준으로 다음 단계 진행하겠습니다.\n\n감사합니다.`
     },
     {
-      title: '자료 공유 및 미팅 제안',
+      title: hasAttachmentContext ? '첨부자료 기준 회신' : '자료 공유 및 미팅 제안',
       intent: 'Sangfor 자료, 메뉴얼, 관련 문서를 근거로 공유하거나 설명 일정을 제안합니다.',
-      recommendedAction: base[2]?.recommendedAction || 'Sangfor 관련 자료 확인 후 공유하고 필요 시 설명 미팅 제안',
+      recommendedAction: base[2]?.recommendedAction || (hasAttachmentContext ? '첨부파일과 기존 발송자료를 기준으로 필요한 파일만 선별해 회신' : 'Sangfor 관련 자료 확인 후 공유하고 필요 시 설명 미팅 제안'),
       lane: normalizeAiStatus(base[2]?.lane || 'active'),
       priority: Number(base[2]?.priority || 4),
-      evidence: base[2]?.evidence || 'Sangfor 제품 페이지, 메뉴얼, 기존 발송자료, 관련 제안 문서를 확인해 첨부/링크를 확정하세요.',
-      body: `안녕하세요.\n\n문의 주신 내용과 관련해 Sangfor 자료 및 관련 문서를 확인한 뒤 공유드리겠습니다.\n\n우선 확인할 자료 범위는 아래와 같습니다.\n- Sangfor 제품/기능 소개 페이지\n- 구축 또는 운영 메뉴얼\n- 기존 발송자료 및 관련 제안 문서\n\n메일에서 확인한 핵심 내용:\n${summaryLines}\n\n자료 확인 후 필요 시 짧은 설명 미팅도 함께 제안드리겠습니다.\n\n감사합니다.`
+      evidence: base[2]?.evidence || (hasAttachmentContext ? '기존 첨부파일과 과거 발송자료를 우선 확인하세요.' : 'Sangfor 제품 페이지, 메뉴얼, 기존 발송자료, 관련 제안 문서를 확인해 첨부/링크를 확정하세요.'),
+      body: hasAttachmentContext
+        ? `안녕하세요.\n\n관련 첨부파일과 기존 발송자료를 기준으로 필요한 문서만 정리해 공유드리겠습니다.\n\n메일에서 확인한 핵심 내용:\n${summaryLines}\n\n파일 버전과 전달 범위를 확인한 뒤 다시 회신드리겠습니다.\n\n감사합니다.`
+        : `안녕하세요.\n\n문의 주신 내용과 관련해 Sangfor 자료 및 관련 문서를 확인한 뒤 공유드리겠습니다.\n\n우선 확인할 자료 범위는 아래와 같습니다.\n- Sangfor 제품/기능 소개 페이지\n- 구축 또는 운영 메뉴얼\n- 기존 발송자료 및 관련 제안 문서\n\n메일에서 확인한 핵심 내용:\n${summaryLines}\n\n자료 확인 후 필요 시 짧은 설명 미팅도 함께 제안드리겠습니다.\n\n감사합니다.`
     }
   ];
 
@@ -1091,10 +1390,38 @@ async function handleApi(req, res) {
     }
   }
 
+  if (url.pathname === '/api/outlook/attachments') {
+    try {
+      const archive = await loadAttachmentArchive();
+      return json(res, 200, archive);
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Attachment archive load failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/outlook/reply-draft') {
+    try {
+      const messageId = String(url.searchParams.get('messageId') || '').trim();
+      if (!messageId) return json(res, 400, { message: 'messageId is required.' });
+      const draft = await generateReplyDraft(messageId);
+      return json(res, 200, draft);
+    } catch (error) {
+      return json(res, error?.statusCode || 500, {
+        message: error instanceof Error ? error.message : 'Reply draft generation failed.'
+      });
+    }
+  }
+
   if (url.pathname === '/api/outlook/messages' || url.pathname === '/api/outlook/analyze') {
     try {
       const top = Number(url.searchParams.get('top') || 25);
-      const data = await fetchOutlookMessages(top);
+      const syncMode = url.searchParams.get('sync') || 'auto';
+      const data =
+        syncMode === 'cache'
+          ? await loadCachedMailbox(top)
+          : await fetchOutlookMessages(top, { forceInitial: syncMode === 'initial' });
       if (url.pathname === '/api/outlook/messages') return json(res, 200, data);
       const { feedback } = await readFeedbackContext();
       const baseResult = applyFeedbackToResult(analyzeMessages(data.messages), data.messages, feedback, { allowLearnedOverride: true });
@@ -1172,7 +1499,7 @@ const server = createServer(async (req, res) => {
       runtimeConfig.expiresAt = Date.now() + Number(payload.expires_in || 3600) * 1000;
       await savePersistedConfig();
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end('<h1>Outlook login complete</h1><p>이 창을 닫고 Mail Intelligence 화면에서 Outlook 가져오기를 누르세요.</p>');
+      res.end(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Outlook 연결 완료</title></head><body><h1>Outlook 로그인 완료</h1><p>이 창을 닫으면 메일이 자동으로 동기화됩니다.</p><script>try{window.opener?.postMessage({type:'outlook-oauth-complete'},'*');}catch(e){}</script></body></html>`);
     } catch (exchangeError) {
       res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(`<h1>Outlook token exchange failed</h1><p>${exchangeError instanceof Error ? exchangeError.message : 'Unknown error'}</p>`);
@@ -1373,6 +1700,7 @@ async function callLmStudio(prompt) {
   const response = await fetch('http://localhost:1234/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(8000),
     body: JSON.stringify({
       model,
       messages: [{ role: 'user', content: prompt }],

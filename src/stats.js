@@ -189,46 +189,7 @@ function getStatusLabel(status) {
 }
 
 function renderMailView() {
-  const mailShell = document.querySelector('#mailShell');
-  if (mailShell) {
-    mailShell.innerHTML = `
-      <aside id="messages" class="mail-list-panel">
-        <div class="panel-head compact">
-          <h3>메일 목록</h3>
-          <span id="messageCount">0건</span>
-        </div>
-        <div id="messageList" class="message-list"></div>
-      </aside>
-      <div class="col-resizer" data-col="0"></div>
-      <article id="messageDetail" class="detail-panel">
-        <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
-      </article>
-      <div class="col-resizer" data-col="1"></div>
-      <aside class="action-column">
-        <section id="actions" class="panel">
-          <div class="panel-head compact">
-            <h3>다음 액션</h3>
-            <span id="actionCount">0건</span>
-          </div>
-          <div id="actionList" class="stack"></div>
-        </section>
-        <section id="calendar" class="panel">
-          <div class="panel-head compact">
-            <h3>일정</h3>
-            <span id="calendarCount">0건</span>
-          </div>
-          <div id="calendarList" class="stack"></div>
-        </section>
-        <section id="reminders" class="panel">
-          <div class="panel-head compact">
-            <h3>알림 후보</h3>
-            <span id="reminderCount">0건</span>
-          </div>
-          <div id="reminderList" class="stack"></div>
-        </section>
-      </aside>
-    `;
-  }
+  window.restoreMailShellLayout?.();
 
   if (typeof window.renderFilteredView === 'function') {
     window.renderFilteredView();

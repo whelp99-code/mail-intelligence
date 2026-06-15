@@ -13,14 +13,10 @@ window.renderFilteredView = null;
 window.currentMessages = [];
 window.currentResult = null;
 
-const loadSample = document.querySelector('#loadSample');
 const loadOutlook = document.querySelector('#loadOutlook');
 const mailLimit = document.querySelector('#mailLimit');
 const fetchStatus = document.querySelector('#fetchStatus');
 const connectionStatus = document.querySelector('#connectionStatus');
-const messageList = document.querySelector('#messageList');
-const messageCount = document.querySelector('#messageCount');
-const messageDetail = document.querySelector('#messageDetail');
 const mailSearch = document.querySelector('#mailSearch');
 const configForm = document.querySelector('#configForm');
 const configStatus = document.querySelector('#configStatus');
@@ -45,12 +41,15 @@ const counts = {
   done: document.querySelector('#doneCount')
 };
 
-const actionList = document.querySelector('#actionList');
-const calendarList = document.querySelector('#calendarList');
-const reminderList = document.querySelector('#reminderList');
-const actionCount = document.querySelector('#actionCount');
-const calendarCount = document.querySelector('#calendarCount');
-const reminderCount = document.querySelector('#reminderCount');
+const sidebarAccount = document.querySelector('#sidebarAccount');
+const folderList = document.querySelector('#folderList');
+const sidebarIdeas = document.querySelector('#sidebarIdeas');
+const openAttachments = document.querySelector('#openAttachments');
+const attachmentExplorer = document.querySelector('#attachmentExplorer');
+const closeAttachments = document.querySelector('#closeAttachments');
+const attachmentList = document.querySelector('#attachmentList');
+const attachmentCount = document.querySelector('#attachmentCount');
+const attachmentSearch = document.querySelector('#attachmentSearch');
 const feedbackReasons = {
   urgent: '마감/장애/고객 리스크',
   active: '우리가 처리해야 할 작업 있음',
@@ -67,6 +66,67 @@ let visibleMessages = [];
 let activeFilter = 'all';
 let searchQuery = '';
 let selectedMessageId = '';
+let attachmentEntries = [];
+const LAST_MAILBOX_KEY = 'mail-intelligence-last-mailbox';
+
+function ui() {
+  return {
+    messageList: document.querySelector('#messageList'),
+    messageCount: document.querySelector('#messageCount'),
+    messageDetail: document.querySelector('#messageDetail'),
+    actionList: document.querySelector('#actionList'),
+    calendarList: document.querySelector('#calendarList'),
+    reminderList: document.querySelector('#reminderList'),
+    actionCount: document.querySelector('#actionCount'),
+    calendarCount: document.querySelector('#calendarCount'),
+    reminderCount: document.querySelector('#reminderCount')
+  };
+}
+
+function restoreMailShellLayout() {
+  const mailShell = document.querySelector('#mailShell');
+  if (!mailShell) return;
+  mailShell.innerHTML = `
+    <aside id="messages" class="mail-list-panel">
+      <div class="panel-head compact">
+        <h3>메일 목록</h3>
+        <span id="messageCount">0건</span>
+      </div>
+      <div id="messageList" class="message-list"></div>
+    </aside>
+    <div class="col-resizer" data-col="0"></div>
+    <article id="messageDetail" class="detail-panel">
+      <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
+    </article>
+    <div class="col-resizer" data-col="1"></div>
+    <aside class="action-column">
+      <section id="actions" class="panel">
+        <div class="panel-head compact">
+          <h3>다음 액션</h3>
+          <span id="actionCount">0건</span>
+        </div>
+        <div id="actionList" class="stack"></div>
+      </section>
+      <section id="calendar" class="panel">
+        <div class="panel-head compact">
+          <h3>일정</h3>
+          <span id="calendarCount">0건</span>
+        </div>
+        <div id="calendarList" class="stack"></div>
+      </section>
+      <section id="reminders" class="panel">
+        <div class="panel-head compact">
+          <h3>알림 후보</h3>
+          <span id="reminderCount">0건</span>
+        </div>
+        <div id="reminderList" class="stack"></div>
+      </section>
+    </aside>
+  `;
+  window.initColumnResize?.();
+}
+
+window.restoreMailShellLayout = restoreMailShellLayout;
 
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
@@ -114,6 +174,7 @@ function messageCard(message) {
   const lane = effectiveStatus(insight);
   const article = document.createElement('article');
   article.className = 'message-card';
+  article.dataset.messageId = message.id;
   article.innerHTML = `
     <div class="message-row">
       <strong class="message-subject"></strong>
@@ -170,7 +231,7 @@ function scenarioActionCard(action) {
   article.querySelector('.mini-title').textContent = action.title || action.recommendedAction || '추천 액션';
   article.querySelector('.mini-meta').textContent = `추천 첨부파일: ${recommendedAttachment(action)}`;
   article.querySelector('p').textContent = action.body || action.recommendedAction || '';
-  article.querySelector('.prepare-mail').addEventListener('click', () => mountComposer(action));
+  article.querySelector('.prepare-mail').addEventListener('click', () => prepareReplyDraft(action));
   article.querySelector('.custom-action').addEventListener('click', () => mountComposer({
     ...action,
     id: `custom-${action.messageId || 'message'}`,
@@ -187,6 +248,31 @@ function recommendedAttachment(action) {
   if (/견적|quote|가격|발주|계약/.test(text)) return '견적서 또는 계약 관련 문서 확인';
   if (/일정|미팅|회의|schedule/.test(text)) return '일정표 또는 회의 초대 확인';
   return '첨부 추천 없음. 필요 시 custom에서 직접 지정';
+}
+
+async function prepareReplyDraft(action) {
+  if (!action?.messageId) {
+    mountComposer(action);
+    return;
+  }
+  fetchStatus.textContent = '선택한 메일의 회신 초안을 생성하는 중입니다...';
+  try {
+    const response = await fetch(`/api/outlook/reply-draft?messageId=${encodeURIComponent(action.messageId)}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '회신 초안 생성 실패');
+    mountComposer({
+      ...action,
+      to: payload.to || action.to || '',
+      cc: payload.cc || '',
+      mailSubject: payload.subject || action.mailSubject || action.subject || '',
+      body: payload.body || action.body || '',
+      recommendedAttachments: payload.recommendedAttachments || []
+    });
+    fetchStatus.textContent = `${payload.source === 'lmstudio' ? '메일 이력 기반 AI' : '메일 캐시 기반'} 회신 초안을 불러왔습니다.${payload.warning ? ` (${payload.warning})` : ''}`;
+  } catch (error) {
+    fetchStatus.textContent = error instanceof Error ? error.message : '회신 초안 생성 실패';
+    mountComposer(action);
+  }
 }
 
 function simpleCard(item, className = 'active') {
@@ -278,7 +364,9 @@ function mailComposer(action) {
 }
 
 function mountComposer(action) {
-  const mount = messageDetail.querySelector('#composeMount') || actionList;
+  const { messageDetail, actionList } = ui();
+  const mount = messageDetail?.querySelector('#composeMount') || actionList;
+  if (!mount) return;
   mount.innerHTML = mailComposer(action);
   mount.querySelector('#cancelCompose').addEventListener('click', () => {
     mount.innerHTML = '';
@@ -289,10 +377,11 @@ function mountComposer(action) {
 }
 
 function selectMessage(messageId) {
+  const { messageDetail, messageList } = ui();
   selectedMessageId = messageId;
   const message = currentMessages.find((item) => item.id === messageId);
   const insight = insightFor(messageId);
-  if (!message && !insight) return;
+  if ((!message && !insight) || !messageDetail || !messageList) return;
 
   const actions = insight?.nextActions || [];
   const tasks = insight?.tasks || [];
@@ -326,8 +415,7 @@ function selectMessage(messageId) {
   });
 
   messageList.querySelectorAll('.message-card').forEach((node) => node.classList.remove('selected'));
-  const index = currentMessages.findIndex((item) => item.id === messageId);
-  if (index >= 0) messageList.querySelectorAll('.message-card')[index]?.classList.add('selected');
+  messageList.querySelector(`.message-card[data-message-id="${CSS.escape(messageId)}"]`)?.classList.add('selected');
   renderActionPanel();
 }
 
@@ -348,6 +436,8 @@ async function markMessageRead(messageId) {
 
 async function saveFeedback(messageId, userStatus) {
   const insight = insightFor(messageId);
+  const { messageDetail } = ui();
+  if (!messageDetail) return;
   const status = messageDetail.querySelector('#feedbackStatus');
   const reason = messageDetail.querySelector('#feedbackReason')?.value || userStatus;
   const note = messageDetail.querySelector('#feedbackNote')?.value || '';
@@ -448,7 +538,9 @@ function searchableText(message) {
 function filteredMessages() {
   const query = searchQuery.trim().toLowerCase();
   return currentMessages.filter((message) => {
-    const matchesLane = activeFilter === 'all' || laneForMessage(message.id) === activeFilter;
+    const matchesLane =
+      activeFilter === 'all'
+      || (activeFilter === 'unread' ? !message.isRead : laneForMessage(message.id) === activeFilter);
     const matchesSearch = !query || searchableText(message).includes(query);
     return matchesLane && matchesSearch;
   });
@@ -466,6 +558,8 @@ function refreshFilterButtons() {
 }
 
 function renderFilteredView() {
+  const { messageList, messageCount, messageDetail } = ui();
+  if (!messageList || !messageCount || !messageDetail) return;
   visibleMessages = filteredMessages().sort((a, b) => new Date(b.receivedAt || 0) - new Date(a.receivedAt || 0));
   refreshFilterButtons();
 
@@ -477,6 +571,7 @@ function renderFilteredView() {
   const unreadCount = visibleMessages.filter((message) => !message.isRead).length;
   messageCount.textContent = `${visibleMessages.length}건 · 읽지않음 ${unreadCount}건`;
   if (!visibleMessages.length) {
+    selectedMessageId = '';
     messageList.appendChild(empty('조건에 맞는 메일이 없습니다.'));
     messageDetail.innerHTML = '<div class="empty">필터 또는 검색 조건을 조정하세요.</div>';
   } else {
@@ -506,6 +601,8 @@ function renderFilteredView() {
 }
 
 function renderActionPanel() {
+  const { actionList, calendarList, reminderList, actionCount, calendarCount, reminderCount } = ui();
+  if (!actionList || !calendarList || !reminderList || !actionCount || !calendarCount || !reminderCount) return;
   clear(actionList);
   clear(calendarList);
   clear(reminderList);
@@ -533,16 +630,218 @@ function render(result, messages = []) {
   // 전역 상태 업데이트 (Kanban 모듈에서 접근용)
   window.currentMessages = messages;
   window.currentResult = result;
-  activeFilter = 'all';
-  searchQuery = '';
-  mailSearch.value = '';
+  if (!mailSearch.value) searchQuery = '';
+  if (!searchQuery) mailSearch.value = '';
   renderFilteredView();
+}
+
+let outlookConnected = false;
+
+function formatSyncLabel(sync, messageCount) {
+  if (!sync) return `${messageCount}개 메일`;
+  if (sync.mode === 'cache') {
+    return sync.totalCached
+      ? `캐시 ${sync.totalCached}건${sync.lastSyncedAt ? ` · 마지막 동기화 ${new Date(sync.lastSyncedAt).toLocaleString('ko-KR')}` : ''}`
+      : '캐시 비어 있음';
+  }
+  const modeLabel =
+    sync.mode === 'incremental' ? '증분 동기화' : sync.mode === 'initial' ? '초기 동기화' : '동기화';
+  return `${modeLabel} · 신규 ${sync.newCount || 0}건 · 변경 ${sync.updatedCount || 0}건 · 전체 ${sync.totalCached || messageCount}건`;
+}
+
+function persistMailboxPayload(payload) {
+  try {
+    sessionStorage.setItem(LAST_MAILBOX_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore session cache failures
+  }
+}
+
+function restorePersistedMailbox() {
+  try {
+    const raw = sessionStorage.getItem(LAST_MAILBOX_KEY);
+    if (!raw) return false;
+    const payload = JSON.parse(raw);
+    if (!payload?.messages?.length || !payload?.result) return false;
+    applyMailboxPayload(payload, { persist: false });
+    fetchStatus.textContent = '직전 메일 캐시를 먼저 표시했습니다. 변경분을 확인하는 중...';
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function renderSidebar() {
+  if (!sidebarAccount || !folderList || !sidebarIdeas) return;
+  const unreadCount = currentMessages.filter((message) => !message.isRead).length;
+  const countsByStatus = feedbackStatuses.reduce((acc, status) => {
+    acc[status] = currentMessages.filter((message) => laneForMessage(message.id) === status).length;
+    return acc;
+  }, {});
+  const accountLabel = mailboxUser.value?.trim() || 'Outlook 계정 미지정';
+  sidebarAccount.innerHTML = `
+    <strong>${escapeHtml(accountLabel)}</strong>
+    <span>${outlookConnected ? '증분 동기화 사용 중' : '연결 필요'} · 전체 ${currentMessages.length}건 · 미읽음 ${unreadCount}건</span>
+  `;
+  folderList.innerHTML = [
+    { key: 'all', label: '받은편지함', count: currentMessages.length },
+    { key: 'unread', label: '읽지 않음', count: unreadCount },
+    { key: 'urgent', label: '긴급', count: countsByStatus.urgent },
+    { key: 'waiting', label: '대기', count: countsByStatus.waiting },
+    { key: 'done', label: '완료', count: countsByStatus.done },
+    { key: 'attachments', label: '첨부 보관함', count: attachmentEntries.length }
+  ].map((item) => `
+    <button type="button" class="folder-item" data-folder="${item.key}">
+      <span>${item.label}</span>
+      <strong>${item.count}</strong>
+    </button>
+  `).join('');
+  sidebarIdeas.innerHTML = [
+    '왼쪽 사이드바에 계정별 폴더와 미읽음/긴급/대기 큐를 고정했습니다.',
+    '첨부 보관함을 별도 페이지처럼 열어 과거 발송 자료를 다시 찾을 수 있게 했습니다.',
+    '회신 초안은 선택 메일 기준으로 동일 스레드와 과거 발신 메일을 참고해 생성합니다.'
+  ].map((text) => `<div class="idea-item">${escapeHtml(text)}</div>`).join('');
+
+  folderList.querySelectorAll('.folder-item').forEach((button) => {
+    button.addEventListener('click', () => {
+      const folder = button.dataset.folder;
+      if (folder === 'attachments') {
+        openAttachmentExplorer();
+        return;
+      }
+      if (folder === 'unread') {
+        searchQuery = '';
+        mailSearch.value = '';
+        activeFilter = 'unread';
+        renderFilteredView();
+        return;
+      }
+      activeFilter = folder === 'all' ? 'all' : folder;
+      renderFilteredView();
+    });
+  });
+}
+
+function renderAttachments(entries = attachmentEntries) {
+  if (!attachmentList || !attachmentCount) return;
+  const query = (attachmentSearch?.value || '').trim().toLowerCase();
+  const filtered = entries.filter((entry) => {
+    const haystack = [
+      entry.name,
+      entry.subject,
+      entry.from,
+      entry.fromName,
+      ...(entry.tags || []),
+      ...(entry.aiTags || [])
+    ].join(' ').toLowerCase();
+    return !query || haystack.includes(query);
+  });
+  attachmentCount.textContent = `${filtered.length}건`;
+  attachmentList.innerHTML = filtered.length
+    ? filtered.map((entry) => `
+      <article class="attachment-card">
+        <div class="attachment-row">
+          <strong>${escapeHtml(entry.name || '(이름 없음)')}</strong>
+          <span class="status-pill">${escapeHtml(entry.categoryLabel || entry.category || '기타')}</span>
+        </div>
+        <div class="attachment-meta">${escapeHtml(entry.fromName || entry.from || 'unknown')} · ${entry.receivedAt ? new Date(entry.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${(entry.size || 0).toLocaleString('ko-KR')} bytes</div>
+        <div class="attachment-subject">${escapeHtml(entry.subject || '')}</div>
+        <div class="attachment-tags">${[...(entry.tags || []), ...(entry.aiTags || [])].slice(0, 6).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
+      </article>
+    `).join('')
+    : '<div class="empty">첨부파일 검색 결과가 없습니다.</div>';
+}
+
+function openAttachmentExplorer() {
+  if (!attachmentExplorer) return;
+  attachmentExplorer.classList.remove('hidden');
+  attachmentExplorer.setAttribute('aria-hidden', 'false');
+  renderAttachments();
+}
+
+function closeAttachmentExplorer() {
+  if (!attachmentExplorer) return;
+  attachmentExplorer.classList.add('hidden');
+  attachmentExplorer.setAttribute('aria-hidden', 'true');
+}
+
+async function loadAttachments() {
+  try {
+    const response = await fetch('/api/outlook/attachments');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '첨부파일 목록 로드 실패');
+    attachmentEntries = payload.entries || [];
+    renderSidebar();
+    renderAttachments();
+  } catch {
+    attachmentEntries = [];
+    renderSidebar();
+  }
+}
+
+function applyMailboxPayload(payload, { persist = true } = {}) {
+  const sync = payload.sync;
+  const syncLabel = formatSyncLabel(sync, payload.messages.length);
+  const ai = payload.result?.ai;
+  const aiLabel = ai?.enabled
+    ? `${ai.provider === 'f-aios-v3' ? 'F-AIOS-v3' : ai.provider === 'gemini' ? 'Gemini' : 'LM Studio'} AI 적용 (${ai.model}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
+    : '규칙 기반';
+  fetchStatus.textContent = payload.connected
+    ? `${syncLabel} · ${aiLabel} · ${new Date(payload.analyzedAt).toLocaleString('ko-KR')}`
+    : `Outlook 인증값이 없어 데모 메일로 분석했습니다. ${payload.message}`;
+  connectionStatus.textContent = payload.connected ? `Outlook 연결됨 (${payload.mode})` : 'Outlook 인증값 필요';
+  render(payload.result, payload.messages);
+  renderSidebar();
+  if (persist) persistMailboxPayload(payload);
+}
+
+async function refreshMailbox({ sync = 'auto', silent = false } = {}) {
+  if (!silent) loadOutlook.disabled = true;
+  if (!silent && sync === 'initial') {
+    fetchStatus.textContent = 'Outlook에서 메일을 가져오는 중입니다...';
+  } else if (!silent && sync === 'auto') {
+    fetchStatus.textContent = '변경된 메일을 확인하는 중입니다...';
+  }
+  try {
+    const response = await fetch(
+      `/api/outlook/analyze?top=${encodeURIComponent(mailLimit.value)}&sync=${encodeURIComponent(sync)}`
+    );
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || 'Outlook fetch failed');
+    applyMailboxPayload(payload);
+    return payload;
+  } catch (error) {
+    if (!silent || sync !== 'cache') {
+      fetchStatus.textContent = error instanceof Error ? error.message : 'Outlook을 가져오지 못했습니다.';
+      connectionStatus.textContent = 'Outlook 연결 실패';
+    }
+    return null;
+  } finally {
+    if (!silent) loadOutlook.disabled = false;
+  }
+}
+
+async function bootMailbox() {
+  if (!outlookConnected) {
+    fetchStatus.textContent = 'Outlook 연결 설정 후 메일이 자동으로 동기화됩니다.';
+    return;
+  }
+  const cached = await refreshMailbox({ sync: 'cache', silent: true });
+  if (!cached?.messages?.length) {
+    await refreshMailbox({ sync: 'auto' });
+    await loadAttachments();
+    return;
+  }
+  fetchStatus.textContent = '캐시에서 메일을 표시했습니다. 변경분을 확인하는 중...';
+  await refreshMailbox({ sync: 'auto', silent: true });
+  await loadAttachments();
 }
 
 async function loadStatus() {
   try {
     const response = await fetch('/api/outlook/config');
     const status = await response.json();
+    outlookConnected = Boolean(status.connected);
     connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
     configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
     loginTenant.value = status.loginTenant || 'common';
@@ -557,9 +856,14 @@ async function loadStatus() {
     accessToken.placeholder = status.hasAccessToken ? '저장된 토큰 사용 중' : '';
     clientSecret.placeholder = status.hasClientSecret ? '저장된 client secret 사용 중' : '';
     geminiApiKey.placeholder = status.hasGeminiApiKey ? '저장된 Gemini API key 사용 중' : '';
+    renderSidebar();
+    return status;
   } catch {
+    outlookConnected = false;
     connectionStatus.textContent = 'Outlook 상태 확인 실패';
     configStatus.textContent = '확인 실패';
+    renderSidebar();
+    return null;
   }
 }
 
@@ -591,7 +895,9 @@ async function saveConfig(event) {
   }
   connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
   configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
-  await loadOutlookMessages();
+  outlookConnected = Boolean(status.connected);
+  await bootMailbox();
+  await loadAttachments();
 }
 
 function startOutlookLogin() {
@@ -611,38 +917,15 @@ function startOutlookLogin() {
 }
 
 async function loadOutlookMessages() {
-  loadOutlook.disabled = true;
-  fetchStatus.textContent = 'Outlook 신규 메일을 확인하는 중입니다. 기존 메일은 로컬 캐시에 유지합니다.';
-  try {
-    const response = await fetch(`/api/outlook/analyze?top=${encodeURIComponent(mailLimit.value)}`);
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.message || 'Outlook fetch failed');
-    const sync = payload.sync;
-    const syncLabel = sync
-      ? `${sync.mode === 'incremental' ? '신규 동기화' : '초기 동기화'} · 신규 ${sync.newCount}건 · 변경 ${sync.updatedCount}건 · 전체 ${sync.totalCached}건`
-      : `${payload.messages.length}개 메일`;
-    const ai = payload.result?.ai;
-    const aiLabel = ai?.enabled
-      ? `${ai.provider === 'f-aios-v3' ? 'F-AIOS-v3' : ai.provider === 'gemini' ? 'Gemini' : 'LM Studio'} AI 적용 (${ai.model}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
-      : '규칙 기반';
-    fetchStatus.textContent = payload.connected
-      ? `${syncLabel} 분석 완료 · ${aiLabel} · ${new Date(payload.analyzedAt).toLocaleString('ko-KR')}`
-      : `Outlook 인증값이 없어 데모 메일로 분석했습니다. ${payload.message}`;
-    connectionStatus.textContent = payload.connected ? `Outlook 연결됨 (${payload.mode})` : 'Outlook 인증값 필요';
-    render(payload.result, payload.messages);
-  } catch (error) {
-    fetchStatus.textContent = error instanceof Error ? error.message : 'Outlook을 가져오지 못했습니다.';
-    connectionStatus.textContent = 'Outlook 연결 실패';
-  } finally {
-    loadOutlook.disabled = false;
-  }
+  await refreshMailbox({ sync: 'initial' });
 }
 
-loadSample.addEventListener('click', () => {
-  fetchStatus.textContent = '데모 데이터 버튼은 비활성화되었습니다. 실제 Outlook 연동 후 사용하세요.';
-});
-
 loadOutlook.addEventListener('click', loadOutlookMessages);
+window.addEventListener('message', (event) => {
+  if (event?.data?.type === 'outlook-oauth-complete') {
+    loadStatus().then(() => bootMailbox());
+  }
+});
 configForm.addEventListener('submit', saveConfig);
 loginOutlook.addEventListener('click', startOutlookLogin);
 clearConfig.addEventListener('click', async () => {
@@ -660,6 +943,7 @@ clearConfig.addEventListener('click', async () => {
   await fetch('/api/outlook/config', { method: 'DELETE' });
   configStatus.textContent = '저장값 초기화';
   connectionStatus.textContent = 'Outlook 인증값 필요';
+  renderSidebar();
 });
 document.querySelectorAll('.metric').forEach((button) => {
   button.addEventListener('click', () => {
@@ -677,7 +961,9 @@ window.selectMessage = selectMessage;
 window.saveFeedback = saveFeedback;
 window.renderFilteredView = renderFilteredView;
 
-loadStatus();
+loadStatus().then(() => bootMailbox());
+restorePersistedMailbox();
+loadAttachments();
 initKanban();
 initKeyboard();
 initStats();
@@ -685,38 +971,46 @@ initTheme();
 initSearch();
 initNotifications();
 
+openAttachments?.addEventListener('click', openAttachmentExplorer);
+closeAttachments?.addEventListener('click', closeAttachmentExplorer);
+attachmentSearch?.addEventListener('input', () => renderAttachments());
+
 // --- Column Resize (Drag & Drop) ---
-(function initColumnResize() {
+function initColumnResize() {
   const shell = document.getElementById('mailShell');
   if (!shell) return;
   const resizers = shell.querySelectorAll('.col-resizer');
-  const columns = () => [...shell.children].filter(el => 
-    el.classList.contains('mail-list-panel') || 
-    el.classList.contains('detail-panel') || 
-    el.classList.contains('action-column')
-  );
+  if (!resizers.length) return;
+  const minWidths = [320, 420, 320];
+  const getColumnWidths = () => {
+    const columns = [...shell.children].filter((el) =>
+      el.classList.contains('mail-list-panel') ||
+      el.classList.contains('detail-panel') ||
+      el.classList.contains('action-column')
+    );
+    return columns.map((col) => Math.round(col.getBoundingClientRect().width));
+  };
   
   resizers.forEach((resizer) => {
-    let startX, startWidths, colIndex;
+    let startX;
+    let startWidths;
+    let colIndex;
     
     resizer.addEventListener('mousedown', (e) => {
       e.preventDefault();
       colIndex = parseInt(resizer.dataset.col, 10);
       startX = e.clientX;
-      startWidths = columns().map(col => col.getBoundingClientRect().width);
+      startWidths = getColumnWidths();
       resizer.classList.add('active');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
       
       const onMouseMove = (e) => {
         const dx = e.clientX - startX;
-        const cols = columns();
-        if (cols[colIndex] && cols[colIndex + 1]) {
-          const newWidth1 = Math.max(200, startWidths[colIndex] + dx);
-          const newWidth2 = Math.max(200, startWidths[colIndex + 1] - dx);
-          cols[colIndex].style.flex = `0 0 ${newWidth1}px`;
-          cols[colIndex + 1].style.flex = `0 0 ${newWidth2}px`;
-        }
+        const widths = [...startWidths];
+        widths[colIndex] = Math.max(minWidths[colIndex], startWidths[colIndex] + dx);
+        widths[colIndex + 1] = Math.max(minWidths[colIndex + 1], startWidths[colIndex + 1] - dx);
+        shell.style.gridTemplateColumns = `${widths[0]}px 6px ${widths[1]}px 6px ${widths[2]}px`;
       };
       
       const onMouseUp = () => {
@@ -732,10 +1026,10 @@ initNotifications();
     });
     
     resizer.addEventListener('dblclick', () => {
-      const cols = columns();
-      cols.forEach((col) => {
-        col.style.flex = '';
-      });
+      shell.style.gridTemplateColumns = '';
     });
   });
-})();
+}
+
+window.initColumnResize = initColumnResize;
+initColumnResize();

@@ -48,7 +48,7 @@ button:disabled { cursor: wait; opacity: 0.7; }
   padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 18px;
 }
 .eyebrow {
   color: #92dcc0;
@@ -60,14 +60,70 @@ button:disabled { cursor: wait; opacity: 0.7; }
 }
 .sidebar h1 { font-size: 26px; line-height: 1.08; margin-bottom: 14px; }
 .lede { color: #c9ded6; line-height: 1.5; }
-.nav { display: grid; gap: 6px; }
-.nav a {
-  border-radius: 8px;
-  color: #d9eee7;
-  padding: 10px 12px;
-  text-decoration: none;
+.sidebar-section {
+  display: grid;
+  gap: 10px;
 }
-.nav a:hover { background: rgba(255,255,255,0.09); }
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sidebar-head h2 {
+  font-size: 13px;
+  margin: 0;
+}
+.sidebar-link {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-color: rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.04);
+  color: #d9eee7;
+}
+.account-card {
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  background: rgba(255,255,255,0.03);
+}
+.account-card strong {
+  font-size: 14px;
+}
+.account-card span {
+  color: #c9ded6;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.folder-list, .idea-list {
+  display: grid;
+  gap: 8px;
+}
+.folder-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 38px;
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.12);
+  color: #e8f3ef;
+}
+.folder-item strong {
+  color: #92dcc0;
+}
+.idea-item {
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #d9eee7;
+  font-size: 12px;
+  line-height: 1.45;
+  background: rgba(255,255,255,0.03);
+}
 .connector {
   border: 1px solid rgba(255,255,255,0.16);
   border-radius: 8px;
@@ -86,7 +142,8 @@ button:disabled { cursor: wait; opacity: 0.7; }
 }
 
 .main {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   min-width: 0;
   overflow: hidden;
   padding: 16px;
@@ -161,6 +218,67 @@ textarea {
 .config-panel {
   padding: 0;
   overflow: hidden;
+}
+.attachment-explorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 46vh;
+}
+.attachment-explorer.hidden {
+  display: none;
+}
+.attachment-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.attachment-toolbar {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+}
+.attachment-list {
+  overflow: auto;
+  min-height: 0;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.attachment-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+.attachment-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.attachment-row strong {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.attachment-meta, .attachment-subject {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.attachment-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attachment-tags span {
+  background: var(--soft-blue);
+  color: var(--blue);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 4px 8px;
 }
 .config-panel summary {
   align-items: center;
@@ -242,7 +360,13 @@ textarea {
 .mail-shell {
   flex: 1 1 0;
   min-height: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns:
+    minmax(320px, 0.95fr)
+    6px
+    minmax(420px, 1.2fr)
+    6px
+    minmax(320px, 0.9fr);
   align-items: stretch;
   gap: 0;
 }
@@ -259,14 +383,13 @@ textarea {
   overflow: hidden;
 }
 .mail-list-panel {
-  flex: 0.95 1 0;
+  min-width: 0;
 }
 .detail-panel {
-  flex: 1.2 1 0;
+  min-width: 0;
 }
 .action-column {
-  flex: 0.85 1 0;
-  min-width: 240px;
+  min-width: 0;
   gap: 12px;
 }
 .mail-list-panel > .panel-head,
@@ -683,11 +806,12 @@ textarea {
   text-align: center;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 900px) {
   body { grid-template-columns: 1fr; overflow: auto; }
   .sidebar { display: none; }
   .main { height: auto; min-height: 100vh; overflow: visible; }
   .mail-shell {
+    display: flex;
     flex-direction: column;
     flex: none;
     min-height: auto;
@@ -708,10 +832,11 @@ textarea {
 /* Kanban Board */
 .kanban-board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(280px, 1fr));
   gap: 12px;
   height: 100%;
   min-height: 0;
+  overflow-x: auto;
 }
 
 .kanban-column {
@@ -935,6 +1060,15 @@ textarea {
 
 /* Kanban Mode - Hide KPI Strip */
 body.kanban-mode .kpi-strip {
+  display: none;
+}
+body.kanban-mode .mail-shell {
+  display: block;
+}
+body.kanban-mode .mail-shell > .col-resizer,
+body.kanban-mode .mail-shell > .mail-list-panel,
+body.kanban-mode .mail-shell > .detail-panel,
+body.kanban-mode .mail-shell > .action-column {
   display: none;
 }
 

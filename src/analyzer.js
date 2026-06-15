@@ -118,12 +118,39 @@ function actionScenariosForMessage(message, primaryActions = [], summaries = [])
   const summaryText = summaries.slice(0, 3).map((item) => `- ${item}`).join('\n') || '- 메일 내용을 확인했습니다.';
   const senderName = message.fromName || '담당자';
   const sangforReference = '필요 시 Sangfor VDI/HCI 소개자료, 구축 메뉴얼, 기존 발송자료를 함께 확인해 정확한 버전과 링크를 첨부하세요.';
+  const messageText = `${message.subject || ''} ${message.body || message.bodyPreview || ''}`.toLowerCase();
+  const lane = primary?.lane || 'active';
+  const asksForInfo = /문의|확인|요청|부탁|가능|견적|회신|질문|검토/.test(messageText);
+  const hasAttachmentContext = Boolean(message.hasAttachments || message.attachmentNames?.length);
+  const hasDateContext = Boolean(primary?.due || /오늘|내일|금일|이번 주|다음 주|\d{4}[.-]\d{1,2}[.-]\d{1,2}/.test(messageText));
+
+  const primaryTitle =
+    lane === 'urgent' ? '긴급 우선 회신'
+    : lane === 'waiting' ? '대기 사유 정리 회신'
+    : lane === 'done' ? '완료 사실 공유'
+    : asksForInfo ? '요청 사항 확인 회신' : '진행 상태 공유';
+  const primaryBodyLine =
+    lane === 'urgent' ? '우선순위를 높여 바로 확인하고 처리 순서를 회신드리겠습니다.'
+    : lane === 'waiting' ? '현재 대기 중인 항목과 추가로 필요한 정보를 정리해 회신드리겠습니다.'
+    : lane === 'done' ? '현재 기준으로 완료된 항목과 남은 확인 포인트만 간단히 공유드립니다.'
+    : hasDateContext ? '요청하신 일정 기준으로 진행 가능 여부와 내부 일정을 정리해 회신드리겠습니다.'
+    : '요청하신 내용을 기준으로 다음 단계와 필요한 확인 사항을 정리해 회신드리겠습니다.';
+
+  const clarificationTitle = hasDateContext ? '일정/범위 재확인' : '추가 정보 요청';
+  const clarificationAction = hasDateContext
+    ? '마감 시점, 적용 범위, 우선순위를 다시 확인'
+    : '진행 전 필요한 조건, 일정, 담당자, 범위를 추가 확인';
+
+  const referenceTitle = hasAttachmentContext ? '첨부자료 기준 회신' : '자료 공유 및 미팅 제안';
+  const referenceAction = hasAttachmentContext
+    ? '첨부파일과 기존 발송자료를 기준으로 필요한 파일만 선별해 회신'
+    : 'Sangfor 관련 자료 확인 후 공유하고 필요 시 설명 미팅 제안';
 
   return [
     {
       id: `scenario-1-${message.id}`,
       scenario: 1,
-      title: '확인 및 진행 회신',
+      title: primaryTitle,
       intent: '상대 요청을 수락하고 우리가 진행할 다음 단계를 명확히 알립니다.',
       recommendedAction: primary?.recommendedAction || '요청 사항을 확인하고 처리 예정 일정을 회신',
       owner: primary?.owner || '미지정',
@@ -133,14 +160,14 @@ function actionScenariosForMessage(message, primaryActions = [], summaries = [])
       evidence,
       to: recipient,
       subject,
-      body: `안녕하세요, ${senderName}님.\n\n메일 내용 확인했습니다.\n\n핵심 내용은 아래와 같이 이해했습니다.\n${summaryText}\n\n저희 쪽 다음 액션은 다음과 같습니다.\n- ${primary?.recommendedAction || '요청사항을 검토 후 진행 가능 여부와 일정을 회신드리겠습니다.'}\n\n확인 후 진행 상황을 업데이트드리겠습니다.\n\n감사합니다.`
+      body: `안녕하세요, ${senderName}님.\n\n메일 내용 확인했습니다.\n\n핵심 내용은 아래와 같이 이해했습니다.\n${summaryText}\n\n현재 기준 다음과 같이 진행하겠습니다.\n- ${primary?.recommendedAction || primaryBodyLine}\n\n추가 확인이 필요한 내용이 있으면 함께 반영해 회신드리겠습니다.\n\n감사합니다.`
     },
     {
       id: `scenario-2-${message.id}`,
       scenario: 2,
-      title: '추가 정보 요청',
+      title: clarificationTitle,
       intent: '판단에 필요한 정보가 부족할 때 누락 정보를 요청합니다.',
-      recommendedAction: '진행 전 필요한 조건, 일정, 담당자, 범위를 추가 확인',
+      recommendedAction: clarificationAction,
       owner: '미지정',
       priority: 4,
       lane: 'waiting',
@@ -153,17 +180,21 @@ function actionScenariosForMessage(message, primaryActions = [], summaries = [])
     {
       id: `scenario-3-${message.id}`,
       scenario: 3,
-      title: '자료 공유 및 미팅 제안',
+      title: referenceTitle,
       intent: 'Sangfor 자료, 매뉴얼, 관련 문서를 근거로 공유하거나 설명 일정을 제안합니다.',
-      recommendedAction: 'Sangfor 관련 자료 확인 후 공유하고 필요 시 설명 미팅 제안',
+      recommendedAction: referenceAction,
       owner: '미지정',
       priority: 4,
       lane: 'active',
       due: '',
-      evidence: sangforReference,
+      evidence: hasAttachmentContext
+        ? `기존 첨부파일 및 관련 발송자료를 우선 검토하세요. ${sangforReference}`
+        : sangforReference,
       to: recipient,
       subject,
-      body: `안녕하세요, ${senderName}님.\n\n문의 주신 내용과 관련해 Sangfor 자료 및 관련 문서를 확인한 뒤 공유드리겠습니다.\n\n우선 확인할 자료 범위는 아래와 같습니다.\n- Sangfor 제품/기능 소개 페이지\n- 구축 또는 운영 메뉴얼\n- 기존 발송자료 및 관련 제안 문서\n\n메일에서 확인한 핵심 내용:\n${summaryText}\n\n자료 확인 후 필요 시 짧은 설명 미팅도 함께 제안드리겠습니다.\n\n감사합니다.`
+      body: hasAttachmentContext
+        ? `안녕하세요, ${senderName}님.\n\n관련 첨부파일과 기존 발송자료를 기준으로 필요한 문서만 정리해 공유드리겠습니다.\n\n메일에서 확인한 핵심 내용:\n${summaryText}\n\n파일 버전과 전달 범위를 확인한 뒤 다시 회신드리겠습니다.\n\n감사합니다.`
+        : `안녕하세요, ${senderName}님.\n\n문의 주신 내용과 관련해 Sangfor 자료 및 관련 문서를 확인한 뒤 공유드리겠습니다.\n\n우선 확인할 자료 범위는 아래와 같습니다.\n- Sangfor 제품/기능 소개 페이지\n- 구축 또는 운영 메뉴얼\n- 기존 발송자료 및 관련 제안 문서\n\n메일에서 확인한 핵심 내용:\n${summaryText}\n\n자료 확인 후 필요 시 짧은 설명 미팅도 함께 제안드리겠습니다.\n\n감사합니다.`
     }
   ];
 }
