@@ -931,6 +931,15 @@ textarea {
   flex-shrink: 0;
 }
 
+.kanban-thread-badge {
+  background: var(--soft-blue);
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
 .kanban-ai-badge {
   background: var(--soft-blue);
   color: var(--blue);

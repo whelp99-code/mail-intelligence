@@ -4,6 +4,21 @@ import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeMessages } from './src/analyzer.js';
+import {
+  groupMessagesByThread,
+  normalizedSubjectKey,
+  userRepliedInThread
+} from './src/threadIdentity.mjs';
+import {
+  applyAssignments,
+  applyRuleBasedGroupKeys,
+  assignmentsFromThreads,
+  buildThreadGroupingPrompt,
+  messagesNeedingAiGrouping,
+  parseThreadGroupingResponse,
+  summarizeThreadGroups,
+  unifyGroupKeysBySubject
+} from './src/threadGrouping.mjs';
 
 const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
@@ -344,14 +359,14 @@ function isPromotionalMessage(message) {
   return /unsubscribe|수신거부|광고|newsletter|promotion|마케팅|이벤트|쿠폰|할인|webinar|세미나|광고성/.test(text);
 }
 
-function normalizeGraphMessage(message) {
+function normalizeGraphMessage(message, mailFolder = 'inbox') {
   return {
     id: message.id,
     changeKey: message.changeKey || '',
     conversationId: message.conversationId || '',
     internetMessageId: message.internetMessageId || '',
     lastModifiedAt: message.lastModifiedDateTime || message.receivedDateTime || '',
-    mailFolder: 'inbox',
+    mailFolder,
     subject: message.subject || '(제목 없음)',
     from: message.from?.emailAddress?.address || message.sender?.emailAddress?.address || 'unknown',
     fromName: message.from?.emailAddress?.name || message.sender?.emailAddress?.name || '',
@@ -613,7 +628,7 @@ async function getGraphAccessToken() {
   return payload.access_token;
 }
 
-async function fetchGraphMessages({ accessToken, mailboxPath, top, modifiedSince, initialSync = false }) {
+async function fetchGraphMessages({ accessToken, mailboxPath, top, modifiedSince, initialSync = false, mailFolder = 'inbox' }) {
   const pageSize = Math.min(Math.max(Number(process.env.MAIL_GRAPH_PAGE_SIZE || 100), 10), 500);
   const maxPages = Math.max(1, Number(process.env.MAIL_GRAPH_MAX_PAGES || (initialSync ? 100 : 20)));
   const params = new URLSearchParams({
@@ -648,7 +663,7 @@ async function fetchGraphMessages({ accessToken, mailboxPath, top, modifiedSince
     }
 
     const payload = await response.json();
-    messages.push(...(payload.value || []).map(normalizeGraphMessage));
+    messages.push(...(payload.value || []).map((item) => normalizeGraphMessage(item, mailFolder)));
     nextUrl = payload['@odata.nextLink'] || '';
     pageCount += 1;
 
@@ -693,7 +708,11 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
   }
 
   const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
-  const mailboxPath = mailboxUser ? `/users/${encodeURIComponent(mailboxUser)}/mailFolders/inbox/messages` : '/me/mailFolders/inbox/messages';
+  const mailboxBase = mailboxUser ? `/users/${encodeURIComponent(mailboxUser)}` : '/me';
+  const folderTargets = [
+    { mailFolder: 'inbox', mailboxPath: `${mailboxBase}/mailFolders/inbox/messages` },
+    { mailFolder: 'sentitems', mailboxPath: `${mailboxBase}/mailFolders/sentitems/messages` }
+  ];
   const cache = await loadMailCache();
   const cacheKey = mailboxCacheKey(mailboxUser);
   const mailboxCache = cache.mailboxes[cacheKey] || { messages: [], lastSyncedAt: '', lastReceivedAt: '' };
@@ -701,13 +720,19 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
   const requestedTop = Math.min(Math.max(top, 1), 100);
   const isInitialSync = forceInitial || cachedMessages.length === 0;
   const modifiedSince = isInitialSync ? '' : (mailboxCache.lastModifiedAt || latestModifiedAt(cachedMessages) || '');
-  const incomingMessages = await fetchGraphMessages({
-    accessToken,
-    mailboxPath,
-    top: requestedTop,
-    modifiedSince,
-    initialSync: isInitialSync
-  });
+  const incomingMessages = [];
+  for (const folder of folderTargets) {
+    const alwaysRecentSent = folder.mailFolder === 'sentitems' && !isInitialSync;
+    const folderMessages = await fetchGraphMessages({
+      accessToken,
+      mailboxPath: folder.mailboxPath,
+      top: requestedTop,
+      modifiedSince: alwaysRecentSent ? '' : modifiedSince,
+      initialSync: alwaysRecentSent ? true : isInitialSync,
+      mailFolder: folder.mailFolder
+    });
+    incomingMessages.push(...folderMessages);
+  }
   const merged = mergeMessages(cachedMessages, incomingMessages);
   cache.mailboxes[cacheKey] = {
     ...mailboxCache,
@@ -821,24 +846,12 @@ async function loadAttachmentArchive() {
 
 function findRelatedMessages(mailboxMessages, message) {
   if (!message) return [];
-  const subjectKey = String(message.aiGroupKey || normalizedSubjectKey(message.subject)).toLowerCase();
-  const conversationId = String(message.conversationId || '');
-  return sortMessages(
-    mailboxMessages.filter((item) => {
-      if (item.id === message.id) return true;
-      if (conversationId && item.conversationId === conversationId) return true;
-      return String(item.aiGroupKey || normalizedSubjectKey(item.subject)).toLowerCase() === subjectKey;
-    })
-  );
-}
-
-function normalizedSubjectKey(subject = '') {
-  return compactText(subject, 200)
-    .toLowerCase()
-    .replace(/^(re|fw|fwd)\s*:\s*/gi, '')
-    .replace(/\[[^\]]+\]/g, ' ')
-    .replace(/\s+/g, '-')
-    .trim();
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  const groups = groupMessagesByThread(mailboxMessages, { mailboxUser });
+  for (const thread of groups.values()) {
+    if (thread.some((item) => item.id === message.id)) return thread;
+  }
+  return [message];
 }
 
 function buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries }) {
@@ -974,6 +987,8 @@ async function generateReplyDraft(messageId) {
   }
 
   const relatedMessages = findRelatedMessages(mailboxMessages, message);
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  const threadReplied = userRepliedInThread(relatedMessages, mailboxUser);
   const { entries } = await loadAttachmentArchive();
   const attachmentEntries = entries.filter((entry) => {
     if (entry.messageId === message.id) return true;
@@ -988,7 +1003,9 @@ async function generateReplyDraft(messageId) {
       ...draft,
       messageId,
       source: 'lmstudio',
-      relatedCount: relatedMessages.length
+      relatedCount: relatedMessages.length,
+      threadReplied,
+      threadNote: threadReplied ? '이 스레드에는 이미 보낸편지함 회신이 있습니다.' : ''
     };
   } catch (error) {
     return {
@@ -996,7 +1013,9 @@ async function generateReplyDraft(messageId) {
       messageId,
       source: 'fallback',
       warning: error instanceof Error ? error.message : 'LM Studio draft generation failed.',
-      relatedCount: relatedMessages.length
+      relatedCount: relatedMessages.length,
+      threadReplied,
+      threadNote: threadReplied ? '이 스레드에는 이미 보낸편지함 회신이 있습니다.' : ''
     };
   }
 }
@@ -1097,6 +1116,90 @@ function normalizeActionScenarios(message, actions = [], summaries = []) {
     mailSubject: base[index]?.subject || subject,
     body: base[index]?.body || item.body
   }));
+}
+
+async function callProviderPrompt(prompt, { maxTokens = 1800, timeoutMs = 25000 } = {}) {
+  const provider = runtimeConfig.aiProvider || 'f-aios-v3';
+  if (provider === 'f-aios-v3') {
+    try {
+      return { aiText: await callFaiosServer(prompt), provider };
+    } catch (error) {
+      return { aiText: await callLmStudioGeneric(prompt, { maxTokens, timeoutMs }), provider: 'lmstudio-fallback' };
+    }
+  }
+  if (provider === 'gemini') {
+    return { aiText: await callGeminiApi(prompt), provider };
+  }
+  return { aiText: await callLmStudioGeneric(prompt, { maxTokens, timeoutMs }), provider };
+}
+
+async function enrichWithThreadGrouping(messages) {
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  const cache = await loadMailCache();
+  const cacheKey = mailboxCacheKey(mailboxUser);
+  const mailboxCache = cache.mailboxes[cacheKey] || { messages: [] };
+  const cachedById = new Map((mailboxCache.messages || []).map((message) => [message.id, message]));
+
+  let working = messages.map((message) => ({
+    ...message,
+    mailFolder: message.mailFolder || cachedById.get(message.id)?.mailFolder || 'inbox',
+    aiGroupKey: message.aiGroupKey || cachedById.get(message.id)?.aiGroupKey || '',
+    aiGroupSource: message.aiGroupSource || cachedById.get(message.id)?.aiGroupSource || ''
+  }));
+
+  const needsAi = messagesNeedingAiGrouping(working, cachedById);
+  const batchLimit = Math.min(Math.max(Number(process.env.MAIL_AI_THREAD_GROUP_LIMIT || 24), 4), 40);
+  const batch = needsAi.slice(0, batchLimit);
+  let threadGrouping = { enabled: false, provider: 'rules', grouped: 0, threadCount: 0 };
+
+  if (batch.length >= 2) {
+    try {
+      const prompt = buildThreadGroupingPrompt(batch);
+      const { aiText, provider } = await callProviderPrompt(prompt, { maxTokens: 2400, timeoutMs: 45000 });
+      const threads = parseThreadGroupingResponse(aiText);
+      const assignments = assignmentsFromThreads(threads);
+      working = applyAssignments(working, assignments);
+      threadGrouping = {
+        enabled: true,
+        provider,
+        grouped: assignments.size,
+        threadCount: threads.length
+      };
+    } catch (error) {
+      threadGrouping = {
+        enabled: false,
+        provider: runtimeConfig.aiProvider || 'rules',
+        error: error instanceof Error ? error.message : 'Thread grouping failed'
+      };
+    }
+  }
+
+  working = applyRuleBasedGroupKeys(working, { mailboxUser });
+  working = unifyGroupKeysBySubject(working);
+
+  const patchById = new Map(working.map((message) => [message.id, message]));
+  const fullCacheMessages = Array.isArray(mailboxCache.messages) ? mailboxCache.messages : [];
+  const patchedAll = sortMessages(
+    fullCacheMessages.map((message) => {
+      const patch = patchById.get(message.id);
+      if (!patch) return message;
+      return {
+        ...message,
+        mailFolder: patch.mailFolder || message.mailFolder,
+        aiGroupKey: patch.aiGroupKey,
+        aiGroupSource: patch.aiGroupSource
+      };
+    })
+  );
+  for (const message of working) {
+    if (!patchedAll.some((item) => item.id === message.id)) patchedAll.push(message);
+  }
+
+  cache.mailboxes[cacheKey] = { ...mailboxCache, messages: patchedAll };
+  await saveMailCache(cache);
+
+  const threadGroups = summarizeThreadGroups(working, { mailboxUser });
+  return { messages: working, threadGroups, threadGrouping };
 }
 
 async function enrichWithAI(messages, result) {
@@ -1423,6 +1526,20 @@ async function handleApi(req, res) {
           ? await loadCachedMailbox(top)
           : await fetchOutlookMessages(top, { forceInitial: syncMode === 'initial' });
       if (url.pathname === '/api/outlook/messages') return json(res, 200, data);
+      let threadGroupingResult = { messages: data.messages, threadGroups: [], threadGrouping: { enabled: false } };
+      try {
+        const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+        const cache = await loadMailCache();
+        const cacheKey = mailboxCacheKey(mailboxUser);
+        const fullMessages = sortMessages(cache.mailboxes[cacheKey]?.messages || data.messages);
+        threadGroupingResult = await enrichWithThreadGrouping(fullMessages);
+        data.messages = sliceDisplayMessages(threadGroupingResult.messages, top);
+      } catch (error) {
+        threadGroupingResult.threadGrouping = {
+          enabled: false,
+          error: error instanceof Error ? error.message : 'Thread grouping failed'
+        };
+      }
       const { feedback } = await readFeedbackContext();
       const baseResult = applyFeedbackToResult(analyzeMessages(data.messages), data.messages, feedback, { allowLearnedOverride: true });
       let result = baseResult;
@@ -1437,7 +1554,9 @@ async function handleApi(req, res) {
       return json(res, 200, {
         ...data,
         analyzedAt: new Date().toISOString(),
-        result,
+        result: { ...result, threadGroups: threadGroupingResult.threadGroups },
+        threadGroups: threadGroupingResult.threadGroups,
+        threadGrouping: threadGroupingResult.threadGrouping,
         aiError
       });
     } catch (error) {
@@ -1692,6 +1811,27 @@ async function callGeminiApi(prompt) {
   
   const payload = await response.json();
   return payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
+}
+
+async function callLmStudioGeneric(prompt, { maxTokens = 1800, timeoutMs = 25000 } = {}) {
+  const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
+  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(timeoutMs),
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: maxTokens
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LM Studio error: ${response.status} ${text}`);
+  }
+  const payload = await response.json();
+  return payload.choices?.[0]?.message?.content || '';
 }
 
 async function callLmStudio(prompt) {

@@ -5,6 +5,12 @@
 
 import { escapeHtml, safeSelector, showToast, delegateEvent } from './utils.js';
 import { setReminder } from './notifications.js';
+import {
+  groupMessagesByThread,
+  latestMessageInThread,
+  threadLabel,
+  userRepliedInThread
+} from './threadIdentity.mjs';
 
 const VALID_LANES = ['urgent', 'active', 'waiting', 'done'];
 
@@ -73,12 +79,16 @@ export function renderKanbanBoard() {
 
     // 메일을 상태별로 분류
     const lanes = { urgent: [], active: [], waiting: [], done: [] };
+    const mailboxUser = document.querySelector('#mailboxUser')?.value || '';
+    const threadMap = groupMessagesByThread(currentMessages, { mailboxUser });
 
-    currentMessages.forEach(message => {
-      const insight = currentResult?.messageInsights?.find(i => i.id === message.id);
-      const status = insight?.effectiveStatus || insight?.status || 'active';
+    threadMap.forEach((threadMessages) => {
+      const message = latestMessageInThread(threadMessages);
+      const insight = currentResult?.messageInsights?.find((i) => i.id === message.id);
+      let status = insight?.effectiveStatus || insight?.status || 'active';
+      if (userRepliedInThread(threadMessages, mailboxUser) && status === 'active') status = 'waiting';
       const lane = VALID_LANES.includes(status) ? status : 'active';
-      lanes[lane].push({ message, insight });
+      lanes[lane].push({ message, insight, threadMessages });
     });
 
     // 각 칼럼에 카드 렌더링
@@ -86,8 +96,8 @@ export function renderKanbanBoard() {
       const container = document.querySelector(`#kanban${lane.charAt(0).toUpperCase() + lane.slice(1)}`);
       const countEl = document.querySelector(`#kanban${lane.charAt(0).toUpperCase() + lane.slice(1)}Count`);
       if (container) {
-        items.forEach(({ message, insight }) => {
-          container.appendChild(createKanbanCard(message, insight, lane));
+        items.forEach(({ message, insight, threadMessages }) => {
+          container.appendChild(createKanbanCard(message, insight, lane, threadMessages));
         });
       }
       if (countEl) {
@@ -104,7 +114,7 @@ export function renderKanbanBoard() {
   }
 }
 
-function createKanbanCard(message, insight, currentLane) {
+function createKanbanCard(message, insight, currentLane, threadMessages = []) {
   const card = document.createElement('div');
   card.className = `kanban-card ${currentLane}`;
   card.draggable = true;
@@ -115,9 +125,15 @@ function createKanbanCard(message, insight, currentLane) {
   const summary = insight?.summary?.[0] || message.bodyPreview || '';
   const isUnread = !message.isRead;
   const isAiEnhanced = insight?.aiEnhanced;
+  const threadCount = threadMessages.length;
+  const threadBadge = threadCount > 1 ? `<span class="kanban-thread-badge">${threadCount}통</span>` : '';
+  const repliedBadge = userRepliedInThread(threadMessages, document.querySelector('#mailboxUser')?.value || '')
+    ? '<span class="kanban-thread-badge">회신함</span>'
+    : '';
 
   card.innerHTML = `
     <div class="kanban-card-header">
+      ${threadBadge}${repliedBadge}
       <span class="kanban-card-sender">${escapeHtml(sender)}</span>
       ${isUnread ? '<span class="kanban-unread-dot"></span>' : ''}
       ${isAiEnhanced ? '<span class="kanban-ai-badge">AI</span>' : ''}

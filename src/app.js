@@ -5,6 +5,12 @@ import { initStats } from './stats.js';
 import { initTheme } from './theme.js';
 import { initSearch } from './search.js';
 import { initNotifications } from './notifications.js';
+import {
+  groupMessagesByThread,
+  latestMessageInThread,
+  threadLabel,
+  userRepliedInThread
+} from './threadIdentity.mjs';
 
 // 전역 상태 노출 (Kanban 모듈에서 접근용)
 window.selectMessage = null;
@@ -161,12 +167,16 @@ function normalizedSubject(subject = '') {
     .toLowerCase();
 }
 
-function groupLabelFor(message) {
-  const sender = message.fromName || message.from || 'unknown';
-  const domain = String(message.from || '').split('@')[1] || sender;
-  const subject = normalizedSubject(message.subject) || '(제목 없음)';
-  const prefix = message.isPromotional ? '광고성 후보 · ' : '';
-  return `${prefix}${domain} · ${sender} · ${subject}`;
+function threadGroupsFor(messages) {
+  return groupMessagesByThread(messages, { mailboxUser: mailboxUser?.value || '' });
+}
+
+function groupLabelFor(messages) {
+  const rep = latestMessageInThread(messages);
+  const prefix = messages.some((m) => insightFor(m.id)?.isSpamCandidate || m.isPromotional) ? '광고성 후보 · ' : '';
+  const replied = userRepliedInThread(messages, mailboxUser?.value || '');
+  const replyHint = replied ? ' · 회신 완료' : '';
+  return `${prefix}${threadLabel(messages)}${replyHint}`;
 }
 
 function messageCard(message) {
@@ -268,7 +278,7 @@ async function prepareReplyDraft(action) {
       body: payload.body || action.body || '',
       recommendedAttachments: payload.recommendedAttachments || []
     });
-    fetchStatus.textContent = `${payload.source === 'lmstudio' ? '메일 이력 기반 AI' : '메일 캐시 기반'} 회신 초안을 불러왔습니다.${payload.warning ? ` (${payload.warning})` : ''}`;
+    fetchStatus.textContent = `${payload.source === 'lmstudio' ? '메일 이력 기반 AI' : '메일 캐시 기반'} 회신 초안을 불러왔습니다.${payload.threadNote ? ` ${payload.threadNote}` : ''}${payload.warning ? ` (${payload.warning})` : ''}`;
   } catch (error) {
     fetchStatus.textContent = error instanceof Error ? error.message : '회신 초안 생성 실패';
     mountComposer(action);
@@ -575,13 +585,12 @@ function renderFilteredView() {
     messageList.appendChild(empty('조건에 맞는 메일이 없습니다.'));
     messageDetail.innerHTML = '<div class="empty">필터 또는 검색 조건을 조정하세요.</div>';
   } else {
-    const groups = new Map();
-    visibleMessages.forEach((message) => {
-      const label = groupLabelFor(message);
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(message);
-    });
-    groups.forEach((items, label) => {
+    const groups = threadGroupsFor(visibleMessages);
+    const sortedGroups = [...groups.values()].sort(
+      (a, b) => new Date(latestMessageInThread(b)?.receivedAt || 0) - new Date(latestMessageInThread(a)?.receivedAt || 0)
+    );
+    sortedGroups.forEach((items) => {
+      const label = groupLabelFor(items);
       const group = document.createElement('section');
       group.className = 'message-group';
       const laneSummary = feedbackStatuses
@@ -614,8 +623,18 @@ function renderActionPanel() {
   calendarCount.textContent = `${calendar.length}건`;
   reminderCount.textContent = `${reminders.length}건`;
 
+  const selectedMessage = currentMessages.find((m) => m.id === selectedMessageId);
+  const threadMessages = selectedMessage
+    ? [...(threadGroupsFor(currentMessages).values())].find((items) => items.some((m) => m.id === selectedMessageId)) || [selectedMessage]
+    : [];
+  const alreadyReplied = userRepliedInThread(threadMessages, mailboxUser?.value || '');
+
   if (!actions.length) actionList.appendChild(empty('선택한 메일의 추천 액션이 없습니다.'));
-  actions.forEach((item) => actionList.appendChild(scenarioActionCard(item)));
+  else if (alreadyReplied) {
+    actionList.appendChild(empty('이 스레드는 이미 회신한 상태입니다. 상대 회신을 기다리면 대기로 분류하세요.'));
+  } else {
+    actions.forEach((item) => actionList.appendChild(scenarioActionCard(item)));
+  }
 
   if (!calendar.length) calendarList.appendChild(empty('감지된 일정 없음'));
   calendar.forEach((item) => calendarList.appendChild(simpleCard(item, item.lane)));
