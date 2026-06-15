@@ -18,6 +18,7 @@ window.saveFeedback = null;
 window.renderFilteredView = null;
 window.currentMessages = [];
 window.currentResult = null;
+window.threadGroupList = [];
 
 const loadOutlook = document.querySelector('#loadOutlook');
 const mailLimit = document.querySelector('#mailLimit');
@@ -177,6 +178,68 @@ function groupLabelFor(messages) {
   const replied = userRepliedInThread(messages, mailboxUser?.value || '');
   const replyHint = replied ? ' · 회신 완료' : '';
   return `${prefix}${threadLabel(messages)}${replyHint}`;
+}
+
+function threadCard(items, { expanded = false } = {}) {
+  const rep = latestMessageInThread(items);
+  const lane = laneForMessage(rep?.id);
+  const replied = userRepliedInThread(items, mailboxUser?.value || '');
+  const section = document.createElement('section');
+  section.className = 'message-group thread-card';
+  section.dataset.threadKey = threadKeyForList(items);
+
+  const head = document.createElement('div');
+  head.className = 'thread-card-head';
+  head.innerHTML = `
+    <button type="button" class="thread-expand-btn" aria-expanded="${expanded}">${expanded ? '▼' : '▶'}</button>
+    <div class="thread-card-main">
+      <strong class="thread-card-title"></strong>
+      <span class="thread-badges"></span>
+      <p class="thread-card-preview"></p>
+    </div>
+    <span class="status-pill thread-lane-pill"></span>
+  `;
+  head.querySelector('.thread-card-title').textContent = groupLabelFor(items);
+  head.querySelector('.thread-card-preview').textContent =
+    insightFor(rep?.id)?.summary?.[0] || rep?.bodyPreview || '';
+  head.querySelector('.thread-lane-pill').textContent = statusLabel(lane);
+  const badges = head.querySelector('.thread-badges');
+  if (items.length > 1) {
+    const count = document.createElement('span');
+    count.className = 'thread-badge';
+    count.textContent = `${items.length}통`;
+    badges.appendChild(count);
+  }
+  if (replied) {
+    const badge = document.createElement('span');
+    badge.className = 'thread-badge replied';
+    badge.textContent = '회신함';
+    badges.appendChild(badge);
+  }
+
+  const body = document.createElement('div');
+  body.className = `thread-card-body${expanded ? ' is-expanded' : ''}`;
+  body.hidden = !expanded;
+  items.forEach((message) => body.appendChild(messageCard(message)));
+
+  head.querySelector('.thread-expand-btn').addEventListener('click', (event) => {
+    event.stopPropagation();
+    const open = body.hidden;
+    body.hidden = !open;
+    body.classList.toggle('is-expanded', open);
+    event.currentTarget.setAttribute('aria-expanded', String(open));
+    event.currentTarget.textContent = open ? '▼' : '▶';
+  });
+
+  head.addEventListener('click', () => selectMessage(rep?.id));
+  section.appendChild(head);
+  section.appendChild(body);
+  return section;
+}
+
+function threadKeyForList(items) {
+  const rep = latestMessageInThread(items);
+  return rep?.aiGroupKey || rep?.id || 'thread';
 }
 
 function messageCard(message) {
@@ -590,18 +653,9 @@ function renderFilteredView() {
       (a, b) => new Date(latestMessageInThread(b)?.receivedAt || 0) - new Date(latestMessageInThread(a)?.receivedAt || 0)
     );
     sortedGroups.forEach((items) => {
-      const label = groupLabelFor(items);
-      const group = document.createElement('section');
-      group.className = 'message-group';
-      const laneSummary = feedbackStatuses
-        .map((lane) => `${statusLabel(lane)} ${items.filter((item) => laneForMessage(item.id) === lane).length}`)
-        .join(' · ');
-      group.innerHTML = `<div class="group-head"><strong></strong><span></span></div>`;
-      group.querySelector('strong').textContent = label;
-      group.querySelector('span').textContent = `${items.length}건 · ${laneSummary}`;
-      items.forEach((message) => group.appendChild(messageCard(message)));
-      messageList.appendChild(group);
+      messageList.appendChild(threadCard(items));
     });
+    window.threadGroupList = sortedGroups.map((items) => latestMessageInThread(items)?.id).filter(Boolean);
     const preferred = visibleMessages.find((message) => message.id === selectedMessageId) || visibleMessages[0];
     selectMessage(preferred.id);
   }
@@ -649,6 +703,8 @@ function render(result, messages = []) {
   // 전역 상태 업데이트 (Kanban 모듈에서 접근용)
   window.currentMessages = messages;
   window.currentResult = result;
+  window.threadGroupsFor = threadGroupsFor;
+  window.userRepliedInThread = userRepliedInThread;
   if (!mailSearch.value) searchQuery = '';
   if (!searchQuery) mailSearch.value = '';
   renderFilteredView();

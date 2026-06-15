@@ -19,13 +19,22 @@ import {
   summarizeThreadGroups,
   unifyGroupKeysBySubject
 } from './src/threadGrouping.mjs';
+import { DATA_FILES, ensureDataDir, resolveDataPath } from './src/dataPaths.mjs';
+import { checkDestructiveApproval } from './src/destructiveApi.mjs';
+import {
+  toInsightThreads,
+  toMailSyncResult,
+  toTaskCandidates
+} from './src/portalBridge.mjs';
+import { runDeltaSync } from './src/graphDelta.mjs';
+import { scheduleDebouncedAnalyze } from './src/webhookDebounce.mjs';
 
 const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
-const configPath = join(appRoot, '.outlook-config.json');
-const mailCachePath = join(appRoot, '.mail-cache.json');
-const attachmentArchivePath = join(appRoot, '.attachment-archive.json');
-const attachmentArchiveMetaPath = join(appRoot, '.attachment-archive-meta.json');
+let configPath = '';
+let mailCachePath = '';
+let attachmentArchivePath = '';
+let attachmentArchiveMetaPath = '';
 const port = Number(process.env.PORT || 3010);
 const graphBaseUrl = 'https://graph.microsoft.com/v1.0';
 const delegatedScopes = 'openid profile offline_access User.Read Mail.Read Mail.Send';
@@ -55,6 +64,17 @@ const runtimeConfig = {
   lmstudioModel: 'qwen/qwen3.5-9b'
 };
 const pendingOAuth = new Map();
+
+async function initDataPaths() {
+  await ensureDataDir();
+  configPath = await resolveDataPath(DATA_FILES.config, DATA_FILES.legacyConfig);
+  mailCachePath = await resolveDataPath(DATA_FILES.mailCache, DATA_FILES.legacyMailCache);
+  attachmentArchivePath = await resolveDataPath(DATA_FILES.attachmentArchive, '.attachment-archive.json');
+  attachmentArchiveMetaPath = await resolveDataPath(
+    DATA_FILES.attachmentArchiveMeta,
+    '.attachment-archive-meta.json'
+  );
+}
 
 async function loadPersistedConfig() {
   try {
@@ -721,8 +741,27 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
   const isInitialSync = forceInitial || cachedMessages.length === 0;
   const modifiedSince = isInitialSync ? '' : (mailboxCache.lastModifiedAt || latestModifiedAt(cachedMessages) || '');
   const incomingMessages = [];
+  let deltaUsed = false;
   for (const folder of folderTargets) {
     const alwaysRecentSent = folder.mailFolder === 'sentitems' && !isInitialSync;
+    if (folder.mailFolder === 'inbox' && !isInitialSync && mailboxCache.deltaLink) {
+      try {
+        const deltaResult = await runDeltaSync({
+          accessToken,
+          mailboxBase,
+          mailFolder: 'inbox',
+          deltaLink: mailboxCache.deltaLink,
+          normalizeMessage: normalizeGraphMessage,
+          maxPages: Number(process.env.MAIL_DELTA_MAX_PAGES || 10)
+        });
+        incomingMessages.push(...deltaResult.messages);
+        mailboxCache.deltaLink = deltaResult.deltaLink || mailboxCache.deltaLink;
+        deltaUsed = true;
+        continue;
+      } catch (error) {
+        console.warn('Delta sync failed, falling back:', error instanceof Error ? error.message : error);
+      }
+    }
     const folderMessages = await fetchGraphMessages({
       accessToken,
       mailboxPath: folder.mailboxPath,
@@ -734,12 +773,29 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
     incomingMessages.push(...folderMessages);
   }
   const merged = mergeMessages(cachedMessages, incomingMessages);
+  if (!mailboxCache.deltaLink && isInitialSync) {
+    try {
+      const seed = await runDeltaSync({
+        accessToken,
+        mailboxBase,
+        mailFolder: 'inbox',
+        deltaLink: '',
+        normalizeMessage: normalizeGraphMessage,
+        maxPages: 1
+      });
+      if (seed.deltaLink) mailboxCache.deltaLink = seed.deltaLink;
+    } catch {
+      // Delta seed optional on first run.
+    }
+  }
   cache.mailboxes[cacheKey] = {
     ...mailboxCache,
     messages: merged.messages,
     lastSyncedAt: new Date().toISOString(),
     lastReceivedAt: latestReceivedAt(merged.messages),
-    lastModifiedAt: latestModifiedAt(merged.messages)
+    lastModifiedAt: latestModifiedAt(merged.messages),
+    deltaLink: mailboxCache.deltaLink || null,
+    deltaLinkExpires: mailboxCache.deltaLinkExpires || null
   };
   await saveMailCache(cache);
 
@@ -752,14 +808,15 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
     messages: sliceDisplayMessages(merged.messages, requestedTop),
     sync: {
       mailbox: cacheKey,
-      mode: isInitialSync ? 'initial' : 'incremental',
+      mode: deltaUsed ? 'delta' : isInitialSync ? 'initial' : 'incremental',
       requestedAfter: modifiedSince || null,
       fetchedFromGraph: incomingMessages.length,
       cachedBefore: cachedMessages.length,
       newCount: merged.newCount,
       updatedCount: merged.updatedCount,
       totalCached: merged.messages.length,
-      lastSyncedAt: cache.mailboxes[cacheKey].lastSyncedAt
+      lastSyncedAt: cache.mailboxes[cacheKey].lastSyncedAt,
+      deltaLink: Boolean(cache.mailboxes[cacheKey].deltaLink)
     }
   };
 }
@@ -1388,6 +1445,17 @@ async function enrichWithAI(messages, result) {
 
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', `http://localhost:${port}`);
+
+  const destructiveGate = checkDestructiveApproval(req);
+  if (
+    !destructiveGate.allowed &&
+    ((url.pathname === '/api/outlook/send' && req.method === 'POST') ||
+      (url.pathname === '/api/outlook/read' && req.method === 'POST') ||
+      (url.pathname === '/api/outlook/config' && req.method === 'DELETE'))
+  ) {
+    return json(res, destructiveGate.statusCode || 403, destructiveGate.body);
+  }
+
   if (url.pathname === '/api/outlook/oauth/start') {
     const clientId = url.searchParams.get('clientId')?.trim() || getConfigValue('clientId', 'MICROSOFT_CLIENT_ID');
     const tenantId = url.searchParams.get('tenantId')?.trim() || runtimeConfig.loginTenant || 'common';
@@ -1513,6 +1581,118 @@ async function handleApi(req, res) {
     } catch (error) {
       return json(res, error?.statusCode || 500, {
         message: error instanceof Error ? error.message : 'Reply draft generation failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/outlook/webhook') {
+    const validationToken = url.searchParams.get('validationToken');
+    if (validationToken) {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(validationToken);
+      return;
+    }
+    if (req.method === 'POST') {
+      scheduleDebouncedAnalyze(async () => {
+        await fetchOutlookMessages(50, { forceInitial: false });
+      });
+      return json(res, 202, { accepted: true, debounceMs: 300_000 });
+    }
+    return json(res, 405, { message: 'Method not allowed' });
+  }
+
+  if (url.pathname === '/api/portal/sync-overview' || url.pathname === '/api/portal/thread-insights') {
+    try {
+      const top = Number(url.searchParams.get('top') || 50);
+      const syncMode = url.searchParams.get('sync') || 'cache';
+      const data =
+        syncMode === 'cache'
+          ? await loadCachedMailbox(top)
+          : await fetchOutlookMessages(top, { forceInitial: syncMode === 'initial' });
+      const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+      const cache = await loadMailCache();
+      const cacheKey = mailboxCacheKey(mailboxUser);
+      const fullMessages = sortMessages(cache.mailboxes[cacheKey]?.messages || data.messages);
+      const threadGroupingResult = await enrichWithThreadGrouping(fullMessages);
+      const analyzePayload = {
+        ...data,
+        messages: sliceDisplayMessages(threadGroupingResult.messages, top),
+        threadGroups: threadGroupingResult.threadGroups,
+        threadGrouping: threadGroupingResult.threadGrouping,
+        connected: data.connected !== false
+      };
+      if (url.pathname === '/api/portal/sync-overview') {
+        return json(res, 200, toMailSyncResult(analyzePayload));
+      }
+      return json(res, 200, {
+        threads: toInsightThreads({
+          threadGroups: threadGroupingResult.threadGroups,
+          messages: fullMessages,
+          messageInsights: [],
+          mailboxUser
+        })
+      });
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Portal bridge failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/portal/push-candidates' && req.method === 'POST') {
+    try {
+      const top = Number(url.searchParams.get('top') || 50);
+      const data = await loadCachedMailbox(top);
+      const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+      const cache = await loadMailCache();
+      const cacheKey = mailboxCacheKey(mailboxUser);
+      const fullMessages = sortMessages(cache.mailboxes[cacheKey]?.messages || data.messages);
+      const { threadGroups } = await enrichWithThreadGrouping(fullMessages);
+      const { feedback } = await readFeedbackContext();
+      const result = analyzeMessages(fullMessages.slice(0, top), { feedback });
+      const candidates = toTaskCandidates({
+        messages: fullMessages,
+        messageInsights: result.messageInsights,
+        threadGroups
+      });
+      return json(res, 200, { candidates, count: candidates.length });
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Candidate push failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/portal/feedback-sync' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const feedback = await saveClassificationFeedback(body);
+      return json(res, 200, { saved: true, feedback });
+    } catch (error) {
+      return json(res, error.statusCode || 400, {
+        saved: false,
+        message: error instanceof Error ? error.message : 'Feedback sync failed.'
+      });
+    }
+  }
+
+  if (url.pathname.startsWith('/api/portal/thread/') && req.method === 'GET') {
+    const threadKey = decodeURIComponent(url.pathname.replace('/api/portal/thread/', ''));
+    try {
+      const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+      const cache = await loadMailCache();
+      const cacheKey = mailboxCacheKey(mailboxUser);
+      const fullMessages = sortMessages(cache.mailboxes[cacheKey]?.messages || []);
+      const { threadGroups } = await enrichWithThreadGrouping(fullMessages);
+      const group = (threadGroups || []).find(
+        (item) => item.key === threadKey || item.label === threadKey
+      );
+      if (!group) return json(res, 404, { message: 'Thread not found.' });
+      const messages = fullMessages.filter((message) => group.messageIds?.includes(message.id));
+      return json(res, 200, { thread: group, messages });
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Thread lookup failed.'
       });
     }
   }
@@ -1660,6 +1840,7 @@ server.on('error', async (error) => {
   throw error;
 });
 
+await initDataPaths();
 await loadPersistedConfig();
 
 server.listen(port, () => {

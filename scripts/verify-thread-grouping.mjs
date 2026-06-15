@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { applyRuleBasedGroupKeys, summarizeThreadGroups, unifyGroupKeysBySubject } from '../src/threadGrouping.mjs';
+import { resolveDataPath, DATA_FILES } from '../src/dataPaths.mjs';
 
 const baseUrl = process.env.MAIL_VERIFY_URL || 'http://localhost:3010';
 const top = Number(process.env.MAIL_VERIFY_TOP || 50);
 
 async function loadCacheMessages() {
-  const raw = await readFile(new URL('../.mail-cache.json', import.meta.url), 'utf8');
+  const mailCachePath = await resolveDataPath(DATA_FILES.mailCache, DATA_FILES.legacyMailCache);
+  const raw = await readFile(mailCachePath, 'utf8');
   const cache = JSON.parse(raw);
   const mailbox = Object.values(cache.mailboxes || {})[0];
   return mailbox?.messages || [];

@@ -82,21 +82,25 @@ function executeAction(action) {
 }
 
 function navigateMessage(direction) {
+  const threadIds = window.threadGroupList || [];
   const messages = window.currentMessages || [];
-  if (messages.length === 0) return;
+  const pool = threadIds.length
+    ? threadIds.map((id) => messages.find((m) => m.id === id)).filter(Boolean)
+    : messages;
+  if (pool.length === 0) return;
 
-  const currentIndex = messages.findIndex(m => m.id === window.selectedMessageId);
+  const currentIndex = pool.findIndex((m) => m.id === window.selectedMessageId);
   let nextIndex;
 
   if (currentIndex === -1) {
-    nextIndex = direction > 0 ? 0 : messages.length - 1;
+    nextIndex = direction > 0 ? 0 : pool.length - 1;
   } else {
     nextIndex = currentIndex + direction;
-    if (nextIndex < 0) nextIndex = messages.length - 1;
-    if (nextIndex >= messages.length) nextIndex = 0;
+    if (nextIndex < 0) nextIndex = pool.length - 1;
+    if (nextIndex >= pool.length) nextIndex = 0;
   }
 
-  const nextMessage = messages[nextIndex];
+  const nextMessage = pool[nextIndex];
   if (nextMessage && typeof window.selectMessage === 'function') {
     window.selectMessage(nextMessage.id);
     scrollToMessage(nextMessage.id);
@@ -136,7 +140,19 @@ function replyToMessage() {
     return;
   }
 
-  const message = (window.currentMessages || []).find(m => m.id === messageId);
+  const messages = window.currentMessages || [];
+  const threadMessages = typeof window.threadGroupsFor === 'function'
+    ? [...window.threadGroupsFor(messages).values()].find((items) => items.some((m) => m.id === messageId))
+    : null;
+  if (threadMessages && typeof window.userRepliedInThread === 'function') {
+    const mailbox = document.querySelector('#mailboxUser')?.value || '';
+    if (window.userRepliedInThread(threadMessages, mailbox)) {
+      showToast('이미 회신한 스레드입니다.', 'info');
+      return;
+    }
+  }
+
+  const message = messages.find(m => m.id === messageId);
   if (!message) return;
 
   // 회신 모달 열기 (기존 app.js의 mountComposer 활용)

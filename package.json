@@ -10,6 +10,7 @@
     "verify:health": "node scripts/verify-health.mjs",
     "verify:health:full": "node scripts/verify-health.mjs --full",
     "verify:threads": "node scripts/verify-thread-grouping.mjs",
+    "migrate:data": "node scripts/migrate-data-dir.mjs",
     "lint": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs",
     "lint:fix": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs --fix",
     "validate:html": "htmlhint src/index.html",

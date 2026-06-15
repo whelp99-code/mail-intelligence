@@ -940,6 +940,83 @@ textarea {
   border-radius: 4px;
 }
 
+.thread-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.thread-card-head {
+  align-items: flex-start;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.thread-expand-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 4px 2px;
+}
+
+.thread-card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-card-title {
+  display: block;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.thread-card-preview {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.thread-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.thread-badge {
+  background: var(--soft-blue);
+  border-radius: 4px;
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+}
+
+.thread-badge.replied {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.thread-card-body {
+  border-top: 1px solid var(--line);
+  padding: 0 10px 10px;
+}
+
+.thread-card-body .message-card {
+  margin-top: 8px;
+}
+
+.thread-lane-pill {
+  flex-shrink: 0;
+}
+
 .kanban-ai-badge {
   background: var(--soft-blue);
   color: var(--blue);
