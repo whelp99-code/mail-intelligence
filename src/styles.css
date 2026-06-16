@@ -1004,6 +1004,11 @@ textarea {
   color: #059669;
 }
 
+.thread-card.selected {
+  border-color: var(--accent, #2563eb);
+  box-shadow: inset 3px 0 0 var(--accent, #2563eb);
+}
+
 .thread-card-body {
   border-top: 1px solid var(--line);
   padding: 0 10px 10px;

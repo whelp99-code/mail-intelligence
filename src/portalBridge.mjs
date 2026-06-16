@@ -147,6 +147,7 @@ export function toAttachmentRef(entry) {
     sizeBytes: typeof entry.size === 'number' ? entry.size : undefined,
     category: entry.category ? String(entry.category) : undefined,
     hasDownload: Boolean(entry.hasDownload),
+    contentHash: entry.contentHash ? String(entry.contentHash).slice(0, 16) : undefined,
     proxyPath: '/api/outlook/attachments'
   };
 }

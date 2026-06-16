@@ -30,6 +30,7 @@ import {
 } from './src/portalBridge.mjs';
 import { runDeltaSync } from './src/graphDelta.mjs';
 import { scheduleDebouncedAnalyze } from './src/webhookDebounce.mjs';
+import { syncAttachmentsFromMessages } from './src/attachmentSync.mjs';
 
 const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
@@ -292,6 +293,11 @@ function mailboxPathForCurrentUser(messageId = '') {
   return mailboxUser
     ? `/users/${encodeURIComponent(mailboxUser)}/messages/${encodedId}`
     : `/me/messages/${encodedId}`;
+}
+
+function mailboxBaseForCurrentUser() {
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  return mailboxUser ? `/users/${encodeURIComponent(mailboxUser)}` : '/me';
 }
 
 const contentTypes = {
@@ -926,6 +932,38 @@ async function loadAttachmentArchive() {
         return acc;
       }, {})
     }
+  };
+}
+
+async function syncOutlookAttachmentArchive(top = 10) {
+  const accessToken = await getGraphAccessToken();
+  if (!accessToken) {
+    const error = new Error('Microsoft Graph credentials are not configured.');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+  const cache = await loadMailCache();
+  const cacheKey = mailboxCacheKey(mailboxUser);
+  const messages = sortMessages(cache.mailboxes[cacheKey]?.messages || []);
+  const archive = await readJsonFile(attachmentArchivePath, { version: 1, entries: [] });
+  const result = await syncAttachmentsFromMessages({
+    messages,
+    accessToken,
+    graphBaseUrl,
+    mailboxPath: mailboxBaseForCurrentUser(),
+    accountEmail: mailboxUser,
+    archive,
+    top: Math.min(Math.max(top, 1), 25)
+  });
+  await writeJsonFile(attachmentArchivePath, result.archive);
+  return {
+    added: result.added,
+    skippedDuplicates: result.skippedDuplicates,
+    scannedMessages: result.scannedMessages,
+    scannedAttachments: result.scannedAttachments,
+    total: result.archive.entries.length
   };
 }
 
@@ -1596,6 +1634,19 @@ async function handleApi(req, res) {
     } catch (error) {
       return json(res, 500, {
         message: error instanceof Error ? error.message : 'Attachment archive load failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/outlook/attachments/sync' && req.method === 'POST') {
+    try {
+      const top = Number(url.searchParams.get('top') || 10);
+      const result = await syncOutlookAttachmentArchive(top);
+      return json(res, 200, { synced: true, ...result });
+    } catch (error) {
+      return json(res, error.statusCode || 500, {
+        synced: false,
+        message: error instanceof Error ? error.message : 'Attachment sync failed.'
       });
     }
   }

@@ -438,11 +438,24 @@ function mailComposer(action) {
   `;
 }
 
+function formatComposerBody(text = '') {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  if (/\n\n/.test(value)) return value;
+  return value
+    .replace(/([.!?])\s+(?=[가-힣A-Za-z0-9])/g, '$1\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function mountComposer(action) {
   const { messageDetail, actionList } = ui();
   const mount = messageDetail?.querySelector('#composeMount') || actionList;
   if (!mount) return;
-  mount.innerHTML = mailComposer(action);
+  mount.innerHTML = mailComposer({
+    ...action,
+    body: formatComposerBody(action.body || action.recommendedAction || '')
+  });
   mount.querySelector('#cancelCompose').addEventListener('click', () => {
     mount.innerHTML = '';
     renderActionPanel();
@@ -492,6 +505,11 @@ function selectMessage(messageId) {
 
   messageList.querySelectorAll('.message-card').forEach((node) => node.classList.remove('selected'));
   messageList.querySelector(`.message-card[data-message-id="${CSS.escape(messageId)}"]`)?.classList.add('selected');
+  messageList.querySelectorAll('.thread-card').forEach((node) => node.classList.remove('selected'));
+  messageList
+    .querySelector(`.message-card[data-message-id="${CSS.escape(messageId)}"]`)
+    ?.closest('.thread-card')
+    ?.classList.add('selected');
   renderActionPanel();
 }
 
@@ -550,11 +568,23 @@ async function sendComposedMail() {
   const status = document.querySelector('#sendStatus');
   const button = document.querySelector('#sendMail');
   const payload = {
-    to: document.querySelector('#composeTo')?.value || '',
-    cc: document.querySelector('#composeCc')?.value || '',
-    subject: document.querySelector('#composeSubject')?.value || '',
-    body: document.querySelector('#composeBody')?.value || ''
+    to: document.querySelector('#composeTo')?.value?.trim() || '',
+    cc: document.querySelector('#composeCc')?.value?.trim() || '',
+    subject: document.querySelector('#composeSubject')?.value?.trim() || '',
+    body: document.querySelector('#composeBody')?.value?.trim() || ''
   };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.to)) {
+    status.textContent = '받는 사람 이메일 형식을 확인하세요.';
+    return;
+  }
+  if (!payload.subject) {
+    status.textContent = '제목을 입력하세요.';
+    return;
+  }
+  if (payload.body.length < 16) {
+    status.textContent = '본문이 너무 짧습니다. 최소 16자 이상 입력하세요.';
+    return;
+  }
   button.disabled = true;
   status.textContent = 'Outlook으로 발송 중입니다.';
   try {

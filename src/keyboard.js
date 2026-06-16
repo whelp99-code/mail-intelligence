@@ -108,11 +108,23 @@ function navigateMessage(direction) {
 }
 
 function scrollToMessage(messageId) {
-  const card = document.querySelector(`[data-message-id="${messageId}"]`) ||
-               document.querySelectorAll('.message-card')[window.currentMessages.findIndex(m => m.id === messageId)];
+  const threadCard = document.querySelector(
+    `.thread-card [data-message-id="${messageId}"]`
+  )?.closest('.thread-card');
+  const card =
+    threadCard ||
+    document.querySelector(`[data-message-id="${messageId}"]`) ||
+    document.querySelectorAll('.message-card')[
+      (window.currentMessages || []).findIndex((m) => m.id === messageId)
+    ];
   if (card) {
     card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     card.classList.add('keyboard-focused');
+    document.querySelectorAll('.thread-card.keyboard-focused').forEach((node) => {
+      if (node !== card && node.classList.contains('thread-card')) {
+        node.classList.remove('keyboard-focused');
+      }
+    });
     setTimeout(() => card.classList.remove('keyboard-focused'), 1000);
   }
 }
