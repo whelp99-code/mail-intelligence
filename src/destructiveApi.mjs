@@ -25,11 +25,7 @@ export function checkDestructiveApproval(req) {
   const internalKey = String(process.env.MAIL_INTERNAL_API_KEY || '').trim();
   const providedKey = String(req.headers['x-mail-internal-key'] || '').trim();
 
-  if (internalKey && providedKey === internalKey && approvalId) {
-    return { allowed: true, approvalId };
-  }
-
-  if (approvalId) {
+  if (approvalId && internalKey && providedKey === internalKey) {
     return { allowed: true, approvalId };
   }
 
@@ -39,7 +35,7 @@ export function checkDestructiveApproval(req) {
     body: {
       success: false,
       approvalStatus: 'pending',
-      error: '승인이 필요합니다. AIOSv2 approval gate를 통해 X-AIOS-Approval-Id 헤더로 호출하세요.',
+      error: '승인이 필요합니다. AIOSv2 approval gate와 X-Mail-Internal-Key 검증을 통해 호출하세요.',
       destructive: true
     }
   };

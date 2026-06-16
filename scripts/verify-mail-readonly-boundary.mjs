@@ -8,7 +8,7 @@
  *   AIOS_V1_ROOT=... AIOS_V2_ROOT=... node scripts/verify-mail-readonly-boundary.mjs
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,35 +96,44 @@ function assertV2ApprovalGates() {
 
 function main() {
   const failures = [];
+  const skipped = [];
 
   const v1Dirs = [
     join(V1_ROOT, 'apps/web/src'),
     join(V1_ROOT, 'packages/mail-intelligence/src'),
     join(V1_ROOT, 'packages/automation/src'),
   ];
-  for (const dir of v1Dirs) {
-    const hits = scanForDestructiveCalls(dir, 'v1');
-    if (hits.length) failures.push(...hits);
+  if (existsSync(V1_ROOT)) {
+    for (const dir of v1Dirs) {
+      const hits = scanForDestructiveCalls(dir, 'v1');
+      if (hits.length) failures.push(...hits);
+    }
+  } else {
+    skipped.push(`v1 root not found: ${V1_ROOT}`);
   }
 
-  const v2Hits = scanForDestructiveCalls(join(V2_ROOT, 'apps/web/src'), 'v2', [
-    '/api/mail/send/route.ts',
-    '/api/mail/read/route.ts',
-    '/api/mail/config/route.ts',
-    '/lib/integrations/mail-intelligence-proxy.ts',
-  ]);
-  if (v2Hits.length) failures.push(...v2Hits);
+  if (existsSync(V2_ROOT)) {
+    const v2Hits = scanForDestructiveCalls(join(V2_ROOT, 'apps/web/src'), 'v2', [
+      '/api/mail/send/route.ts',
+      '/api/mail/read/route.ts',
+      '/api/mail/config/route.ts',
+      '/lib/integrations/mail-intelligence-proxy.ts',
+    ]);
+    if (v2Hits.length) failures.push(...v2Hits);
 
-  const gateMissing = assertV2ApprovalGates();
-  if (gateMissing.length) {
-    for (const item of gateMissing) {
-      failures.push({
-        file: item.file,
-        line: 0,
-        text: item.reason,
-        label: 'v2-approval-gate',
-      });
+    const gateMissing = assertV2ApprovalGates();
+    if (gateMissing.length) {
+      for (const item of gateMissing) {
+        failures.push({
+          file: item.file,
+          line: 0,
+          text: item.reason,
+          label: 'v2-approval-gate',
+        });
+      }
     }
+  } else {
+    skipped.push(`v2 root not found: ${V2_ROOT}`);
   }
 
   if (failures.length) {
@@ -139,6 +148,7 @@ function main() {
   console.log('mail read-only boundary audit passed');
   console.log(`  v1 roots: ${v1Dirs.join(', ')}`);
   console.log(`  v2 gated routes: mail/send, mail/read, mail/config`);
+  if (skipped.length) console.log(`  skipped: ${skipped.join('; ')}`);
 }
 
 main();

@@ -63,6 +63,7 @@ const runtimeConfig = {
   // F-AIOS-v3 Integration
   aiProvider: 'f-aios-v3',  // 'f-aios-v3' | 'gemini' | 'lmstudio'
   faiosServerUrl: 'http://localhost:3201',
+  lmstudioUrl: 'http://localhost:1234',
   lmstudioModel: 'qwen/qwen3.5-9b'
 };
 const pendingOAuth = new Map();
@@ -348,6 +349,7 @@ function configStatus() {
     // AI Provider settings
     aiProvider: runtimeConfig.aiProvider || 'f-aios-v3',
     faiosServerUrl: runtimeConfig.faiosServerUrl || 'http://localhost:3201',
+    lmstudioUrl: getLmStudioUrl(),
     lmstudioModel: runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b',
     hasAccessToken: hasToken,
     hasTenantId: Boolean(getConfigValue('tenantId', 'MICROSOFT_TENANT_ID')),
@@ -417,9 +419,10 @@ function latestReceivedAt(messages) {
 }
 
 function latestModifiedAt(messages) {
-  return sortMessages(
-    [...messages].sort((a, b) => new Date(b.lastModifiedAt || b.receivedAt || 0) - new Date(a.lastModifiedAt || a.receivedAt || 0))
-  ).find((message) => message.lastModifiedAt || message.receivedAt)?.lastModifiedAt || latestReceivedAt(messages);
+  const latest = [...messages]
+    .sort((a, b) => new Date(b.lastModifiedAt || b.receivedAt || 0) - new Date(a.lastModifiedAt || a.receivedAt || 0))
+    .find((message) => message.lastModifiedAt || message.receivedAt);
+  return latest?.lastModifiedAt || latest?.receivedAt || '';
 }
 
 function sliceDisplayMessages(messages, top) {
@@ -434,8 +437,13 @@ function mergeMessages(existingMessages, incomingMessages) {
   }
   let newCount = 0;
   let updatedCount = 0;
+  let removedCount = 0;
   for (const message of incomingMessages || []) {
     if (!message?.id) continue;
+    if (message.removed || message['@removed']) {
+      if (byId.delete(message.id)) removedCount += 1;
+      continue;
+    }
     const previous = byId.get(message.id);
     if (!previous) {
       newCount += 1;
@@ -448,7 +456,8 @@ function mergeMessages(existingMessages, incomingMessages) {
   return {
     messages: sortMessages([...byId.values()]),
     newCount,
-    updatedCount
+    updatedCount,
+    removedCount
   };
 }
 
@@ -557,6 +566,22 @@ function applyFeedbackToResult(result, messages, feedback = {}, options = {}) {
         spamReason: message.isPromotional ? '광고성/뉴스레터 패턴 감지' : '',
         effectiveStatus: exact.userStatus,
         feedbackApplied: true
+      };
+    }
+    const smartRule = allowLearnedOverride ? applySmartRules(message, feedback) : null;
+    if (smartRule && FEEDBACK_STATUSES.has(smartRule.status)) {
+      return {
+        ...insight,
+        feedbackHint: {
+          userStatus: smartRule.status,
+          reasonCode: smartRule.status,
+          reasonLabel: FEEDBACK_REASONS[smartRule.status],
+          score: smartRule.confidence,
+          source: smartRule.source
+        },
+        isSpamCandidate: Boolean(message.isPromotional),
+        spamReason: message.isPromotional ? '광고성/뉴스레터 패턴 감지' : '',
+        effectiveStatus: smartRule.status
       };
     }
     const learned = allowLearnedOverride ? inferredFeedbackStatus(message, feedback) : null;
@@ -816,6 +841,7 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
       cachedBefore: cachedMessages.length,
       newCount: merged.newCount,
       updatedCount: merged.updatedCount,
+      removedCount: merged.removedCount,
       totalCached: merged.messages.length,
       lastSyncedAt: cache.mailboxes[cacheKey].lastSyncedAt,
       deltaLink: Boolean(cache.mailboxes[cacheKey].deltaLink)
@@ -970,7 +996,7 @@ ${JSON.stringify(attachmentContext, null, 2)}`;
 
 async function callLmStudioReplyDraft(prompt) {
   const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
-  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+  const response = await fetch(`${getLmStudioUrl()}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(15000),
@@ -1495,7 +1521,7 @@ async function handleApi(req, res) {
     if (req.method === 'POST') {
       try {
         const body = await readJsonBody(req);
-        for (const key of ['tenantId', 'clientId', 'mailboxUser', 'loginTenant', 'geminiModel', 'aiProvider', 'faiosServerUrl', 'lmstudioModel']) {
+        for (const key of ['tenantId', 'clientId', 'mailboxUser', 'loginTenant', 'geminiModel', 'aiProvider', 'faiosServerUrl', 'lmstudioUrl', 'lmstudioModel']) {
           if (typeof body[key] === 'string') runtimeConfig[key] = body[key].trim();
         }
         for (const key of ['accessToken', 'clientSecret', 'geminiApiKey']) {
@@ -1894,6 +1920,10 @@ function getModelName(provider) {
   return runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
 }
 
+function getLmStudioUrl() {
+  return (getConfigValue('lmstudioUrl', 'LMSTUDIO_URL') || 'http://localhost:1234').replace(/\/+$/, '');
+}
+
 function buildAnalysisPrompt(feedbackExamples, messagesForAi, maxBodyLength = 4500) {
   return `You are an executive email triage assistant. Analyze each email and return ONLY valid JSON.
 
@@ -2035,7 +2065,7 @@ async function callGeminiApi(prompt) {
 
 async function callLmStudioGeneric(prompt, { maxTokens = 1800, timeoutMs = 25000 } = {}) {
   const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
-  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+  const response = await fetch(`${getLmStudioUrl()}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(timeoutMs),
@@ -2057,7 +2087,7 @@ async function callLmStudioGeneric(prompt, { maxTokens = 1800, timeoutMs = 25000
 async function callLmStudio(prompt) {
   const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
   
-  const response = await fetch('http://localhost:1234/v1/chat/completions', {
+  const response = await fetch(`${getLmStudioUrl()}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(8000),

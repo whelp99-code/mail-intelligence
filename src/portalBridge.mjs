@@ -167,6 +167,6 @@ export function toMailSyncResult(payload) {
     groups: toMailGroups(threadGroups),
     taskCandidates: toTaskCandidates({ messages, messageInsights, threadGroups }),
     connected: payload.connected !== false,
-    syncedAt: payload.sync?.syncedAt || payload.analyzedAt || undefined
+    syncedAt: payload.sync?.lastSyncedAt || payload.sync?.syncedAt || payload.analyzedAt || undefined
   };
 }

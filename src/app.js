@@ -16,9 +16,11 @@ import {
 window.selectMessage = null;
 window.saveFeedback = null;
 window.renderFilteredView = null;
+window.mountComposer = null;
 window.currentMessages = [];
 window.currentResult = null;
 window.threadGroupList = [];
+window.selectedMessageId = '';
 
 const loadOutlook = document.querySelector('#loadOutlook');
 const mailLimit = document.querySelector('#mailLimit');
@@ -452,6 +454,7 @@ function mountComposer(action) {
 function selectMessage(messageId) {
   const { messageDetail, messageList } = ui();
   selectedMessageId = messageId;
+  window.selectedMessageId = messageId;
   const message = currentMessages.find((item) => item.id === messageId);
   const insight = insightFor(messageId);
   if ((!message && !insight) || !messageDetail || !messageList) return;
@@ -507,14 +510,13 @@ async function markMessageRead(messageId) {
   }
 }
 
-async function saveFeedback(messageId, userStatus) {
+async function saveFeedback(messageId, userStatus, reasonCode = userStatus) {
   const insight = insightFor(messageId);
   const { messageDetail } = ui();
-  if (!messageDetail) return;
-  const status = messageDetail.querySelector('#feedbackStatus');
-  const reason = messageDetail.querySelector('#feedbackReason')?.value || userStatus;
-  const note = messageDetail.querySelector('#feedbackNote')?.value || '';
-  status.textContent = '보정값 저장 중입니다.';
+  const status = messageDetail?.querySelector('#feedbackStatus');
+  const reason = messageDetail?.querySelector('#feedbackReason')?.value || reasonCode || userStatus;
+  const note = messageDetail?.querySelector('#feedbackNote')?.value || '';
+  if (status) status.textContent = '보정값 저장 중입니다.';
   try {
     const response = await fetch('/api/outlook/feedback', {
       method: 'POST',
@@ -537,8 +539,10 @@ async function saveFeedback(messageId, userStatus) {
     }
     fetchStatus.textContent = `분류 보정 저장 완료 · ${statusLabel(result.feedback.userStatus)} · 다음 분석 기준에 반영됩니다.`;
     renderFilteredView();
+    return true;
   } catch (error) {
-    status.textContent = error instanceof Error ? error.message : '보정값 저장 실패';
+    if (status) status.textContent = error instanceof Error ? error.message : '보정값 저장 실패';
+    return false;
   }
 }
 
@@ -645,6 +649,7 @@ function renderFilteredView() {
   messageCount.textContent = `${visibleMessages.length}건 · 읽지않음 ${unreadCount}건`;
   if (!visibleMessages.length) {
     selectedMessageId = '';
+    window.selectedMessageId = '';
     messageList.appendChild(empty('조건에 맞는 메일이 없습니다.'));
     messageDetail.innerHTML = '<div class="empty">필터 또는 검색 조건을 조정하세요.</div>';
   } else {
@@ -1035,6 +1040,7 @@ mailSearch.addEventListener('input', () => {
 window.selectMessage = selectMessage;
 window.saveFeedback = saveFeedback;
 window.renderFilteredView = renderFilteredView;
+window.mountComposer = mountComposer;
 
 loadStatus().then(() => bootMailbox());
 restorePersistedMailbox();

@@ -286,7 +286,7 @@ function showMoveMenu(messageId, card) {
   }, 0);
 }
 
-function moveKanbanCard(messageId, targetLane) {
+async function moveKanbanCard(messageId, targetLane) {
   try {
     const safeId = safeSelector(messageId);
     const card = document.querySelector(`[data-message-id="${safeId}"]`);
@@ -304,7 +304,11 @@ function moveKanbanCard(messageId, targetLane) {
 
     // 피드백 저장 (reasonCode 포함)
     if (typeof window.saveFeedback === 'function') {
-      window.saveFeedback(messageId, targetLane, targetLane);
+      const saved = await window.saveFeedback(messageId, targetLane, targetLane);
+      if (!saved) {
+        showToast('카드 이동 상태 저장에 실패했습니다.', 'error');
+        return;
+      }
     }
 
     showToast(`${LANE_CONFIG[targetLane].label}(으)로 이동되었습니다.`, 'success');

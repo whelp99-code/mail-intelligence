@@ -34,7 +34,16 @@ export async function fetchGraphDeltaPage({ accessToken, url, normalizeMessage, 
   const parsed = parseDeltaResponse(payload);
   return {
     ...parsed,
-    messages: parsed.messages.map((item) => normalizeMessage(item, mailFolder))
+    messages: parsed.messages.map((item) => {
+      if (item?.['@removed']) {
+        return {
+          id: item.id,
+          removed: true,
+          removalReason: item['@removed']?.reason || ''
+        };
+      }
+      return normalizeMessage(item, mailFolder);
+    })
   };
 }
 
