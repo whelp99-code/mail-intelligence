@@ -24,6 +24,8 @@ import { checkDestructiveApproval } from './src/destructiveApi.mjs';
 import {
   filterThreadsForIngest,
   toAttachmentRefs,
+  toCalendarHints,
+  toEntityCandidates,
   toInsightThreads,
   toMailSyncResult,
   toTaskCandidates
@@ -31,6 +33,11 @@ import {
 import { runDeltaSync } from './src/graphDelta.mjs';
 import { scheduleDebouncedAnalyze } from './src/webhookDebounce.mjs';
 import { syncAttachmentsFromMessages } from './src/attachmentSync.mjs';
+import {
+  applyAccountToRuntimeConfig,
+  findAccountById,
+  listAccountsFromStore
+} from './src/accountRegistry.mjs';
 
 const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
@@ -38,6 +45,7 @@ let configPath = '';
 let mailCachePath = '';
 let attachmentArchivePath = '';
 let attachmentArchiveMetaPath = '';
+let outlookAccountsPath = '';
 const port = Number(process.env.PORT || 3010);
 const graphBaseUrl = 'https://graph.microsoft.com/v1.0';
 const delegatedScopes = 'openid profile offline_access User.Read Mail.Read Mail.Send';
@@ -78,6 +86,7 @@ async function initDataPaths() {
     DATA_FILES.attachmentArchiveMeta,
     '.attachment-archive-meta.json'
   );
+  outlookAccountsPath = await resolveDataPath(DATA_FILES.outlookAccounts, '.outlook-accounts.json');
 }
 
 async function loadPersistedConfig() {
@@ -1585,6 +1594,43 @@ async function handleApi(req, res) {
     return json(res, 200, configStatus());
   }
 
+  if (url.pathname === '/api/outlook/accounts') {
+    if (req.method !== 'GET') return json(res, 405, { message: 'Method not allowed' });
+    try {
+      const store = await readJsonFile(outlookAccountsPath, { version: 2, accounts: [] });
+      return json(res, 200, listAccountsFromStore(store));
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Account registry load failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/outlook/accounts/active') {
+    if (req.method !== 'POST') return json(res, 405, { message: 'Method not allowed' });
+    try {
+      const body = await readJsonBody(req);
+      const accountId = String(body.accountId || '').trim();
+      if (!accountId) return json(res, 400, { message: 'accountId is required.' });
+      const store = await readJsonFile(outlookAccountsPath, { version: 2, accounts: [] });
+      const account = findAccountById(store, accountId);
+      if (!account) return json(res, 404, { message: 'Account not found.' });
+      store.activeAccountId = account.id;
+      Object.assign(runtimeConfig, applyAccountToRuntimeConfig(account));
+      await writeFile(outlookAccountsPath, JSON.stringify(store, null, 2), 'utf8');
+      await savePersistedConfig();
+      return json(res, 200, {
+        switched: true,
+        activeAccountId: account.id,
+        status: configStatus()
+      });
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Account switch failed.'
+      });
+    }
+  }
+
   if (url.pathname === '/api/outlook/send') {
     if (req.method !== 'POST') return json(res, 405, { message: 'Method not allowed' });
     try {
@@ -1680,7 +1726,12 @@ async function handleApi(req, res) {
     return json(res, 405, { message: 'Method not allowed' });
   }
 
-  if (url.pathname === '/api/portal/sync-overview' || url.pathname === '/api/portal/thread-insights') {
+  if (
+    url.pathname === '/api/portal/sync-overview' ||
+    url.pathname === '/api/portal/thread-insights' ||
+    url.pathname === '/api/portal/entity-candidates' ||
+    url.pathname === '/api/portal/calendar-hints'
+  ) {
     try {
       const top = Number(url.searchParams.get('top') || 50);
       const syncMode = url.searchParams.get('sync') || 'cache';
@@ -1717,12 +1768,25 @@ async function handleApi(req, res) {
         threadGroups: threadGroupingResult.threadGroups,
         threadGrouping: threadGroupingResult.threadGrouping,
         connected: data.connected !== false,
+        mailboxUser,
         analyzedAt: new Date().toISOString(),
         result: { ...result, threadGroups: threadGroupingResult.threadGroups },
         aiError
       };
       if (url.pathname === '/api/portal/sync-overview') {
         return json(res, 200, toMailSyncResult(analyzePayload));
+      }
+      if (url.pathname === '/api/portal/entity-candidates') {
+        const candidates = toEntityCandidates({
+          messages: fullMessages,
+          threadGroups: threadGroupingResult.threadGroups,
+          mailboxUser
+        });
+        return json(res, 200, { candidates, count: candidates.length });
+      }
+      if (url.pathname === '/api/portal/calendar-hints') {
+        const calendar = toCalendarHints(analyzePayload);
+        return json(res, 200, { calendar, count: calendar.length });
       }
       const threads = toInsightThreads({
         threadGroups: threadGroupingResult.threadGroups,

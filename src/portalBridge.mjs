@@ -2,6 +2,10 @@
  * Maps standalone analyze output to AIOS v1 contract shapes (read-only portal bridge).
  */
 
+import { resolveEntityForMessage, toEntityCandidates } from './entityResolution.mjs';
+
+export { toEntityCandidates };
+
 function lanePriority(lane) {
   return lane === 'urgent' ? 'high' : 'normal';
 }
@@ -46,9 +50,10 @@ export function toTaskCandidates({ messages = [], messageInsights = [], threadGr
     if (!['urgent', 'active', 'waiting'].includes(lane)) continue;
 
     const blob = `${message.subject || ''} ${message.bodyPreview || ''}`.toLowerCase();
-    let entityType;
-    if (/견적|quote|po\b|invoice/.test(blob)) entityType = 'customer';
-    if (/partner|협력|총판/.test(blob)) entityType = 'partner';
+    const entityHint = resolveEntityForMessage(message, { mailboxUser: '' });
+    let entityType = entityHint?.entityRole;
+    if (!entityType && /견적|quote|po\b|invoice/.test(blob)) entityType = 'customer';
+    if (!entityType && /partner|협력|총판/.test(blob)) entityType = 'partner';
 
     candidates.push({
       mailMessageId: message.id,
@@ -56,7 +61,7 @@ export function toTaskCandidates({ messages = [], messageInsights = [], threadGr
       summary: insight?.summary?.[0] || message.bodyPreview || message.subject || '',
       priority: lanePriority(lane),
       entityType,
-      entityId: entityType ? domainFromAddress(message.from) : undefined
+      entityId: entityType ? (entityHint?.domain || domainFromAddress(message.from)) : undefined
     });
     seen.add(message.id);
   }
@@ -161,13 +166,28 @@ export function toMailSyncResult(payload) {
   const messages = payload.messages || [];
   const threadGroups = payload.threadGroups || payload.result?.threadGroups || [];
   const messageInsights = payload.result?.messageInsights || [];
+  const mailboxUser = payload.mailboxUser || payload.sync?.mailboxUser || '';
 
   return {
     accounts: payload.connected ? 1 : 0,
     messages: payload.sync?.totalCached ?? messages.length,
     groups: toMailGroups(threadGroups),
     taskCandidates: toTaskCandidates({ messages, messageInsights, threadGroups }),
+    entityCandidates: toEntityCandidates({ messages, threadGroups, mailboxUser }),
     connected: payload.connected !== false,
     syncedAt: payload.sync?.lastSyncedAt || payload.sync?.syncedAt || payload.analyzedAt || undefined
   };
+}
+
+export function toCalendarHints(payload) {
+  const calendar = payload.result?.calendar || payload.calendar || [];
+  return (Array.isArray(calendar) ? calendar : []).slice(0, 25).map((item) => ({
+    title: item.title || item.subject || '일정',
+    when: item.when || item.due || '',
+    owner: item.owner || '',
+    lane: item.lane || 'active',
+    messageId: item.messageId,
+    receivedAt: item.receivedAt,
+    webLink: item.webLink
+  }));
 }
