@@ -22,6 +22,8 @@ import {
 import { DATA_FILES, ensureDataDir, resolveDataPath } from './src/dataPaths.mjs';
 import { checkDestructiveApproval } from './src/destructiveApi.mjs';
 import {
+  filterThreadsForIngest,
+  toAttachmentRefs,
   toInsightThreads,
   toMailSyncResult,
   toTaskCandidates
@@ -1605,6 +1607,7 @@ async function handleApi(req, res) {
     try {
       const top = Number(url.searchParams.get('top') || 50);
       const syncMode = url.searchParams.get('sync') || 'cache';
+      const forIngest = url.searchParams.get('forIngest') !== '0';
       const data =
         syncMode === 'cache'
           ? await loadCachedMailbox(top)
@@ -1614,23 +1617,45 @@ async function handleApi(req, res) {
       const cacheKey = mailboxCacheKey(mailboxUser);
       const fullMessages = sortMessages(cache.mailboxes[cacheKey]?.messages || data.messages);
       const threadGroupingResult = await enrichWithThreadGrouping(fullMessages);
+      const displayMessages = sliceDisplayMessages(threadGroupingResult.messages, top);
+      const { feedback } = await readFeedbackContext();
+      const baseResult = applyFeedbackToResult(
+        analyzeMessages(displayMessages, { feedback }),
+        displayMessages,
+        feedback,
+        { allowLearnedOverride: true }
+      );
+      let result = baseResult;
+      let aiError = null;
+      try {
+        result = await enrichWithAI(displayMessages, baseResult);
+        result = applyFeedbackToResult(result, displayMessages, feedback, { allowLearnedOverride: false });
+      } catch (error) {
+        aiError = error instanceof Error ? error.message : 'AI enhancement failed.';
+        result = { ...baseResult, ai: { enabled: false, provider: 'rules', error: aiError } };
+      }
       const analyzePayload = {
         ...data,
-        messages: sliceDisplayMessages(threadGroupingResult.messages, top),
+        messages: displayMessages,
         threadGroups: threadGroupingResult.threadGroups,
         threadGrouping: threadGroupingResult.threadGrouping,
-        connected: data.connected !== false
+        connected: data.connected !== false,
+        analyzedAt: new Date().toISOString(),
+        result: { ...result, threadGroups: threadGroupingResult.threadGroups },
+        aiError
       };
       if (url.pathname === '/api/portal/sync-overview') {
         return json(res, 200, toMailSyncResult(analyzePayload));
       }
+      const threads = toInsightThreads({
+        threadGroups: threadGroupingResult.threadGroups,
+        messages: fullMessages,
+        messageInsights: result.messageInsights || [],
+        mailboxUser
+      });
       return json(res, 200, {
-        threads: toInsightThreads({
-          threadGroups: threadGroupingResult.threadGroups,
-          messages: fullMessages,
-          messageInsights: [],
-          mailboxUser
-        })
+        threads: forIngest ? filterThreadsForIngest(threads) : threads,
+        count: forIngest ? filterThreadsForIngest(threads).length : threads.length
       });
     } catch (error) {
       return json(res, 500, {
@@ -1672,6 +1697,20 @@ async function handleApi(req, res) {
       return json(res, error.statusCode || 400, {
         saved: false,
         message: error instanceof Error ? error.message : 'Feedback sync failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/portal/attachments' && req.method === 'GET') {
+    try {
+      const archive = await loadAttachmentArchive();
+      return json(res, 200, {
+        attachments: toAttachmentRefs(archive),
+        counts: archive.counts || { total: archive.entries?.length || 0 }
+      });
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Portal attachment bridge failed.'
       });
     }
   }

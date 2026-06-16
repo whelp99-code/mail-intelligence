@@ -124,6 +124,38 @@ export function toInsightThreads({ threadGroups = [], messages = [], messageInsi
     });
 }
 
+export function filterThreadsForIngest(threads = [], options = {}) {
+  const minMessages = options.minMessages ?? 3;
+  return threads.filter((thread) => {
+    if ((thread.messageCount || 0) < minMessages) return false;
+    if (thread.metadata?.userReplied) return false;
+    const status = thread.effectiveStatus || thread.status;
+    if (!['urgent', 'active'].includes(status)) return false;
+    return true;
+  });
+}
+
+export function toAttachmentRef(entry) {
+  if (!entry?.id) return null;
+  return {
+    id: String(entry.id),
+    name: String(entry.name || entry.fileName || 'attachment'),
+    messageId: entry.messageId ? String(entry.messageId) : undefined,
+    subject: entry.subject ? String(entry.subject) : undefined,
+    fromAddress: entry.from || entry.fromName ? String(entry.from || entry.fromName) : undefined,
+    receivedAt: entry.receivedAt ? String(entry.receivedAt) : undefined,
+    sizeBytes: typeof entry.size === 'number' ? entry.size : undefined,
+    category: entry.category ? String(entry.category) : undefined,
+    hasDownload: Boolean(entry.hasDownload),
+    proxyPath: '/api/outlook/attachments'
+  };
+}
+
+export function toAttachmentRefs(archive = {}) {
+  const entries = Array.isArray(archive.entries) ? archive.entries : [];
+  return entries.map(toAttachmentRef).filter(Boolean);
+}
+
 export function toMailSyncResult(payload) {
   const messages = payload.messages || [];
   const threadGroups = payload.threadGroups || payload.result?.threadGroups || [];
@@ -133,6 +165,8 @@ export function toMailSyncResult(payload) {
     accounts: payload.connected ? 1 : 0,
     messages: payload.sync?.totalCached ?? messages.length,
     groups: toMailGroups(threadGroups),
-    taskCandidates: toTaskCandidates({ messages, messageInsights, threadGroups })
+    taskCandidates: toTaskCandidates({ messages, messageInsights, threadGroups }),
+    connected: payload.connected !== false,
+    syncedAt: payload.sync?.syncedAt || payload.analyzedAt || undefined
   };
 }
