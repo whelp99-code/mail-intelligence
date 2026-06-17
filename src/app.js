@@ -5,6 +5,7 @@ import { initStats } from './stats.js';
 import { initTheme } from './theme.js';
 import { initSearch } from './search.js';
 import { initNotifications } from './notifications.js';
+import { initConversationView, loadConversationData, showConversationSection } from './conversationView.js';
 import {
   groupMessagesByThread,
   latestMessageInThread,
@@ -1081,6 +1082,46 @@ initStats();
 initTheme();
 initSearch();
 initNotifications();
+initConversationView();
+
+// Conversation toggle
+const conversationToggle = document.getElementById('conversationToggle');
+const conversationView = document.getElementById('conversationView');
+const mailShell = document.getElementById('mailShell');
+
+if (conversationToggle && conversationView && mailShell) {
+  conversationToggle.addEventListener('click', async () => {
+    const isHidden = conversationView.classList.contains('hidden');
+    
+    if (isHidden) {
+      conversationView.classList.remove('hidden');
+      conversationView.setAttribute('aria-hidden', 'false');
+      mailShell.classList.add('hidden');
+      conversationToggle.textContent = '📧 메일 보기';
+      await loadConversationData();
+    } else {
+      conversationView.classList.add('hidden');
+      conversationView.setAttribute('aria-hidden', 'true');
+      mailShell.classList.remove('hidden');
+      conversationToggle.textContent = '📞 대화 분석';
+    }
+  });
+}
+
+// Conversation tab switching
+document.querySelectorAll('.conversation-tabs .tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.conversation-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    showConversationSection(btn.dataset.tab);
+  });
+});
+
+// Refresh conversations
+const refreshConversations = document.getElementById('refreshConversations');
+if (refreshConversations) {
+  refreshConversations.addEventListener('click', () => loadConversationData());
+}
 
 openAttachments?.addEventListener('click', openAttachmentExplorer);
 closeAttachments?.addEventListener('click', closeAttachmentExplorer);

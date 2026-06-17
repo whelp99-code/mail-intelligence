@@ -38,6 +38,20 @@ import {
   findAccountById,
   listAccountsFromStore
 } from './src/accountRegistry.mjs';
+import {
+  loadCallRecordings,
+  processCallRecording,
+  matchCallWithEmails,
+  createConversationThread,
+  batchProcessRecordings,
+  parseCallFilename
+} from './src/callAnalysis.mjs';
+import {
+  groupByConversation,
+  matchReplyPair,
+  analyzeConversationPatterns,
+  generateConversationSummary
+} from './src/conversationLearning.mjs';
 
 const root = fileURLToPath(new URL('./src', import.meta.url));
 const appRoot = dirname(fileURLToPath(import.meta.url));
@@ -1924,6 +1938,178 @@ async function handleApi(req, res) {
         connected: false,
         mode: 'error',
         message: error instanceof Error ? error.message : 'Outlook fetch failed.'
+      });
+    }
+  }
+
+  // Call Recording Analysis Endpoints
+  if (url.pathname === '/api/calls/recordings') {
+    try {
+      const dir = url.searchParams.get('dir') || undefined;
+      const recordings = await loadCallRecordings(dir);
+      return json(res, 200, { 
+        recordings: recordings.slice(0, 100),
+        total: recordings.length 
+      });
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Failed to load recordings' 
+      });
+    }
+  }
+
+  if (url.pathname === '/api/calls/transcribe' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { filePath, model = 'base', language = 'ko' } = body;
+      
+      if (!filePath) {
+        return json(res, 400, { message: 'filePath is required' });
+      }
+      
+      const result = await processCallRecording(filePath, { model, language });
+      return json(res, 200, result);
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Transcription failed' 
+      });
+    }
+  }
+
+  if (url.pathname === '/api/calls/match' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { callInfo, mailboxKey } = body;
+      
+      const cache = await loadMailCache();
+      const mailbox = cache.mailboxes[mailboxKey || 'me'] || {};
+      const emails = mailbox.messages || [];
+      
+      const matches = matchCallWithEmails(callInfo, emails);
+      return json(res, 200, { matches: matches.slice(0, 20) });
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Matching failed' 
+      });
+    }
+  }
+
+  if (url.pathname === '/api/calls/batch' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { recordings, model = 'base', language = 'ko' } = body;
+      
+      if (!Array.isArray(recordings) || recordings.length === 0) {
+        return json(res, 400, { message: 'recordings array is required' });
+      }
+      
+      const results = await batchProcessRecordings(recordings, { model, language });
+      return json(res, 200, { results });
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Batch processing failed' 
+      });
+    }
+  }
+
+  // Conversation Learning Endpoints
+  if (url.pathname === '/api/conversations/threads') {
+    try {
+      const cache = await loadMailCache();
+      const cacheKey = url.searchParams.get('mailbox') || currentMailboxKey();
+      const mailbox = cache.mailboxes[cacheKey] || {};
+      const messages = mailbox.messages || [];
+      
+      const threads = groupByConversation(messages);
+      const stats = analyzeConversationPatterns(threads);
+      
+      return json(res, 200, { 
+        threads: threads.slice(0, 50),
+        stats,
+        total: threads.length 
+      });
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Thread analysis failed' 
+      });
+    }
+  }
+
+  if (url.pathname === '/api/conversations/replies') {
+    try {
+      const cache = await loadMailCache();
+      const cacheKey = url.searchParams.get('mailbox') || currentMailboxKey();
+      const mailbox = cache.mailboxes[cacheKey] || {};
+      const messages = mailbox.messages || [];
+      
+      const threads = groupByConversation(messages);
+      const replyPairs = [];
+      
+      for (const thread of threads) {
+        const pairs = matchReplyPair(thread.incoming, thread.outgoing);
+        replyPairs.push(...pairs);
+      }
+      
+      return json(res, 200, { 
+        replyPairs: replyPairs.slice(0, 50),
+        total: replyPairs.length 
+      });
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Reply matching failed' 
+      });
+    }
+  }
+
+  if (url.pathname === '/api/conversations/summary') {
+    try {
+      const threadId = url.searchParams.get('threadId');
+      if (!threadId) {
+        return json(res, 400, { message: 'threadId is required' });
+      }
+      
+      const cache = await loadMailCache();
+      const cacheKey = url.searchParams.get('mailbox') || currentMailboxKey();
+      const mailbox = cache.mailboxes[cacheKey] || {};
+      const messages = mailbox.messages || [];
+      
+      const threads = groupByConversation(messages);
+      const thread = threads.find(t => t.id === threadId);
+      
+      if (!thread) {
+        return json(res, 404, { message: 'Thread not found' });
+      }
+      
+      const summary = generateConversationSummary(thread);
+      return json(res, 200, summary);
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Summary generation failed' 
+      });
+    }
+  }
+
+  if (url.pathname === '/api/conversations/integrated') {
+    try {
+      const cache = await loadMailCache();
+      const cacheKey = url.searchParams.get('mailbox') || currentMailboxKey();
+      const mailbox = cache.mailboxes[cacheKey] || {};
+      const messages = mailbox.messages || [];
+      
+      // Load call recordings
+      const recordings = await loadCallRecordings();
+      
+      // Create integrated conversation threads
+      const threads = createConversationThread(messages, recordings);
+      
+      return json(res, 200, { 
+        threads: threads.slice(0, 50),
+        total: threads.length,
+        callCount: recordings.length
+      });
+    } catch (error) {
+      return json(res, 500, { 
+        message: error instanceof Error ? error.message : 'Integrated view failed' 
       });
     }
   }

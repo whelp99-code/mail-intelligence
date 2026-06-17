@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mail Intelligence</title>
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./conversation-styles.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -60,6 +61,7 @@
           <button id="loadOutlook" type="button" title="Graph에서 최근 메일을 다시 가져옵니다">전체 새로고침</button>
           <button id="kanbanToggle" type="button">칸반 보기</button>
           <button id="statsToggle" type="button">통계 보기</button>
+          <button id="conversationToggle" type="button">📞 대화 분석</button>
           <button id="themeToggle" type="button">🌙 다크모드</button>
         </div>
       </section>
@@ -191,6 +193,45 @@
             <div id="reminderList" class="stack"></div>
           </section>
         </aside>
+      </section>
+
+      <section id="conversationView" class="conversation-section hidden" aria-hidden="true">
+        <div class="conversation-header">
+          <h2>📞 통합 대화 분석</h2>
+          <div class="conversation-actions">
+            <button id="refreshConversations" type="button" class="btn-primary">🔄 새로고침</button>
+            <button id="transcribeAll" type="button" class="btn-secondary">🎤 전체 녹음 분석</button>
+          </div>
+        </div>
+        
+        <div class="conversation-stats">
+          <div class="stat-card">
+            <div class="stat-value" id="convStatThreads">-</div>
+            <div class="stat-label">메일 스레드</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="convStatReplies">-</div>
+            <div class="stat-label">회신 완료</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="convStatCalls">-</div>
+            <div class="stat-label">통화 녹음</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="convStatAvgResponse">-</div>
+            <div class="stat-label">평균 응답 시간</div>
+          </div>
+        </div>
+        
+        <div class="conversation-tabs">
+          <button class="tab-btn active" data-tab="threads">📧 메일 스레드</button>
+          <button class="tab-btn" data-tab="calls">📞 통화 녹음</button>
+          <button class="tab-btn" data-tab="integrated">🔗 통합 뷰</button>
+        </div>
+        
+        <div id="conversationContent" class="conversation-content">
+          <div class="loading">데이터 로딩 중...</div>
+        </div>
       </section>
     </main>
 
