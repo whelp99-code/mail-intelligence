@@ -933,18 +933,22 @@ async function refreshMailbox({ sync = 'auto', silent = false } = {}) {
 }
 
 async function bootMailbox() {
+  // Always try cache first, even if Graph API is not connected
+  const cached = await refreshMailbox({ sync: 'cache', silent: true });
+  if (cached?.messages?.length) {
+    fetchStatus.textContent = `캐시에서 ${cached.messages.length}건 메일을 표시했습니다.`;
+    await loadAttachments();
+    // Try auto sync in background if connected
+    if (outlookConnected) {
+      refreshMailbox({ sync: 'auto', silent: true }).then(() => loadAttachments());
+    }
+    return;
+  }
   if (!outlookConnected) {
     fetchStatus.textContent = 'Outlook 연결 설정 후 메일이 자동으로 동기화됩니다.';
     return;
   }
-  const cached = await refreshMailbox({ sync: 'cache', silent: true });
-  if (!cached?.messages?.length) {
-    await refreshMailbox({ sync: 'auto' });
-    await loadAttachments();
-    return;
-  }
-  fetchStatus.textContent = '캐시에서 메일을 표시했습니다. 변경분을 확인하는 중...';
-  await refreshMailbox({ sync: 'auto', silent: true });
+  await refreshMailbox({ sync: 'auto' });
   await loadAttachments();
 }
 
