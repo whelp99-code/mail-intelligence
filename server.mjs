@@ -84,10 +84,14 @@ const runtimeConfig = {
   refreshToken: '',
   expiresAt: 0,
   // F-AIOS-v3 Integration
-  aiProvider: 'f-aios-v3',  // 'f-aios-v3' | 'gemini' | 'lmstudio'
+  aiProvider: 'f-aios-v3',  // 'f-aios-v3' | 'gemini' | 'lmstudio' | 'mimo'
   faiosServerUrl: 'http://localhost:3201',
   lmstudioUrl: 'http://localhost:1234',
-  lmstudioModel: 'qwen/qwen3.5-9b'
+  lmstudioModel: 'qwen/qwen3.5-9b',
+  // MiMo Integration
+  mimoApiKey: '',
+  mimoModel: 'MiMo-V2.5',
+  mimoBaseUrl: 'https://api.xiaomimimo.com/v1'
 };
 const pendingOAuth = new Map();
 
@@ -384,7 +388,11 @@ function configStatus() {
     hasTenantId: Boolean(getConfigValue('tenantId', 'MICROSOFT_TENANT_ID')),
     hasClientId: Boolean(getConfigValue('clientId', 'MICROSOFT_CLIENT_ID')),
     hasClientSecret: Boolean(getConfigValue('clientSecret', 'MICROSOFT_CLIENT_SECRET')),
-    hasGeminiApiKey: Boolean(getConfigValue('geminiApiKey', 'GEMINI_API_KEY'))
+    hasGeminiApiKey: Boolean(getConfigValue('geminiApiKey', 'GEMINI_API_KEY')),
+    // MiMo settings
+    mimoModel: runtimeConfig.mimoModel || 'MiMo-V2.5',
+    mimoBaseUrl: runtimeConfig.mimoBaseUrl || 'https://api.xiaomimimo.com/v1',
+    hasMiMoApiKey: Boolean(runtimeConfig.mimoApiKey || getConfigValue('mimoApiKey', 'MIMO_API_KEY'))
   };
 }
 
@@ -1172,12 +1180,26 @@ function clip(value = '', max = 5000) {
 
 function extractJson(text) {
   const raw = String(text || '').trim();
+  if (!raw) throw new Error('AI returned empty response.');
   try {
     return JSON.parse(raw);
   } catch {
     const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('Gemini response did not contain JSON.');
-    return JSON.parse(match[0]);
+    if (!match) throw new Error(`AI response did not contain JSON. Response: ${raw.slice(0, 200)}`);
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      // Try to fix common JSON errors (trailing commas, unclosed arrays)
+      let fixed = match[0]
+        .replace(/,\s*([}\]])/g, '$1')  // Remove trailing commas
+        .replace(/"\s*\n\s*"/g, '","')  // Fix missing commas between strings
+        .replace(/]\s*\n\s*"/g, '],"')  // Fix missing commas after arrays
+        .replace(/}\s*\n\s*"/g, '},"')  // Fix missing commas after objects
+        .replace(/,\s*,/g, ',')         // Remove double commas
+        .replace(/\[\s*,/g, '[')        // Remove leading commas in arrays
+        .replace(/,\s*\]/g, ']');       // Remove trailing commas in arrays
+      return JSON.parse(fixed);
+    }
   }
 }
 
@@ -1275,6 +1297,9 @@ async function callProviderPrompt(prompt, { maxTokens = 1800, timeoutMs = 25000 
   }
   if (provider === 'gemini') {
     return { aiText: await callGeminiApi(prompt), provider };
+  }
+  if (provider === 'mimo') {
+    return { aiText: await callMiMoApi(prompt, { maxTokens, timeoutMs }), provider };
   }
   return { aiText: await callLmStudioGeneric(prompt, { maxTokens, timeoutMs }), provider };
 }
@@ -1419,6 +1444,8 @@ async function enrichWithAI(messages, result) {
       aiText = await callFaiosServer(prompt);
     } else if (provider === 'gemini') {
       aiText = await callGeminiApi(prompt);
+    } else if (provider === 'mimo') {
+      aiText = await callMiMoApi(prompt, { maxTokens: 2000, timeoutMs: 120000 });
     } else {
       aiText = await callLmStudio(prompt);
     }
@@ -1582,10 +1609,10 @@ async function handleApi(req, res) {
     if (req.method === 'POST') {
       try {
         const body = await readJsonBody(req);
-        for (const key of ['tenantId', 'clientId', 'mailboxUser', 'loginTenant', 'geminiModel', 'aiProvider', 'faiosServerUrl', 'lmstudioUrl', 'lmstudioModel']) {
+        for (const key of ['tenantId', 'clientId', 'mailboxUser', 'loginTenant', 'geminiModel', 'aiProvider', 'faiosServerUrl', 'lmstudioUrl', 'lmstudioModel', 'mimoModel', 'mimoBaseUrl']) {
           if (typeof body[key] === 'string') runtimeConfig[key] = body[key].trim();
         }
-        for (const key of ['accessToken', 'clientSecret', 'geminiApiKey']) {
+        for (const key of ['accessToken', 'clientSecret', 'geminiApiKey', 'mimoApiKey']) {
           if (typeof body[key] === 'string' && body[key].trim()) runtimeConfig[key] = body[key].trim();
         }
         if (body.persist !== false) await savePersistedConfig();
@@ -2218,6 +2245,7 @@ server.listen(port, () => {
 function getModelName(provider) {
   if (provider === 'f-aios-v3') return 'F-AIOS-v3 (via LM Studio)';
   if (provider === 'gemini') return runtimeConfig.geminiModel || 'gemini-2.5-flash';
+  if (provider === 'mimo') return runtimeConfig.mimoModel || 'MiMo-V2.5';
   return runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
 }
 
@@ -2364,6 +2392,45 @@ async function callGeminiApi(prompt) {
   return payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
 }
 
+async function callMiMoApi(prompt, { maxTokens = 2400, timeoutMs = 60000 } = {}) {
+  const apiKey = runtimeConfig.mimoApiKey || getConfigValue('mimoApiKey', 'MIMO_API_KEY');
+  if (!apiKey) throw new Error('MiMo API key not configured');
+  
+  const model = runtimeConfig.mimoModel || 'MiMo-V2.5';
+  const baseUrl = (runtimeConfig.mimoBaseUrl || 'https://api.xiaomimimo.com/v1').replace(/\/+$/, '');
+  
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: 'You are an AI email analysis assistant. You MUST respond with ONLY valid JSON, no markdown, no explanation, no thinking.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.1,
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' }
+    })
+  });
+  
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`MiMo API error: ${response.status} ${text}`);
+  }
+  
+  const payload = await response.json();
+  const choice = payload.choices?.[0]?.message || {};
+  // MiMo is a reasoning model - combine reasoning + content
+  const content = choice.content || '';
+  const reasoning = choice.reasoning_content || '';
+  return content || reasoning || '';
+}
+
 async function callLmStudioGeneric(prompt, { maxTokens = 1800, timeoutMs = 25000 } = {}) {
   const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
   const response = await fetch(`${getLmStudioUrl()}/v1/chat/completions`, {
@@ -2391,7 +2458,7 @@ async function callLmStudio(prompt) {
   const response = await fetch(`${getLmStudioUrl()}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(120000),
     body: JSON.stringify({
       model,
       messages: [{ role: 'user', content: prompt }],
