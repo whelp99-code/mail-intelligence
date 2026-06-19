@@ -77,7 +77,10 @@ let activeFilter = 'all';
 let searchQuery = '';
 let selectedMessageId = '';
 let attachmentEntries = [];
+let lastSyncedAt = null;
+let restoredUiState = null;
 const LAST_MAILBOX_KEY = 'mail-intelligence-last-mailbox';
+const UI_STATE_KEY = 'mi-ui-state';
 
 function ui() {
   return {
@@ -254,6 +257,7 @@ function messageCard(message) {
   article.innerHTML = `
     <div class="message-row">
       <strong class="message-subject"></strong>
+      <span class="urgency-badge"></span>
       <span class="status-pill"></span>
     </div>
     <div class="message-meta"></div>
@@ -262,6 +266,15 @@ function messageCard(message) {
   `;
   article.querySelector('.message-subject').textContent = message.subject || '(제목 없음)';
   article.querySelector('.status-pill').textContent = `${statusLabel(lane)}${insight?.userFeedback ? ' · 내 보정' : ''}`;
+  const urgencyEl = article.querySelector('.urgency-badge');
+  if (typeof insight?.urgency === 'number') {
+    const u = insight.urgency;
+    urgencyEl.textContent = u;
+    urgencyEl.className = `urgency-badge ${u >= 80 ? 'urgency-high' : u >= 50 ? 'urgency-mid' : u >= 30 ? 'urgency-low' : 'urgency-minimal'}`;
+    urgencyEl.style.display = '';
+  } else {
+    urgencyEl.style.display = 'none';
+  }
   article.querySelector('.message-meta').textContent = `${message.isRead ? '읽음' : '읽지않음'} · ${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}${insight?.isSpamCandidate ? ' · 광고성 후보' : ''}${insight?.isOnHold ? ' · 보류' : ''}`;
   article.querySelector('.message-summary').textContent = insight?.summary?.[0] || message.bodyPreview || '';
   article.querySelector('.message-next').textContent = insight?.nextActions?.[0]?.recommendedAction || '후속 필요 여부 확인';
@@ -326,16 +339,25 @@ function recommendedAttachment(action) {
   return '첨부 추천 없음. 필요 시 custom에서 직접 지정';
 }
 
-async function prepareReplyDraft(action) {
+async function prepareReplyDraft(action, selectedTone) {
   if (!action?.messageId) {
     mountComposer(action);
     return;
   }
   fetchStatus.textContent = '선택한 메일의 회신 초안을 생성하는 중입니다...';
   try {
-    const response = await fetch(`/api/outlook/reply-draft?messageId=${encodeURIComponent(action.messageId)}`);
+    const toneParam = selectedTone ? `&tone=${encodeURIComponent(selectedTone)}` : '';
+    const response = await fetch(`/api/outlook/reply-draft?messageId=${encodeURIComponent(action.messageId)}${toneParam}`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.message || '회신 초안 생성 실패');
+
+    // Show tone picker if multiple options available and no tone selected
+    if (Array.isArray(payload.options) && payload.options.length > 1 && !selectedTone) {
+      showTonePicker(action, payload);
+      fetchStatus.textContent = '회신 톤을 선택해주세요.';
+      return;
+    }
+
     mountComposer({
       ...action,
       to: payload.to || action.to || '',
@@ -349,6 +371,37 @@ async function prepareReplyDraft(action) {
     fetchStatus.textContent = error instanceof Error ? error.message : '회신 초안 생성 실패';
     mountComposer(action);
   }
+}
+
+function showTonePicker(action, payload) {
+  const existing = document.querySelector('.tone-picker-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.className = 'tone-picker-modal';
+  modal.innerHTML = `
+    <div class="tone-picker-content">
+      <h4>회신 톤 선택</h4>
+      <div class="tone-options">
+        ${payload.options.map((opt) => `
+          <button class="tone-option" data-tone="${opt.tone}">
+            <strong>${opt.label || opt.tone}</strong>
+            <span class="tone-preview">${(opt.body || '').slice(0, 80)}...</span>
+          </button>
+        `).join('')}
+      </div>
+      <button class="tone-picker-close" onclick="this.closest('.tone-picker-modal').remove()">취소</button>
+    </div>
+  `;
+
+  modal.querySelectorAll('.tone-option').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      modal.remove();
+      prepareReplyDraft(action, btn.dataset.tone);
+    });
+  });
+
+  document.body.appendChild(modal);
 }
 
 function simpleCard(item, className = 'active') {
@@ -417,7 +470,7 @@ function mailComposer(action) {
     <section class="mail-composer" data-compose-action="${escapeHtml(action.id)}">
       <div class="composer-head">
         <h4>발송 메일 편집</h4>
-        <span id="sendStatus">보낸 메일함에 저장됩니다.</span>
+        <span id="sendStatus">보낸 메일함에 저장됩니다. 승인 환경에서는 최종 승인 후 발송됩니다.</span>
       </div>
       <label>받는 사람
         <input id="composeTo" type="email" value="${escapeHtml(action.to || '')}" />
@@ -463,6 +516,15 @@ function mountComposer(action) {
   });
   mount.querySelector('#sendMail').addEventListener('click', sendComposedMail);
   mount.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // Fetch approval status and update UI
+  fetch('/api/outlook/approval-status').then((res) => res.json()).then((info) => {
+    const sendStatus = mount.querySelector('#sendStatus');
+    const sendBtn = mount.querySelector('#sendMail');
+    if (info.requireApproval) {
+      if (sendStatus) sendStatus.innerHTML = '⚠️ <strong>승인 필요 환경</strong> — 발송 시 AIOS approval이 필요합니다.';
+      if (sendBtn) sendBtn.textContent = '발송 요청';
+    }
+  }).catch(() => {});
 }
 
 function selectMessage(messageId) {
@@ -512,6 +574,7 @@ function selectMessage(messageId) {
     ?.closest('.thread-card')
     ?.classList.add('selected');
   renderActionPanel();
+  persistMailboxUiState();
 }
 
 async function markMessageRead(messageId) {
@@ -587,20 +650,39 @@ async function sendComposedMail() {
     return;
   }
   button.disabled = true;
-  status.textContent = 'Outlook으로 발송 중입니다.';
+  status.textContent = '발송 요청 처리 중입니다.';
   try {
-    const response = await fetch('/api/outlook/send', {
+    const response = await fetch('/api/outlook/send-request', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || '메일 발송 실패');
-    status.textContent = `발송 완료 · 보낸 메일함 저장 · ${new Date(result.sentAt).toLocaleString('ko-KR')}`;
+    if (!response.ok) {
+      throw new Error(result.message || '발송 요청 실패');
+    }
+    if (result.approvalStatus === 'pending') {
+      status.innerHTML = `<strong style="color:var(--urgent)">발송 승인 대기</strong> — 요청 ID: ${escapeHtml(result.requestId)}. 현재 앱에서는 대기 요청만 생성하며, AIOS 승인 처리 후 상태를 다시 확인해야 합니다.`;
+      button.textContent = '대기 요청 생성됨';
+      button.disabled = true;
+      return;
+    }
+    if (result.approvalStatus === 'sent') {
+      status.innerHTML = `<strong style="color:var(--done)">✓ 발송 완료</strong> · ${new Date().toLocaleString('ko-KR')}`;
+      button.textContent = '발송 완료';
+    } else if (result.approvalStatus === 'failed') {
+      status.innerHTML = `<strong style="color:var(--urgent)">✗ 발송 실패</strong> — ${escapeHtml(result.error || '알 수 없는 오류')}`;
+      button.disabled = false;
+      button.textContent = 'Outlook으로 발송';
+    } else {
+      status.innerHTML = `<strong>요청 생성 완료</strong> — 상태: ${escapeHtml(result.approvalStatus)}`;
+      button.disabled = false;
+      button.textContent = 'Outlook으로 발송';
+    }
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : '메일 발송 실패';
-  } finally {
     button.disabled = false;
+    button.textContent = 'Outlook으로 발송';
   }
 }
 
@@ -795,12 +877,48 @@ function formatSyncLabel(sync, messageCount) {
   return `${modeLabel} · 신규 ${sync.newCount || 0}건 · 변경 ${sync.updatedCount || 0}건 · 전체 ${sync.totalCached || messageCount}건`;
 }
 
+function persistMailboxUiState() {
+  try {
+    sessionStorage.setItem(UI_STATE_KEY, JSON.stringify({
+      selectedMessageId,
+      activeFilter,
+      searchQuery,
+      viewMode: document.body.classList.contains('kanban-mode') ? 'kanban'
+        : document.body.classList.contains('stats-mode') ? 'stats'
+          : 'list',
+      attachmentOpen: !attachmentExplorer?.classList.contains('hidden')
+    }));
+  } catch {
+    // Ignore session state failures.
+  }
+}
+
 function persistMailboxPayload(payload) {
   try {
     sessionStorage.setItem(LAST_MAILBOX_KEY, JSON.stringify(payload));
+    persistMailboxUiState();
   } catch {
-    // ignore session cache failures
+    // Ignore session cache failures.
   }
+}
+
+function readPersistedUiState() {
+  try {
+    const raw = sessionStorage.getItem(UI_STATE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function restoreUiPresentation(uiState) {
+  if (!uiState) return;
+  if (uiState.viewMode === 'kanban') {
+    document.querySelector('#kanbanToggle')?.click();
+  } else if (uiState.viewMode === 'stats') {
+    document.querySelector('#statsToggle')?.click();
+  }
+  if (uiState.attachmentOpen) openAttachmentExplorer();
 }
 
 function restorePersistedMailbox() {
@@ -809,6 +927,13 @@ function restorePersistedMailbox() {
     if (!raw) return false;
     const payload = JSON.parse(raw);
     if (!payload?.messages?.length || !payload?.result) return false;
+    restoredUiState = readPersistedUiState();
+    if (restoredUiState?.activeFilter) activeFilter = restoredUiState.activeFilter;
+    if (typeof restoredUiState?.searchQuery === 'string') {
+      searchQuery = restoredUiState.searchQuery;
+      mailSearch.value = restoredUiState.searchQuery;
+    }
+    if (restoredUiState?.selectedMessageId) selectedMessageId = restoredUiState.selectedMessageId;
     applyMailboxPayload(payload, { persist: false });
     fetchStatus.textContent = '직전 메일 캐시를 먼저 표시했습니다. 변경분을 확인하는 중...';
     return true;
@@ -828,25 +953,41 @@ function renderSidebar() {
   sidebarAccount.innerHTML = `
     <strong>${escapeHtml(accountLabel)}</strong>
     <span>${outlookConnected ? '증분 동기화 사용 중' : '연결 필요'} · 전체 ${currentMessages.length}건 · 미읽음 ${unreadCount}건</span>
+    ${lastSyncedAt ? `<span class="sidebar-sync-time">마지막 동기화: ${new Date(lastSyncedAt).toLocaleString('ko-KR')}</span>` : ''}
   `;
   folderList.innerHTML = [
     { key: 'all', label: '받은편지함', count: currentMessages.length },
     { key: 'unread', label: '읽지 않음', count: unreadCount },
     { key: 'urgent', label: '긴급', count: countsByStatus.urgent },
+    { key: 'active', label: '진행중', count: countsByStatus.active },
     { key: 'waiting', label: '대기', count: countsByStatus.waiting },
     { key: 'done', label: '완료', count: countsByStatus.done },
     { key: 'attachments', label: '첨부 보관함', count: attachmentEntries.length }
   ].map((item) => `
-    <button type="button" class="folder-item" data-folder="${item.key}">
+    <button type="button" class="folder-item${activeFilter === item.key ? ' selected' : ''}" data-folder="${item.key}">
       <span>${item.label}</span>
       <strong>${item.count}</strong>
     </button>
   `).join('');
+  // Smart recommendations
+  const replyNeeded = currentMessages.filter((m) => {
+    const ins = insightFor(m.id);
+    const status = effectiveStatus(ins);
+    return (status === 'urgent' || status === 'active') && !m.isRead;
+  }).length;
+  const approvalPending = 0; // Will be populated when approval queue is active
+  const attachmentReusable = attachmentEntries.length;
   sidebarIdeas.innerHTML = [
-    '왼쪽 사이드바에 계정별 폴더와 미읽음/긴급/대기 큐를 고정했습니다.',
-    '첨부 보관함을 별도 페이지처럼 열어 과거 발송 자료를 다시 찾을 수 있게 했습니다.',
-    '회신 초안은 선택 메일 기준으로 동일 스레드와 과거 발신 메일을 참고해 생성합니다.'
-  ].map((text) => `<div class="idea-item">${escapeHtml(text)}</div>`).join('');
+    { icon: '↩', label: '답장 필요', count: replyNeeded, filter: 'unread' },
+    { icon: '⏳', label: '승인 대기', count: approvalPending },
+    { icon: '📎', label: '첨부 재사용 가능', count: attachmentReusable, filter: 'attachments' }
+  ].map((item) => `
+    <div class="recommendation-item${item.filter ? ' clickable' : ''}" data-folder="${item.filter || ''}">
+      <span class="rec-icon">${item.icon}</span>
+      <span class="rec-label">${item.label}</span>
+      <strong class="rec-count">${item.count}건</strong>
+    </div>
+  `).join('');
 
   folderList.querySelectorAll('.folder-item').forEach((button) => {
     button.addEventListener('click', () => {
@@ -866,12 +1007,38 @@ function renderSidebar() {
       renderFilteredView();
     });
   });
+  // Recommendation click handlers
+  sidebarIdeas.querySelectorAll('.recommendation-item.clickable').forEach((item) => {
+    item.addEventListener('click', () => {
+      const folder = item.dataset.folder;
+      if (folder === 'attachments') {
+        openAttachmentExplorer();
+        return;
+      }
+      if (folder) {
+        activeFilter = folder;
+        renderFilteredView();
+      }
+    });
+  });
 }
+
+let attachmentCategory = 'all';
 
 function renderAttachments(entries = attachmentEntries) {
   if (!attachmentList || !attachmentCount) return;
   const query = (attachmentSearch?.value || '').trim().toLowerCase();
   const filtered = entries.filter((entry) => {
+    // Category filter
+    if (attachmentCategory !== 'all') {
+      const cat = (entry.category || entry.categoryLabel || 'other').toLowerCase();
+      if (attachmentCategory === 'document' && !/doc|pdf|text|txt|rtf|hwp/i.test(cat + entry.name)) return false;
+      if (attachmentCategory === 'spreadsheet' && !/sheet|xls|csv|xlsx/i.test(cat + entry.name)) return false;
+      if (attachmentCategory === 'presentation' && !/presentation|ppt|pptx|slides/i.test(cat + entry.name)) return false;
+      if (attachmentCategory === 'sales' && !/sales|견적|quote|proposal|제안|proposal/i.test(cat + entry.name + (entry.subject || ''))) return false;
+      if (attachmentCategory === 'other' && /doc|pdf|sheet|xls|presentation|ppt|sales|견적|quote|proposal/i.test(cat + entry.name)) return false;
+    }
+    // Search filter
     const haystack = [
       entry.name,
       entry.subject,
@@ -891,7 +1058,7 @@ function renderAttachments(entries = attachmentEntries) {
           <span class="status-pill">${escapeHtml(entry.categoryLabel || entry.category || '기타')}</span>
         </div>
         <div class="attachment-meta">${escapeHtml(entry.fromName || entry.from || 'unknown')} · ${entry.receivedAt ? new Date(entry.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${(entry.size || 0).toLocaleString('ko-KR')} bytes</div>
-        <div class="attachment-subject">${escapeHtml(entry.subject || '')}</div>
+        ${entry.subject ? `<div class="attachment-subject">메일: ${escapeHtml(entry.subject)}</div>` : ''}
         <div class="attachment-tags">${[...(entry.tags || []), ...(entry.aiTags || [])].slice(0, 6).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
       </article>
     `).join('')
@@ -903,12 +1070,14 @@ function openAttachmentExplorer() {
   attachmentExplorer.classList.remove('hidden');
   attachmentExplorer.setAttribute('aria-hidden', 'false');
   renderAttachments();
+  persistMailboxUiState();
 }
 
 function closeAttachmentExplorer() {
   if (!attachmentExplorer) return;
   attachmentExplorer.classList.add('hidden');
   attachmentExplorer.setAttribute('aria-hidden', 'true');
+  persistMailboxUiState();
 }
 
 async function loadAttachments() {
@@ -937,6 +1106,7 @@ function applyMailboxPayload(payload, { persist = true } = {}) {
     : `Outlook 인증값이 없어 데모 메일로 분석했습니다. ${payload.message}`;
   connectionStatus.textContent = payload.connected ? `Outlook 연결됨 (${payload.mode})` : 'Outlook 인증값 필요';
   render(payload.result, payload.messages);
+  lastSyncedAt = sync?.lastSyncedAt || null;
   renderSidebar();
   if (persist) persistMailboxPayload(payload);
 }
@@ -1140,6 +1310,7 @@ window.selectMessage = selectMessage;
 window.saveFeedback = saveFeedback;
 window.renderFilteredView = renderFilteredView;
 window.mountComposer = mountComposer;
+window.persistMailboxUiState = persistMailboxUiState;
 
 loadStatus().then(() => bootMailbox());
 restorePersistedMailbox();
@@ -1151,6 +1322,7 @@ initTheme();
 initSearch();
 initNotifications();
 initConversationView();
+restoreUiPresentation(restoredUiState);
 
 // Conversation toggle
 const conversationToggle = document.getElementById('conversationToggle');
@@ -1194,6 +1366,36 @@ if (refreshConversations) {
 openAttachments?.addEventListener('click', openAttachmentExplorer);
 closeAttachments?.addEventListener('click', closeAttachmentExplorer);
 attachmentSearch?.addEventListener('input', () => renderAttachments());
+const refreshAttachments = document.querySelector('#refreshAttachments');
+if (refreshAttachments) {
+  refreshAttachments.addEventListener('click', async () => {
+    refreshAttachments.disabled = true;
+    refreshAttachments.textContent = '재탐색 중...';
+    try {
+      const syncRes = await fetch('/api/outlook/attachments/sync', { method: 'POST' });
+      const syncResult = await syncRes.json();
+      if (!syncRes.ok) throw new Error(syncResult.message || '첨부 동기화 실패');
+      await loadAttachments();
+      refreshAttachments.textContent = `재탐색 완료 (${syncResult.syncedEntries || 0}건)`;
+      setTimeout(() => { refreshAttachments.textContent = '과거 자료 재탐색'; }, 3000);
+    } catch (error) {
+      refreshAttachments.textContent = `오류: ${error instanceof Error ? error.message : '재탐색 실패'}`;
+      setTimeout(() => { refreshAttachments.textContent = '과거 자료 재탐색'; }, 5000);
+    } finally {
+      refreshAttachments.disabled = false;
+    }
+  });
+}
+// Attachment category filter
+document.querySelectorAll('#attachmentCategoryFilter .cat-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#attachmentCategoryFilter .cat-btn').forEach((b) => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    attachmentCategory = btn.dataset.cat;
+    renderAttachments();
+  });
+});
+
 
 // --- Column Resize (Drag & Drop) ---
 function initColumnResize() {

@@ -3,7 +3,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { analyzeMessages } from './src/analyzer.js';
+import { analyzeMessages, urgencyScore } from './src/analyzer.js';
 import {
   groupMessagesByThread,
   normalizedSubjectKey,
@@ -20,7 +20,8 @@ import {
   unifyGroupKeysBySubject
 } from './src/threadGrouping.mjs';
 import { DATA_FILES, ensureDataDir, resolveDataPath } from './src/dataPaths.mjs';
-import { checkDestructiveApproval } from './src/destructiveApi.mjs';
+import { checkDestructiveApproval, isDestructiveApi } from './src/destructiveApi.mjs';
+import { createSendRequestStore, toSendRequestResponse } from './src/sendRequests.mjs';
 import {
   filterThreadsForIngest,
   toAttachmentRefs,
@@ -28,7 +29,8 @@ import {
   toEntityCandidates,
   toInsightThreads,
   toMailSyncResult,
-  toTaskCandidates
+  toTaskCandidates,
+  toApprovalContract
 } from './src/portalBridge.mjs';
 import { runDeltaSync } from './src/graphDelta.mjs';
 import { scheduleDebouncedAnalyze } from './src/webhookDebounce.mjs';
@@ -94,6 +96,7 @@ const runtimeConfig = {
   mimoBaseUrl: 'https://api.xiaomimimo.com/v1'
 };
 const pendingOAuth = new Map();
+const sendRequestStore = createSendRequestStore();
 
 async function initDataPaths() {
   await ensureDataDir();
@@ -810,21 +813,39 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
   for (const folder of folderTargets) {
     const alwaysRecentSent = folder.mailFolder === 'sentitems' && !isInitialSync;
     if (folder.mailFolder === 'inbox' && !isInitialSync && mailboxCache.deltaLink) {
-      try {
-        const deltaResult = await runDeltaSync({
-          accessToken,
-          mailboxBase,
-          mailFolder: 'inbox',
-          deltaLink: mailboxCache.deltaLink,
-          normalizeMessage: normalizeGraphMessage,
-          maxPages: Number(process.env.MAIL_DELTA_MAX_PAGES || 10)
-        });
-        incomingMessages.push(...deltaResult.messages);
-        mailboxCache.deltaLink = deltaResult.deltaLink || mailboxCache.deltaLink;
-        deltaUsed = true;
-        continue;
-      } catch (error) {
-        console.warn('Delta sync failed, falling back:', error instanceof Error ? error.message : error);
+      const deltaExpired = mailboxCache.deltaLinkExpires && new Date(mailboxCache.deltaLinkExpires).getTime() < Date.now();
+      if (deltaExpired) {
+        console.warn('Delta link expired, clearing and falling back to incremental sync.');
+        mailboxCache.deltaLink = null;
+        mailboxCache.deltaLinkExpires = null;
+      } else {
+        try {
+          const deltaResult = await runDeltaSync({
+            accessToken,
+            mailboxBase,
+            mailFolder: 'inbox',
+            deltaLink: mailboxCache.deltaLink,
+            normalizeMessage: normalizeGraphMessage,
+            maxPages: Number(process.env.MAIL_DELTA_MAX_PAGES || 10)
+          });
+          incomingMessages.push(...deltaResult.messages);
+          if (deltaResult.deltaLink && deltaResult.deltaLink !== mailboxCache.deltaLink) {
+            mailboxCache.deltaLink = deltaResult.deltaLink;
+            mailboxCache.deltaLinkExpires = new Date(Date.now() + 25 * 24 * 60 * 60 * 1000).toISOString();
+          } else {
+            mailboxCache.deltaLink = deltaResult.deltaLink || mailboxCache.deltaLink;
+          }
+          deltaUsed = true;
+          continue;
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          console.warn('Delta sync failed, falling back:', errorMsg);
+          if (/400|401|403|404|410/.test(errorMsg) || /expired|invalid/i.test(errorMsg)) {
+            mailboxCache.deltaLink = null;
+            mailboxCache.deltaLinkExpires = null;
+            console.warn('Delta link cleared due to persistent error; next sync will re-seed.');
+          }
+        }
       }
     }
     const folderMessages = await fetchGraphMessages({
@@ -848,7 +869,11 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
         normalizeMessage: normalizeGraphMessage,
         maxPages: 1
       });
-      if (seed.deltaLink) mailboxCache.deltaLink = seed.deltaLink;
+      if (seed.deltaLink) {
+        mailboxCache.deltaLink = seed.deltaLink;
+        // Graph delta links expire ~30 days from creation; record 25-day safety window.
+        mailboxCache.deltaLinkExpires = new Date(Date.now() + 25 * 24 * 60 * 60 * 1000).toISOString();
+      }
     } catch {
       // Delta seed optional on first run.
     }
@@ -968,10 +993,35 @@ async function loadAttachmentArchive() {
 }
 
 async function syncOutlookAttachmentArchive(top = 10) {
-  const accessToken = await getGraphAccessToken();
+  let accessToken;
+  try {
+    accessToken = await getGraphAccessToken();
+  } catch (authError) {
+    const msg = authError instanceof Error ? authError.message : '';
+    const code = /invalid_client/i.test(msg) ? 'invalid_client'
+      : /refresh/i.test(msg) ? 'refresh_failed'
+        : 'auth_error';
+    const error = new Error(msg || 'Microsoft Graph 인증 실패');
+    error.statusCode = 401;
+    error.structuredError = {
+      code,
+      retryable: code !== 'invalid_client',
+      action: code === 'invalid_client'
+        ? 'Microsoft App Registration의 client secret value를 재설정하세요. (client secret ID가 아닌 value를 사용해야 합니다)'
+        : code === 'refresh_failed'
+          ? 'refresh token이 만료되었습니다. Outlook 재로그인이 필요합니다.'
+          : 'Microsoft Graph 인증 설정을 확인하세요.'
+    };
+    throw error;
+  }
   if (!accessToken) {
     const error = new Error('Microsoft Graph credentials are not configured.');
     error.statusCode = 503;
+    error.structuredError = {
+      code: 'not_configured',
+      retryable: false,
+      action: 'Outlook 연결 설정에서 Client ID, Tenant ID, Client Secret을 입력하세요.'
+    };
     throw error;
   }
 
@@ -1009,7 +1059,32 @@ function findRelatedMessages(mailboxMessages, message) {
   return [message];
 }
 
-function buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries }) {
+function findSenderHistory(mailboxMessages, message) {
+  if (!message) return { received: [], sent: [] };
+  const senderEmail = emailAddress(message.from || '').toLowerCase();
+  const senderDomain = senderEmail.split('@')[1] || '';
+  const received = mailboxMessages
+    .filter((item) =>
+      item.id !== message.id &&
+      item.mailFolder !== 'sentitems' &&
+      emailAddress(item.from || '').toLowerCase() === senderEmail
+    )
+    .sort((a, b) => new Date(b.receivedAt || 0) - new Date(a.receivedAt || 0))
+    .slice(0, 5);
+  const sent = mailboxMessages
+    .filter((item) =>
+      item.mailFolder === 'sentitems' &&
+      (item.to || []).some((toAddr) => {
+        const toEmail = typeof toAddr === 'string' ? emailAddress(toAddr) : emailAddress(toAddr?.emailAddress?.address || toAddr?.address || '');
+        return toEmail.toLowerCase() === senderEmail || (senderDomain && toEmail.toLowerCase().endsWith(`@${senderDomain}`));
+      })
+    )
+    .sort((a, b) => new Date(b.receivedAt || 0) - new Date(a.receivedAt || 0))
+    .slice(0, 3);
+  return { received, sent };
+}
+
+function buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries, senderHistory }) {
   const recentThread = relatedMessages
     .slice(0, 8)
     .map((item) => ({
@@ -1028,22 +1103,43 @@ function buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries }) 
     from: entry.fromName || entry.from,
     tags: [...(entry.tags || []), ...(entry.aiTags || [])].slice(0, 6)
   }));
+  const senderReceivedContext = (senderHistory?.received || []).map((item) => ({
+    id: item.id,
+    from: item.fromName || item.from,
+    receivedAt: item.receivedAt,
+    subject: item.subject,
+    body: clip(item.body || item.bodyPreview, 400)
+  }));
+  const senderSentContext = (senderHistory?.sent || []).map((item) => ({
+    id: item.id,
+    to: item.to || [],
+    receivedAt: item.receivedAt,
+    subject: item.subject,
+    body: clip(item.body || item.bodyPreview, 400)
+  }));
 
   return `Return ONLY valid JSON. No markdown.
 
-You are drafting the single best Korean business email reply for the selected message.
+You are drafting Korean business email reply options for the selected message.
 Use the mailbox history and past sent emails as style/context evidence.
 Do not invent promises, dates, attachments, or technical facts not grounded in the context.
 If something is missing, ask for it briefly.
+Generate exactly 3 reply options with different tones: formal (격식체), casual (비격식체), brief (간결체).
 
 Required JSON shape:
 {
   "to": "recipient email",
   "cc": "",
-  "subject": "reply subject",
-  "body": "full Korean email draft",
+  "options": [
+    { "tone": "formal", "subject": "reply subject", "body": "full formal Korean email", "label": "격식체" },
+    { "tone": "casual", "subject": "reply subject", "body": "casual Korean email", "label": "비격식체" },
+    { "tone": "brief", "subject": "reply subject", "body": "brief 2-3 sentence email", "label": "간결체" }
+  ],
   "reasoning": "short Korean explanation",
-  "recommendedAttachments": ["attachment names or document hints"]
+  "recommendedAttachments": ["attachment names or document hints"],
+  "sourceEvidence": ["evidence sources used"],
+  "confidence": "low|medium|high",
+  "requiresHumanCheck": false
 }
 
 Selected message:
@@ -1059,6 +1155,12 @@ ${JSON.stringify({
 
 Related thread and past mailbox history:
 ${JSON.stringify(recentThread, null, 2)}
+
+Same sender's past received emails (for context and style):
+${JSON.stringify(senderReceivedContext, null, 2)}
+
+Past emails sent to this sender/domain (for tone matching):
+${JSON.stringify(senderSentContext, null, 2)}
 
 Possible attachment references:
 ${JSON.stringify(attachmentContext, null, 2)}`;
@@ -1087,7 +1189,10 @@ async function callLmStudioReplyDraft(prompt) {
               subject: { type: 'string' },
               body: { type: 'string' },
               reasoning: { type: 'string' },
-              recommendedAttachments: { type: 'array', items: { type: 'string' } }
+              recommendedAttachments: { type: 'array', items: { type: 'string' } },
+              sourceEvidence: { type: 'array', items: { type: 'string' } },
+              confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+              requiresHumanCheck: { type: 'boolean' }
             },
             required: ['to', 'cc', 'subject', 'body', 'reasoning', 'recommendedAttachments']
           }
@@ -1106,7 +1211,9 @@ async function callLmStudioReplyDraft(prompt) {
 }
 
 function buildFallbackReplyDraft(message, relatedMessages, attachmentEntries) {
-  const recentSent = relatedMessages.find((item) => item.mailFolder === 'sent');
+  const recentSent = relatedMessages.find((item) =>
+    ['sentitems', 'sent'].includes(String(item.mailFolder || '').toLowerCase())
+  );
   const senderName = message.fromName || '담당자';
   const attachmentHints = attachmentEntries.slice(0, 3).map((entry) => entry.name);
   return {
@@ -1120,18 +1227,24 @@ function buildFallbackReplyDraft(message, relatedMessages, attachmentEntries) {
       '',
       recentSent?.body
         ? `이전 회신 이력을 참고해 동일한 흐름으로 정리하겠습니다.\n- ${compactText(recentSent.body, 180)}`
-        : `요청하신 내용 기준으로 필요한 확인 사항과 진행 일정을 정리해 회신드립니다.`,
+        : '요청하신 내용 기준으로 필요한 확인 사항과 진행 일정을 정리해 회신드립니다.',
       '',
       '추가로 필요한 자료나 확인 항목이 있으면 회신 부탁드립니다.',
       '',
       '감사합니다.'
     ].join('\n'),
     reasoning: '로컬 메일 캐시의 동일 스레드/발신 이력을 기준으로 기본 회신 초안을 구성했습니다.',
-    recommendedAttachments: attachmentHints.length ? attachmentHints : ['관련 제안서/매뉴얼/기존 발송자료 확인']
+    recommendedAttachments: attachmentHints.length ? attachmentHints : ['관련 제안서/매뉴얼/기존 발송자료 확인'],
+    sourceEvidence: [
+      recentSent?.body ? 'same thread sent history' : 'thread subject match',
+      ...(attachmentHints.length ? [`attachment archive: ${attachmentHints[0]}`] : [])
+    ],
+    confidence: 'low',
+    requiresHumanCheck: true
   };
 }
 
-async function generateReplyDraft(messageId) {
+async function generateReplyDraft(messageId, { tone } = {}) {
   const { mailboxCache } = await readFeedbackContext();
   const mailboxMessages = Array.isArray(mailboxCache.messages) ? mailboxCache.messages : [];
   const message = mailboxMessages.find((item) => item.id === messageId);
@@ -1151,14 +1264,34 @@ async function generateReplyDraft(messageId) {
     return String(entry.subject || '').trim() === String(message.subject || '').trim();
   });
 
+  const senderHistory = findSenderHistory(mailboxMessages, message);
+  const evidenceSources = [];
+
   try {
-    const prompt = buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries });
+    const prompt = buildReplyDraftPrompt({ message, relatedMessages, attachmentEntries, senderHistory });
     const draft = await callLmStudioReplyDraft(prompt);
+    if (senderHistory.received.length) evidenceSources.push(`sender past received: ${senderHistory.received.length}건`);
+    if (senderHistory.sent.length) evidenceSources.push(`past sent to sender: ${senderHistory.sent.length}건`);
+    // Select option by tone or sender preference
+    const tonePreferences = mailboxCache.tonePreferences || {};
+    const senderEmail = emailAddress(message.from || '').toLowerCase();
+    const preferredTone = tone || tonePreferences[senderEmail]?.preferredTone || 'formal';
+    const options = Array.isArray(draft.options) ? draft.options : [];
+    const selected = options.find((opt) => opt.tone === preferredTone) || options[0] || {};
+
     return {
       ...draft,
+      ...selected,
+      options,
+      selectedTone: selected.tone || preferredTone,
       messageId,
       source: 'lmstudio',
       relatedCount: relatedMessages.length,
+      senderReceivedCount: senderHistory.received.length,
+      senderSentCount: senderHistory.sent.length,
+      sourceEvidence: draft.sourceEvidence || evidenceSources,
+      confidence: draft.confidence || (threadReplied ? 'medium' : 'high'),
+      requiresHumanCheck: draft.requiresHumanCheck ?? false,
       threadReplied,
       threadNote: threadReplied ? '이 스레드에는 이미 보낸편지함 회신이 있습니다.' : ''
     };
@@ -1169,6 +1302,8 @@ async function generateReplyDraft(messageId) {
       source: 'fallback',
       warning: error instanceof Error ? error.message : 'LM Studio draft generation failed.',
       relatedCount: relatedMessages.length,
+      senderReceivedCount: senderHistory.received.length,
+      senderSentCount: senderHistory.sent.length,
       threadReplied,
       threadNote: threadReplied ? '이 스레드에는 이미 보낸편지함 회신이 있습니다.' : ''
     };
@@ -1405,12 +1540,17 @@ async function enrichWithAI(messages, result) {
       const message = messages.find((item) => item.id === insight.id) || insight;
       return cached
         ? {
-            ...insight,
-            ...cached,
-            nextActions: normalizeActionScenarios(message, cached.nextActions || insight.nextActions, cached.summary || insight.summary),
-            aiEnhanced: true,
-            aiCached: true
-          }
+          ...insight,
+          ...cached,
+          nextActions: normalizeActionScenarios(message, cached.nextActions || insight.nextActions, cached.summary || insight.summary),
+          aiEnhanced: true,
+          aiCached: true,
+          urgency: (() => {
+            const smartRule = applySmartRules(message, feedback);
+            const feedbackStatus = feedback[insight.id]?.userStatus || null;
+            return urgencyScore(cached.urgency, smartRule?.confidence, feedbackStatus);
+          })()
+        }
         : insight;
     });
     return {
@@ -1491,7 +1631,6 @@ async function enrichWithAI(messages, result) {
       due: action.due || '',
       recommendedAction: action.recommendedAction || '후속 필요 여부 판단',
       evidence: action.evidence || '',
-      subject: insight.subject,
       messageId: insight.id,
       receivedAt: insight.receivedAt,
       webLink: insight.webLink,
@@ -1501,6 +1640,16 @@ async function enrichWithAI(messages, result) {
       body: action.body || ''
     }));
     const nextActions = normalizeActionScenarios(message, aiActions, aiInsight.summary || insight.summary);
+
+    // Hybrid urgency: AI score + rule confidence + feedback override
+    const smartRule = applySmartRules(message, feedback);
+    const feedbackStatus = feedback[insight.id]?.userStatus || null;
+    const urgency = urgencyScore(
+      aiInsight.urgencyScore,
+      smartRule?.confidence,
+      feedbackStatus
+    );
+
     return {
       ...insight,
       status,
@@ -1508,7 +1657,8 @@ async function enrichWithAI(messages, result) {
       nextActions,
       evidenceItems: Array.isArray(aiInsight.evidenceItems) ? aiInsight.evidenceItems.slice(0, 6) : insight.evidenceItems,
       aiRationale: aiInsight.aiRationale || '',
-      aiEnhanced: true
+      aiEnhanced: true,
+      urgency
     };
   });
 
@@ -1521,7 +1671,8 @@ async function enrichWithAI(messages, result) {
       summary: insight.summary,
       nextActions: insight.nextActions,
       evidenceItems: insight.evidenceItems,
-      aiRationale: insight.aiRationale
+      aiRationale: insight.aiRationale,
+      urgency: insight.urgency
     };
   }
   cache.mailboxes[cacheKey] = {
@@ -1566,9 +1717,7 @@ async function handleApi(req, res) {
   const destructiveGate = checkDestructiveApproval(req);
   if (
     !destructiveGate.allowed &&
-    ((url.pathname === '/api/outlook/send' && req.method === 'POST') ||
-      (url.pathname === '/api/outlook/read' && req.method === 'POST') ||
-      (url.pathname === '/api/outlook/config' && req.method === 'DELETE'))
+    isDestructiveApi(url.pathname, req.method || 'GET')
   ) {
     return json(res, destructiveGate.statusCode || 403, destructiveGate.body);
   }
@@ -1636,6 +1785,149 @@ async function handleApi(req, res) {
     return json(res, 200, configStatus());
   }
 
+  if (url.pathname === '/api/outlook/health') {
+    const status = configStatus();
+    const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
+    const cacheKey = mailboxCacheKey(mailboxUser);
+    let graphAuth = 'not_configured';
+    let syncMode = 'none';
+    let lastSyncedAt = null;
+    let deltaLinkPresent = false;
+    let deltaLinkExpires = null;
+    let totalCached = 0;
+
+    try {
+      const cache = await loadMailCache();
+      const mc = cache.mailboxes[cacheKey];
+      if (mc) {
+        totalCached = Array.isArray(mc.messages) ? mc.messages.length : 0;
+        lastSyncedAt = mc.lastSyncedAt || null;
+        deltaLinkPresent = Boolean(mc.deltaLink);
+        deltaLinkExpires = mc.deltaLinkExpires || null;
+      }
+
+      if (status.connected) {
+        try {
+          const token = await getGraphAccessToken();
+          graphAuth = token ? 'ok' : 'missing_token';
+          if (mc?.deltaLink) {
+            syncMode = 'delta';
+          } else if (totalCached > 0) {
+            syncMode = 'incremental';
+          } else {
+            syncMode = 'initial';
+          }
+        } catch (authError) {
+          const msg = authError instanceof Error ? authError.message : '';
+          if (/invalid_client/i.test(msg)) graphAuth = 'invalid_client';
+          else if (/refresh/i.test(msg)) graphAuth = 'refresh_failed';
+          else graphAuth = 'auth_error';
+          syncMode = totalCached > 0 ? 'cache-fallback' : 'initial';
+        }
+      }
+    } catch {
+      // Cache read failed; report defaults.
+    }
+
+    let attachmentSyncAvailable = status.connected;
+    try {
+      await getGraphAccessToken();
+    } catch {
+      attachmentSyncAvailable = false;
+    }
+
+    const aiProvider = runtimeConfig.aiProvider || 'rules';
+    const aiDraftAvailable = aiProvider === 'lmstudio'
+      ? Boolean(getLmStudioUrl())
+      : aiProvider === 'gemini'
+        ? Boolean(getConfigValue('geminiApiKey', 'GEMINI_API_KEY'))
+        : aiProvider === 'f-aios-v3'
+          ? Boolean(runtimeConfig.faiosServerUrl)
+          : aiProvider === 'mimo'
+            ? Boolean(runtimeConfig.mimoApiKey || getConfigValue('mimoApiKey', 'MIMO_API_KEY'))
+            : false;
+
+    return json(res, 200, {
+      graphAuth,
+      syncMode,
+      lastSyncedAt,
+      deltaLinkPresent,
+      deltaLinkExpires,
+      totalCached,
+      attachmentSyncAvailable,
+      aiDraftAvailable,
+      aiProvider,
+      mailboxUser: mailboxUser || null,
+      connected: status.connected,
+      authMode: status.authMode
+    });
+  }
+
+
+  if (url.pathname === '/api/outlook/send-request' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { to, cc, subject, body: mailBody, messageId, threadKey } = body;
+      if (!to || !subject || !mailBody) {
+        return json(res, 400, { message: 'to, subject, body are required.' });
+      }
+      const requireApproval = process.env.MAIL_REQUIRE_APPROVAL === 'true';
+      const queueOnly = body.queueOnly === true;
+      if (queueOnly) {
+        const internalKey = String(process.env.MAIL_INTERNAL_API_KEY || '').trim();
+        const providedKey = String(req.headers['x-mail-internal-key'] || '').trim();
+        if (!internalKey || providedKey !== internalKey) {
+          return json(res, 403, { message: 'queueOnly requires a valid X-Mail-Internal-Key.' });
+        }
+      }
+      const request = sendRequestStore.create(
+        { to, cc, subject, body: mailBody, messageId, threadKey },
+        { requireApproval, queueOnly }
+      );
+
+      if (!requireApproval && !queueOnly) {
+        await sendRequestStore.send(request, sendOutlookMail);
+      }
+
+      return json(res, 201, toSendRequestResponse(request));
+    } catch (error) {
+      return json(res, 400, {
+        message: error instanceof Error ? error.message : 'Invalid send request.'
+      });
+    }
+  }
+
+  const sendRequestCompleteMatch = url.pathname.match(/^\/api\/outlook\/send-requests\/([^/]+)\/complete$/);
+  if (sendRequestCompleteMatch && req.method === 'POST') {
+    if (!destructiveGate.approvalId) {
+      return json(res, 403, {
+        message: 'Send request completion requires approved AIOS headers.'
+      });
+    }
+    const requestId = decodeURIComponent(sendRequestCompleteMatch[1]);
+    try {
+      const request = await sendRequestStore.complete(requestId, {
+        approvalId: destructiveGate.approvalId,
+        sendMail: sendOutlookMail
+      });
+      return json(res, request.approvalStatus === 'sent' ? 200 : 502, toSendRequestResponse(request));
+    } catch (error) {
+      return json(res, error.statusCode || 500, {
+        message: error instanceof Error ? error.message : 'Send request completion failed.'
+      });
+    }
+  }
+
+  if (url.pathname.startsWith('/api/outlook/send-requests/')) {
+    const requestId = url.pathname.replace('/api/outlook/send-requests/', '').split('/')[0];
+    const request = sendRequestStore.get(requestId);
+    if (!request) {
+      return json(res, 404, { message: 'Send request not found.' });
+    }
+    return json(res, 200, toSendRequestResponse(request));
+  }
+
+
   if (url.pathname === '/api/outlook/accounts') {
     if (req.method !== 'GET') return json(res, 405, { message: 'Method not allowed' });
     try {
@@ -1671,6 +1963,28 @@ async function handleApi(req, res) {
         message: error instanceof Error ? error.message : 'Account switch failed.'
       });
     }
+  }
+
+  if (url.pathname === '/api/outlook/approval-status') {
+    const requireApproval = process.env.MAIL_REQUIRE_APPROVAL === 'true';
+    return json(res, 200, {
+      requireApproval,
+      approvalGate: requireApproval ? 'aios-v2' : 'none',
+      description: requireApproval
+        ? '발송/읽기/설정삭제 API는 AIOS v2 approval gate를 통한 X-Aios-Approval-ID + X-Mail-Internal-Key 헤더가 필요합니다.'
+        : 'Approval gate가 비활성 상태입니다. 모든 destructive API가 직접 호출 가능합니다.',
+      destructivePaths: ['/api/outlook/send', '/api/outlook/read', '/api/outlook/config (DELETE)'],
+      evidencePoints: [
+        { path: '/api/outlook/feedback', method: 'POST', description: '분류 보정 피드백 저장 (AIOS evidence writer 연동 포인트)' },
+        { path: '/api/portal/feedback-sync', method: 'POST', description: '포털 피드백 동기화 (AIOS v1 대조 포인트)' },
+        { path: '/api/portal/push-candidates', method: 'POST', description: '태스크 후보 푸시 (AIOS v1 task candidate 연동)' }
+      ],
+      approvalRequiredPaths: requireApproval ? [
+        { path: '/api/outlook/send', method: 'POST', description: '메일 발송 (destructive)' },
+        { path: '/api/outlook/read', method: 'POST', description: '읽음 상태 변경 (destructive)' },
+        { path: '/api/outlook/config', method: 'DELETE', description: '설정 초기화 (destructive)' }
+      ] : []
+    });
   }
 
   if (url.pathname === '/api/outlook/send') {
@@ -1732,9 +2046,11 @@ async function handleApi(req, res) {
       const result = await syncOutlookAttachmentArchive(top);
       return json(res, 200, { synced: true, ...result });
     } catch (error) {
+      const structured = error?.structuredError;
       return json(res, error.statusCode || 500, {
         synced: false,
-        message: error instanceof Error ? error.message : 'Attachment sync failed.'
+        message: error instanceof Error ? error.message : 'Attachment sync failed.',
+        ...(structured ? { code: structured.code, retryable: structured.retryable, action: structured.action } : {})
       });
     }
   }
@@ -1743,11 +2059,29 @@ async function handleApi(req, res) {
     try {
       const messageId = String(url.searchParams.get('messageId') || '').trim();
       if (!messageId) return json(res, 400, { message: 'messageId is required.' });
-      const draft = await generateReplyDraft(messageId);
+      const tone = String(url.searchParams.get('tone') || '').trim() || undefined;
+      const draft = await generateReplyDraft(messageId, { tone });
       return json(res, 200, draft);
     } catch (error) {
       return json(res, error?.statusCode || 500, {
         message: error instanceof Error ? error.message : 'Reply draft generation failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/outlook/conversation-summary') {
+    try {
+      const conversationId = String(url.searchParams.get('conversationId') || '').trim();
+      if (!conversationId) return json(res, 400, { message: 'conversationId is required.' });
+      const { mailboxCache } = await readFeedbackContext();
+      const allMessages = Array.isArray(mailboxCache.messages) ? mailboxCache.messages : [];
+      const threadMessages = allMessages.filter((msg) => msg.conversationId === conversationId);
+      if (threadMessages.length === 0) return json(res, 404, { message: 'No messages found for this conversation.' });
+      const summary = await generateThreadSummary(threadMessages);
+      return json(res, 200, summary);
+    } catch (error) {
+      return json(res, error?.statusCode || 500, {
+        message: error instanceof Error ? error.message : 'Thread summary generation failed.'
       });
     }
   }
@@ -1897,6 +2231,11 @@ async function handleApi(req, res) {
       });
     }
   }
+
+  if (url.pathname === '/api/portal/contract' && req.method === 'GET') {
+    return json(res, 200, toApprovalContract());
+  }
+
 
   if (url.pathname.startsWith('/api/portal/thread/') && req.method === 'GET') {
     const threadKey = decodeURIComponent(url.pathname.replace('/api/portal/thread/', ''));
@@ -2209,7 +2548,7 @@ const server = createServer(async (req, res) => {
       runtimeConfig.expiresAt = Date.now() + Number(payload.expires_in || 3600) * 1000;
       await savePersistedConfig();
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Outlook 연결 완료</title></head><body><h1>Outlook 로그인 완료</h1><p>이 창을 닫으면 메일이 자동으로 동기화됩니다.</p><script>try{window.opener?.postMessage({type:'outlook-oauth-complete'},'*');}catch(e){}</script></body></html>`);
+      res.end('<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Outlook 연결 완료</title></head><body><h1>Outlook 로그인 완료</h1><p>이 창을 닫으면 메일이 자동으로 동기화됩니다.</p><script>try{window.opener?.postMessage({type:\'outlook-oauth-complete\'},\'*\');}catch(e){}</script></body></html>');
     } catch (exchangeError) {
       res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(`<h1>Outlook token exchange failed</h1><p>${exchangeError instanceof Error ? exchangeError.message : 'Unknown error'}</p>`);
@@ -2281,6 +2620,7 @@ Scenario 1 should be a direct confirmation/progress reply.
 Scenario 2 should request missing details or clarify blockers.
 Scenario 3 should share or reference Sangfor pages/manuals/related documents when relevant, otherwise propose a document-backed follow-up.
 Do not invent facts. If no action is needed, create one action that says whether to archive, monitor, or review later.
+For each email, also provide an urgencyScore (0-100) based on time sensitivity, sender importance, and content. 100 = immediate action required, 0 = purely informational.
 Use the user's prior correction examples as preference guidance. If a similar sender, subject token, or reason pattern appears, align with the user's corrected status unless the current email has explicit contradictory evidence.
 
 Recent user correction examples:
@@ -2308,7 +2648,8 @@ JSON schema:
         }
       ],
       "evidenceItems": ["supporting facts, not raw long paragraphs"],
-      "aiRationale": "why this status/action was chosen"
+      "aiRationale": "why this status/action was chosen",
+      "urgencyScore": 0
     }
   ]
 }
@@ -2329,6 +2670,7 @@ function buildLmStudioAnalysisPrompt(feedbackExamples, messagesForAi) {
 Analyze each email in Korean. Keep the output compact.
 Classify status as one of: urgent, active, waiting, done, reference.
 Do not draft replies. Put "nextActions": [] and let the app generate default action scenarios.
+For each email, also provide an urgencyScore (0-100) based on time sensitivity, sender importance, and content.
 
 Recent user correction examples:
 ${JSON.stringify(feedbackExamples.slice(0, 5), null, 2)}
@@ -2342,7 +2684,8 @@ Required JSON shape:
       "summary": ["1-2 short Korean bullets"],
       "nextActions": [],
       "evidenceItems": ["1-2 short supporting facts"],
-      "aiRationale": "short Korean rationale"
+      "aiRationale": "short Korean rationale",
+      "urgencyScore": 0
     }
   ]
 }
@@ -2519,4 +2862,72 @@ async function callLmStudio(prompt) {
   
   const payload = await response.json();
   return payload.choices?.[0]?.message?.content || '';
+}
+
+// --- Thread Summary ---
+
+const THREAD_SUMMARY_CACHE = new Map();
+
+function threadSummaryKey(conversationId, messageCount) {
+  return `${conversationId}::${messageCount}`;
+}
+
+async function generateThreadSummary(threadMessages) {
+  if (!Array.isArray(threadMessages) || threadMessages.length === 0) {
+    return { summary: '표시할 메시지가 없습니다.', messageCount: 0, truncated: false };
+  }
+
+  const conversationId = threadMessages[0]?.conversationId || 'unknown';
+  const cacheKey = threadSummaryKey(conversationId, threadMessages.length);
+  const cached = THREAD_SUMMARY_CACHE.get(cacheKey);
+  if (cached) return { ...cached, cached: true };
+
+  // Cap at 15 messages: first + most recent 10
+  let messages = threadMessages;
+  let truncated = false;
+  if (messages.length > 15) {
+    const first = messages[0];
+    const recent = messages.slice(-10);
+    messages = [first, ...recent];
+    truncated = true;
+  }
+
+  const messageTexts = messages.map((msg, i) => {
+    const direction = msg.mailFolder === 'sentitems' || msg.mailFolder === 'sent' ? '보냄' : '받음';
+    const from = msg.fromName || msg.from || 'unknown';
+    const date = msg.receivedAt ? new Date(msg.receivedAt).toLocaleString('ko-KR') : '';
+    const body = clip(msg.body || msg.bodyPreview || '', 500);
+    return `[${i + 1}] ${direction} ${from} (${date}): ${body}`;
+  }).join('\n\n');
+
+  const prompt = `다음 이메일 스레드를 한국어로 간결하게 요약해주세요.
+핵심 논점, 결정 사항, 후속 조치 사항을 포함해주세요.
+3-5문장으로 요약해주세요.
+
+${truncated ? `긴 스레드: 최근 10개 메시지 기반 요약 (전체 ${threadMessages.length}건 중)` : `메시지 ${threadMessages.length}건`}
+
+JSON 형식:
+{ "summary": "요약 텍스트" }
+
+이메일 스레드:
+${messageTexts}`;
+
+  try {
+    const aiText = await callProviderPrompt(prompt, { maxTokens: 500, timeoutMs: 30000 });
+    const parsed = extractJson(aiText);
+    const result = {
+      summary: parsed?.summary || '요약을 생성할 수 없습니다.',
+      messageCount: threadMessages.length,
+      truncated
+    };
+    THREAD_SUMMARY_CACHE.set(cacheKey, result);
+    return result;
+  } catch (error) {
+    return {
+      summary: '요약 생성 시간이 초과되었습니다. 다시 시도해주세요.',
+      messageCount: threadMessages.length,
+      truncated,
+      error: error.message
+    };
+  }
 }

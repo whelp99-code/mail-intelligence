@@ -13,6 +13,7 @@
     "verify:boundary": "node scripts/verify-mail-readonly-boundary.mjs",
     "verify:attachments": "node scripts/verify-attachment-sync.mjs",
     "verify:entities": "node scripts/verify-entity-resolution.mjs",
+    "verify:send-transition": "node scripts/verify-send-request-transition.mjs",
     "migrate:data": "node scripts/migrate-data-dir.mjs",
     "lint": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs",
     "lint:fix": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs --fix",

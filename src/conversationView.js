@@ -437,6 +437,26 @@ function showMatchResultsModal(callInfo, matches) {
 /**
  * View thread detail
  */
+
+async function fetchThreadSummary(conversationId, modal) {
+  const content = modal.querySelector('#threadSummaryContent');
+  const loading = modal.querySelector('.summary-loading');
+  try {
+    const res = await fetch(`/api/outlook/conversation-summary?conversationId=${encodeURIComponent(conversationId)}`);
+    const data = await res.json();
+    if (content) {
+      content.textContent = data.summary || '요약을 생성할 수 없습니다.';
+      if (data.truncated) {
+        content.textContent += ` (긴 스레드: 최근 10건 기반, 전체 ${data.messageCount}건)`;
+      }
+    }
+    if (loading) loading.textContent = data.cached ? '(캐시됨)' : '';
+  } catch (error) {
+    if (content) content.textContent = '요약을 불러오는 중 오류가 발생했습니다.';
+    if (loading) loading.textContent = '오류';
+  }
+}
+
 function viewThreadDetail(threadId) {
   const thread = conversationThreads.find(t => t.id === threadId);
   if (!thread) return;
@@ -450,6 +470,12 @@ function viewThreadDetail(threadId) {
         <button onclick="this.closest('.modal').remove()" class="modal-close">&times;</button>
       </div>
       <div class="modal-body">
+        <div class="thread-summary-panel" id="threadSummaryPanel">
+          <details open>
+            <summary class="thread-summary-toggle">📝 AI 스레드 요약 <span class="summary-loading">로딩 중...</span></summary>
+            <div class="thread-summary-content" id="threadSummaryContent">요약을 불러오는 중입니다...</div>
+          </details>
+        </div>
         <div class="thread-detail-header">
           <h4>${escapeHtml(thread.subject)}</h4>
           <p>참여자: ${thread.participants.join(', ')}</p>
@@ -474,6 +500,17 @@ function viewThreadDetail(threadId) {
   `;
   
   document.body.appendChild(modal);
+
+  // Fetch thread summary asynchronously
+  const conversationId = thread.messages[0]?.conversationId;
+  if (conversationId && thread.messageCount >= 3) {
+    fetchThreadSummary(conversationId, modal);
+  } else {
+    const content = modal.querySelector('#threadSummaryContent');
+    const loading = modal.querySelector('.summary-loading');
+    if (content) content.textContent = '3개 이상의 메시지가 있는 스레드에서 AI 요약을 생성합니다.';
+    if (loading) loading.textContent = '';
+  }
 }
 
 /**

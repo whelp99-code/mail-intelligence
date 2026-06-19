@@ -16,6 +16,7 @@ export function initStats() {
     } else {
       renderMailView();
     }
+    window.persistMailboxUiState?.();
   });
 }
 

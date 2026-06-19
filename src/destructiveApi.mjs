@@ -10,23 +10,24 @@ const DESTRUCTIVE_PATHS = new Set([
 ]);
 
 export function isDestructiveApi(pathname, method) {
+  if (/^\/api\/outlook\/send-requests\/[^/]+\/complete$/.test(pathname) && method === 'POST') return true;
   if (pathname === '/api/outlook/send' && method === 'POST') return true;
   if (pathname === '/api/outlook/read' && method === 'POST') return true;
   if (pathname === '/api/outlook/config' && method === 'DELETE') return true;
-  return DESTRUCTIVE_PATHS.has(pathname);
+  return DESTRUCTIVE_PATHS.has(pathname) && method !== 'GET';
 }
 
 export function checkDestructiveApproval(req) {
-  if (process.env.MAIL_REQUIRE_APPROVAL !== 'true') {
-    return { allowed: true };
-  }
-
   const approvalId = String(req.headers['x-aios-approval-id'] || '').trim();
   const internalKey = String(process.env.MAIL_INTERNAL_API_KEY || '').trim();
   const providedKey = String(req.headers['x-mail-internal-key'] || '').trim();
 
   if (approvalId && internalKey && providedKey === internalKey) {
     return { allowed: true, approvalId };
+  }
+
+  if (process.env.MAIL_REQUIRE_APPROVAL !== 'true') {
+    return { allowed: true };
   }
 
   return {

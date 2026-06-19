@@ -126,15 +126,15 @@ function actionScenariosForMessage(message, primaryActions = [], summaries = [])
 
   const primaryTitle =
     lane === 'urgent' ? '긴급 우선 회신'
-    : lane === 'waiting' ? '대기 사유 정리 회신'
-    : lane === 'done' ? '완료 사실 공유'
-    : asksForInfo ? '요청 사항 확인 회신' : '진행 상태 공유';
+      : lane === 'waiting' ? '대기 사유 정리 회신'
+        : lane === 'done' ? '완료 사실 공유'
+          : asksForInfo ? '요청 사항 확인 회신' : '진행 상태 공유';
   const primaryBodyLine =
     lane === 'urgent' ? '우선순위를 높여 바로 확인하고 처리 순서를 회신드리겠습니다.'
-    : lane === 'waiting' ? '현재 대기 중인 항목과 추가로 필요한 정보를 정리해 회신드리겠습니다.'
-    : lane === 'done' ? '현재 기준으로 완료된 항목과 남은 확인 포인트만 간단히 공유드립니다.'
-    : hasDateContext ? '요청하신 일정 기준으로 진행 가능 여부와 내부 일정을 정리해 회신드리겠습니다.'
-    : '요청하신 내용을 기준으로 다음 단계와 필요한 확인 사항을 정리해 회신드리겠습니다.';
+      : lane === 'waiting' ? '현재 대기 중인 항목과 추가로 필요한 정보를 정리해 회신드리겠습니다.'
+        : lane === 'done' ? '현재 기준으로 완료된 항목과 남은 확인 포인트만 간단히 공유드립니다.'
+          : hasDateContext ? '요청하신 일정 기준으로 진행 가능 여부와 내부 일정을 정리해 회신드리겠습니다.'
+            : '요청하신 내용을 기준으로 다음 단계와 필요한 확인 사항을 정리해 회신드리겠습니다.';
 
   const clarificationTitle = hasDateContext ? '일정/범위 재확인' : '추가 정보 요청';
   const clarificationAction = hasDateContext
@@ -342,4 +342,28 @@ function summarizeTasks(tasks, messages) {
       done: tasks.filter((task) => task.lane === 'done').length
     }
   };
+}
+
+/**
+ * Hybrid urgency score: combines AI urgency (0-100), rule confidence (0-1),
+ * and user feedback status into a single 0-100 score.
+ *
+ * Precedence:
+ *   1. User feedback overrides all (urgent → 100, done → 10)
+ *   2. max(aiScore, ruleConfidence * 100)
+ *   3. Status-based fallback when AI score is missing
+ */
+export function urgencyScore(aiScore, ruleConfidence, feedbackStatus) {
+  if (feedbackStatus === 'urgent') return 100;
+  if (feedbackStatus === 'done') return 10;
+
+  const ai = typeof aiScore === 'number' && aiScore >= 0 && aiScore <= 100
+    ? aiScore
+    : null;
+  const rule = typeof ruleConfidence === 'number'
+    ? Math.round(ruleConfidence * 100)
+    : 0;
+
+  if (ai !== null) return Math.max(ai, rule);
+  return rule;
 }

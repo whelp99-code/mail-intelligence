@@ -191,3 +191,34 @@ export function toCalendarHints(payload) {
     webLink: item.webLink
   }));
 }
+/**
+ * Returns the approval gate and evidence writer contract metadata for AIOS v1/v2 integration.
+ * This is a read-only descriptor; it does not mutate any state.
+ */
+export function toApprovalContract() {
+  return {
+    approvalGate: {
+      enabled: process.env.MAIL_REQUIRE_APPROVAL === 'true',
+      mechanism: 'X-Aios-Approval-ID + X-Mail-Internal-Key headers',
+      destructivePaths: [
+        { path: '/api/outlook/send', method: 'POST', description: '메일 발송' },
+        { path: '/api/outlook/read', method: 'POST', description: '읽음 상태 변경' },
+        { path: '/api/outlook/config', method: 'DELETE', description: '설정 초기화' }
+      ],
+      responseOnDenied: {
+        statusCode: 403,
+        body: { success: false, approvalStatus: 'pending', destructive: true }
+      }
+    },
+    evidenceWriter: {
+      feedbackPath: '/api/outlook/feedback',
+      portalFeedbackPath: '/api/portal/feedback-sync',
+      candidatePushPath: '/api/portal/push-candidates',
+      description: '분류 보정 피드백은 AIOS evidence writer로 전달되어 다음 분석 기준에 반영됩니다.'
+    },
+    approvalStatusEndpoint: '/api/outlook/approval-status',
+    sendRequestEndpoint: '/api/outlook/send-request',
+    sendRequestStatusEndpoint: '/api/outlook/send-requests/:id',
+    sendRequestCompleteEndpoint: '/api/outlook/send-requests/:id/complete'
+  };
+}
