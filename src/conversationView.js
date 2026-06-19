@@ -90,7 +90,7 @@ async function showConversationTab() {
 /**
  * Load conversation data
  */
-async function loadConversationData() {
+export async function loadConversationData() {
   try {
     // Load threads, calls, and stats in parallel
     const [threadsRes, callsRes] = await Promise.all([
@@ -131,7 +131,7 @@ function updateConversationStats() {
 /**
  * Show conversation section
  */
-function showConversationSection(section) {
+export function showConversationSection(section) {
   // Update tab buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.textContent.includes(

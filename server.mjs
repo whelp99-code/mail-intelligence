@@ -331,6 +331,7 @@ const contentTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8'
 };
 
@@ -1922,10 +1923,27 @@ async function handleApi(req, res) {
     try {
       const top = Number(url.searchParams.get('top') || 25);
       const syncMode = url.searchParams.get('sync') || 'auto';
-      const data =
-        syncMode === 'cache'
-          ? await loadCachedMailbox(top)
-          : await fetchOutlookMessages(top, { forceInitial: syncMode === 'initial' });
+      let data;
+      try {
+        data =
+          syncMode === 'cache'
+            ? await loadCachedMailbox(top)
+            : await fetchOutlookMessages(top, { forceInitial: syncMode === 'initial' });
+      } catch (syncError) {
+        if (syncMode === 'cache') throw syncError;
+        const cached = await loadCachedMailbox(top);
+        data = {
+          ...cached,
+          connected: cached.messages.length > 0,
+          mode: 'cache-fallback',
+          message: `Graph 동기화 실패로 로컬 캐시를 표시합니다. ${syncError instanceof Error ? syncError.message : 'Unknown sync error.'}`,
+          sync: {
+            ...cached.sync,
+            mode: 'cache-fallback',
+            syncError: syncError instanceof Error ? syncError.message : 'Unknown sync error.'
+          }
+        };
+      }
       if (url.pathname === '/api/outlook/messages') return json(res, 200, data);
       let threadGroupingResult = { messages: data.messages, threadGroups: [], threadGrouping: { enabled: false } };
       try {

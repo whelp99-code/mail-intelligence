@@ -659,6 +659,24 @@ function actionVisible(action) {
   return !action.messageId || visibleIds.has(action.messageId);
 }
 
+function selectedThreadMessages() {
+  if (!selectedMessageId) return [];
+  const selected = currentMessages.find((message) => message.id === selectedMessageId);
+  if (!selected) return [];
+  const groups = [...threadGroupsFor(currentMessages).values()];
+  return groups.find((items) => items.some((message) => message.id === selectedMessageId)) || [selected];
+}
+
+function selectedThreadMessageIds() {
+  return new Set(selectedThreadMessages().map((message) => message.id));
+}
+
+function threadContextItems(items = []) {
+  const threadIds = selectedThreadMessageIds();
+  if (!threadIds.size) return [];
+  return items.filter((item) => item.messageId && threadIds.has(item.messageId));
+}
+
 function refreshFilterButtons() {
   document.querySelectorAll('.metric').forEach((button) => {
     button.classList.toggle('selected', button.dataset.filter === activeFilter);
@@ -707,29 +725,44 @@ function renderActionPanel() {
   clear(reminderList);
   const selectedInsight = insightFor(selectedMessageId);
   const actions = (selectedInsight?.nextActions || []).slice(0, 3);
-  const calendar = (currentResult.calendar || []).filter(actionVisible);
-  const reminders = (currentResult.reminders || []).filter(actionVisible);
+  const selectedMessage = currentMessages.find((m) => m.id === selectedMessageId);
+  const threadMessages = selectedThreadMessages();
+  const threadIds = selectedThreadMessageIds();
+  const threadRelatedActions = currentResult?.messageInsights
+    ?.filter((insight) => threadIds.has(insight.id))
+    .flatMap((insight) => insight.nextActions || [])
+    .filter((action) => action.messageId !== selectedMessageId)
+    .slice(0, 6) || [];
+  const calendar = threadContextItems(currentResult.calendar || []);
+  const reminders = threadContextItems(currentResult.reminders || []);
   actionCount.textContent = `${actions.length}건`;
   calendarCount.textContent = `${calendar.length}건`;
   reminderCount.textContent = `${reminders.length}건`;
-
-  const selectedMessage = currentMessages.find((m) => m.id === selectedMessageId);
-  const threadMessages = selectedMessage
-    ? [...(threadGroupsFor(currentMessages).values())].find((items) => items.some((m) => m.id === selectedMessageId)) || [selectedMessage]
-    : [];
   const alreadyReplied = userRepliedInThread(threadMessages, mailboxUser?.value || '');
 
-  if (!actions.length) actionList.appendChild(empty('선택한 메일의 추천 액션이 없습니다.'));
-  else if (alreadyReplied) {
+  if (!actions.length) {
+    actionList.appendChild(empty('선택한 메일의 추천 액션이 없습니다.'));
+  } else if (alreadyReplied) {
     actionList.appendChild(empty('이 스레드는 이미 회신한 상태입니다. 상대 회신을 기다리면 대기로 분류하세요.'));
   } else {
     actions.forEach((item) => actionList.appendChild(scenarioActionCard(item)));
+    if (threadRelatedActions.length) {
+      const divider = document.createElement('div');
+      divider.className = 'mini-section-label';
+      divider.textContent = `${threadMessages.length}통 스레드 기준 추가 참고 액션`;
+      actionList.appendChild(divider);
+      threadRelatedActions.slice(0, 2).forEach((item) => actionList.appendChild(actionCard(item)));
+    }
   }
 
-  if (!calendar.length) calendarList.appendChild(empty('감지된 일정 없음'));
+  if (!calendar.length) {
+    calendarList.appendChild(empty(selectedMessage ? '선택 스레드 기준 감지된 일정 없음' : '감지된 일정 없음'));
+  }
   calendar.forEach((item) => calendarList.appendChild(simpleCard(item, item.lane)));
 
-  if (!reminders.length) reminderList.appendChild(empty('알림 후보 없음'));
+  if (!reminders.length) {
+    reminderList.appendChild(empty(selectedMessage ? '선택 스레드 기준 알림 후보 없음' : '알림 후보 없음'));
+  }
   reminders.forEach((item) => reminderList.appendChild(simpleCard(item, 'urgent')));
 }
 
@@ -747,6 +780,8 @@ function render(result, messages = []) {
 }
 
 let outlookConnected = false;
+let configStatusRequestId = 0;
+let configFormDirty = false;
 
 function formatSyncLabel(sync, messageCount) {
   if (!sync) return `${messageCount}개 메일`;
@@ -952,28 +987,39 @@ async function bootMailbox() {
   await loadAttachments();
 }
 
-async function loadStatus() {
+function applyConfigFormFromStatus(status) {
+  loginTenant.value = status.loginTenant || 'common';
+  tenantId.value = status.tenantId || '';
+  clientId.value = status.clientId || '';
+  mailboxUser.value = status.mailboxUser || '';
+  geminiModel.value = status.geminiModel || 'gemini-2.5-flash';
+  aiProvider.value = status.aiProvider || 'f-aios-v3';
+  faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3200';
+  lmstudioModel.value = status.lmstudioModel || 'qwen/qwen3.5-9b';
+  accessToken.value = '';
+  clientSecret.value = '';
+  geminiApiKey.value = '';
+  accessToken.placeholder = status.hasAccessToken ? '저장된 토큰 사용 중' : '';
+  clientSecret.placeholder = status.hasClientSecret ? '저장된 client secret 사용 중' : '';
+  geminiApiKey.placeholder = status.hasGeminiApiKey ? '저장된 Gemini API key 사용 중' : '';
+}
+
+async function loadStatus({ force = false } = {}) {
+  const requestId = ++configStatusRequestId;
   try {
     const response = await fetch('/api/outlook/config');
     const status = await response.json();
+    if (!force && requestId !== configStatusRequestId) return status;
+    if (!force && configFormDirty) return status;
     outlookConnected = Boolean(status.connected);
     connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
     configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
-    loginTenant.value = status.loginTenant || 'common';
-    tenantId.value = status.tenantId || '';
-    clientId.value = status.clientId || '';
-    mailboxUser.value = status.mailboxUser || '';
-    geminiModel.value = status.geminiModel || 'gemini-2.5-flash';
-    // AI Provider settings
-    aiProvider.value = status.aiProvider || 'f-aios-v3';
-    faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3201';
-    lmstudioModel.value = status.lmstudioModel || 'qwen/qwen3.5-9b';
-    accessToken.placeholder = status.hasAccessToken ? '저장된 토큰 사용 중' : '';
-    clientSecret.placeholder = status.hasClientSecret ? '저장된 client secret 사용 중' : '';
-    geminiApiKey.placeholder = status.hasGeminiApiKey ? '저장된 Gemini API key 사용 중' : '';
+    applyConfigFormFromStatus(status);
+    configFormDirty = false;
     renderSidebar();
     return status;
   } catch {
+    if (!force && requestId !== configStatusRequestId) return null;
     outlookConnected = false;
     connectionStatus.textContent = 'Outlook 상태 확인 실패';
     configStatus.textContent = '확인 실패';
@@ -985,34 +1031,42 @@ async function loadStatus() {
 async function saveConfig(event) {
   event.preventDefault();
   configStatus.textContent = '저장 중';
-  const response = await fetch('/api/outlook/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      accessToken: accessToken.value,
-      tenantId: tenantId.value,
-      clientId: clientId.value,
-      clientSecret: clientSecret.value,
-      mailboxUser: mailboxUser.value,
-      loginTenant: loginTenant.value,
-      geminiApiKey: geminiApiKey.value,
-      geminiModel: geminiModel.value,
-      aiProvider: aiProvider.value,
-      faiosServerUrl: faiosServerUrl.value,
-      lmstudioModel: lmstudioModel.value,
-      persist: true
-    })
-  });
-  const status = await response.json();
-  if (!response.ok) {
-    configStatus.textContent = status.message || '저장 실패';
-    return;
+  try {
+    const response = await fetch('/api/outlook/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessToken: accessToken.value,
+        tenantId: tenantId.value,
+        clientId: clientId.value,
+        clientSecret: clientSecret.value,
+        mailboxUser: mailboxUser.value,
+        loginTenant: loginTenant.value,
+        geminiApiKey: geminiApiKey.value,
+        geminiModel: geminiModel.value,
+        aiProvider: aiProvider.value,
+        faiosServerUrl: faiosServerUrl.value,
+        lmstudioModel: lmstudioModel.value,
+        persist: true
+      })
+    });
+    const status = await response.json();
+    if (!response.ok) {
+      configStatus.textContent = status.message || '저장 실패';
+      return;
+    }
+    configFormDirty = false;
+    configStatusRequestId += 1;
+    outlookConnected = Boolean(status.connected);
+    connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
+    configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
+    applyConfigFormFromStatus(status);
+    renderSidebar();
+    await bootMailbox();
+    await loadAttachments();
+  } catch (error) {
+    configStatus.textContent = error instanceof Error ? error.message : '저장 실패';
   }
-  connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
-  configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
-  outlookConnected = Boolean(status.connected);
-  await bootMailbox();
-  await loadAttachments();
 }
 
 function startOutlookLogin() {
@@ -1038,10 +1092,17 @@ async function loadOutlookMessages() {
 loadOutlook.addEventListener('click', loadOutlookMessages);
 window.addEventListener('message', (event) => {
   if (event?.data?.type === 'outlook-oauth-complete') {
-    loadStatus().then(() => bootMailbox());
+    loadStatus({ force: true }).then(() => bootMailbox());
   }
 });
-configForm.addEventListener('submit', saveConfig);
+configForm.addEventListener('input', () => {
+  configFormDirty = true;
+});
+configForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  saveConfig(event);
+});
+document.querySelector('#saveConfig')?.addEventListener('click', saveConfig);
 loginOutlook.addEventListener('click', startOutlookLogin);
 clearConfig.addEventListener('click', async () => {
   accessToken.value = '';
@@ -1056,8 +1117,11 @@ clearConfig.addEventListener('click', async () => {
   faiosServerUrl.value = 'http://localhost:3201';
   lmstudioModel.value = 'qwen/qwen3.5-9b';
   await fetch('/api/outlook/config', { method: 'DELETE' });
+  configFormDirty = false;
+  configStatusRequestId += 1;
   configStatus.textContent = '저장값 초기화';
   connectionStatus.textContent = 'Outlook 인증값 필요';
+  outlookConnected = false;
   renderSidebar();
 });
 document.querySelectorAll('.metric').forEach((button) => {
