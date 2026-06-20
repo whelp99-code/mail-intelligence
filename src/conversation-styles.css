@@ -1,38 +1,41 @@
-/* Conversation View Styles */
+/* Conversation View Styles — scoped under .conversation-section to prevent global conflicts */
 
 .conversation-section.hidden {
   display: none;
 }
 
-.conversation-view, .conversation-section {
+.conversation-section {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 20px;
 }
 
-.conversation-header {
+.conversation-section .conversation-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
 }
 
-.conversation-header h2 {
+.conversation-section .conversation-header h2 {
   margin: 0;
   font-size: 1.5rem;
 }
 
-.conversation-actions {
+.conversation-section .conversation-actions {
   display: flex;
   gap: 10px;
 }
 
-.conversation-stats {
+.conversation-section .conversation-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 15px;
   margin-bottom: 20px;
 }
 
-.stat-card {
+.conversation-section .stat-card {
   background: var(--card-bg, #fff);
   border-radius: 8px;
   padding: 15px;
@@ -40,19 +43,19 @@
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-.stat-value {
+.conversation-section .stat-value {
   font-size: 2rem;
   font-weight: bold;
   color: var(--primary-color, #3b82f6);
 }
 
-.stat-label {
+.conversation-section .stat-label {
   font-size: 0.875rem;
   color: var(--text-secondary, #6b7280);
   margin-top: 5px;
 }
 
-.conversation-tabs {
+.conversation-section .conversation-tabs {
   display: flex;
   gap: 5px;
   margin-bottom: 20px;
@@ -60,7 +63,7 @@
   padding-bottom: 10px;
 }
 
-.tab-btn {
+.conversation-section .tab-btn {
   padding: 8px 16px;
   border: none;
   background: transparent;
@@ -70,27 +73,27 @@
   transition: all 0.2s;
 }
 
-.tab-btn:hover {
+.conversation-section .tab-btn:hover {
   background: var(--hover-bg, #f3f4f6);
 }
 
-.tab-btn.active {
+.conversation-section .tab-btn.active {
   background: var(--primary-color, #3b82f6);
   color: white;
 }
 
-.conversation-content {
+.conversation-section .conversation-content {
   min-height: 400px;
 }
 
 /* Thread Card Styles */
-.threads-list {
+.conversation-section .threads-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.thread-card {
+.conversation-section .thread-card {
   background: var(--card-bg, #fff);
   border-radius: 8px;
   padding: 15px;
@@ -98,62 +101,62 @@
   transition: transform 0.2s;
 }
 
-.thread-card:hover {
+.conversation-section .thread-card:hover {
   transform: translateY(-2px);
 }
 
-.thread-card.has-reply {
+.conversation-section .thread-card.has-reply {
   border-left: 4px solid var(--success-color, #10b981);
 }
 
-.thread-card.no-reply {
+.conversation-section .thread-card.no-reply {
   border-left: 4px solid var(--warning-color, #f59e0b);
 }
 
-.thread-header {
+.conversation-section .thread-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 10px;
 }
 
-.thread-subject {
+.conversation-section .thread-subject {
   font-weight: 600;
   font-size: 0.95rem;
   flex: 1;
   margin-right: 10px;
 }
 
-.thread-meta {
+.conversation-section .thread-meta {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.thread-count {
+.conversation-section .thread-count {
   background: var(--badge-bg, #e5e7eb);
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 0.75rem;
 }
 
-.thread-reply {
+.conversation-section .thread-reply {
   font-size: 0.75rem;
   padding: 2px 8px;
   border-radius: 12px;
 }
 
-.thread-reply.replied {
+.conversation-section .thread-reply.replied {
   background: var(--success-light, #d1fae5);
   color: var(--success-dark, #065f46);
 }
 
-.thread-reply.pending {
+.conversation-section .thread-reply.pending {
   background: var(--warning-light, #fef3c7);
   color: var(--warning-dark, #92400e);
 }
 
-.thread-call {
+.conversation-section .thread-call {
   background: var(--info-light, #dbeafe);
   color: var(--info-dark, #1e40af);
   padding: 2px 8px;
@@ -161,46 +164,46 @@
   font-size: 0.75rem;
 }
 
-.thread-participants {
+.conversation-section .thread-participants {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
   margin-bottom: 8px;
 }
 
-.participant {
+.conversation-section .participant {
   background: var(--badge-bg, #f3f4f6);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 0.75rem;
 }
 
-.thread-dates {
+.conversation-section .thread-dates {
   font-size: 0.75rem;
   color: var(--text-secondary, #6b7280);
   margin-bottom: 10px;
 }
 
-.thread-actions {
+.conversation-section .thread-actions {
   display: flex;
   gap: 8px;
 }
 
 /* Call Card Styles */
-.calls-list {
+.conversation-section .calls-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.calls-summary {
+.conversation-section .calls-summary {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 15px;
 }
 
-.call-card {
+.conversation-section .call-card {
   background: var(--card-bg, #fff);
   border-radius: 8px;
   padding: 12px;
@@ -210,51 +213,51 @@
   gap: 15px;
 }
 
-.call-header {
+.conversation-section .call-header {
   flex: 1;
 }
 
-.call-name {
+.conversation-section .call-name {
   font-weight: 600;
   font-size: 0.9rem;
 }
 
-.call-phone {
+.conversation-section .call-phone {
   font-size: 0.75rem;
   color: var(--text-secondary, #6b7280);
 }
 
-.call-datetime {
+.conversation-section .call-datetime {
   font-size: 0.875rem;
   color: var(--text-secondary, #6b7280);
   min-width: 120px;
 }
 
-.call-size {
+.conversation-section .call-size {
   font-size: 0.75rem;
   color: var(--text-secondary, #6b7280);
   min-width: 60px;
 }
 
-.call-actions {
+.conversation-section .call-actions {
   display: flex;
   gap: 8px;
 }
 
 /* Integrated View Styles */
-.integrated-view {
+.conversation-section .integrated-view {
   display: flex;
   flex-direction: column;
   gap: 15px;
 }
 
-.integrated-summary {
+.conversation-section .integrated-summary {
   font-size: 0.875rem;
   color: var(--text-secondary, #6b7280);
   margin-bottom: 10px;
 }
 
-.integrated-card {
+.conversation-section .integrated-card {
   background: var(--card-bg, #fff);
   border-radius: 8px;
   padding: 15px;
@@ -262,45 +265,46 @@
   border-left: 4px solid var(--primary-color, #3b82f6);
 }
 
-.integrated-header {
+.conversation-section .integrated-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 10px;
 }
 
-.integrated-subject {
+.conversation-section .integrated-subject {
   font-weight: 600;
   font-size: 0.95rem;
   flex: 1;
 }
 
-.integrated-badges {
+.conversation-section .integrated-badges {
   display: flex;
   gap: 8px;
 }
 
-.badge-email, .badge-call {
+.conversation-section .badge-email,
+.conversation-section .badge-call {
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 0.75rem;
 }
 
-.badge-email {
+.conversation-section .badge-email {
   background: var(--info-light, #dbeafe);
   color: var(--info-dark, #1e40af);
 }
 
-.badge-call {
+.conversation-section .badge-call {
   background: var(--success-light, #d1fae5);
   color: var(--success-dark, #065f46);
 }
 
-.integrated-calls {
+.conversation-section .integrated-calls {
   margin-bottom: 10px;
 }
 
-.call-match {
+.conversation-section .call-match {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -308,15 +312,15 @@
   font-size: 0.875rem;
 }
 
-.call-match-name {
+.conversation-section .call-match-name {
   font-weight: 500;
 }
 
-.call-match-date {
+.conversation-section .call-match-date {
   color: var(--text-secondary, #6b7280);
 }
 
-.call-match-score {
+.conversation-section .call-match-score {
   background: var(--primary-light, #dbeafe);
   color: var(--primary-dark, #1e40af);
   padding: 2px 6px;
@@ -324,12 +328,12 @@
   font-size: 0.75rem;
 }
 
-.integrated-actions {
+.conversation-section .integrated-actions {
   display: flex;
   gap: 8px;
 }
 
-/* Modal Styles */
+/* Modal Styles — modals are appended to body, so keep these global */
 .modal {
   position: fixed;
   top: 0;
@@ -479,75 +483,75 @@
 }
 
 /* Thread Detail Styles */
-.thread-detail-header {
+.conversation-section .thread-detail-header {
   margin-bottom: 15px;
   padding-bottom: 15px;
   border-bottom: 1px solid var(--border-color, #e5e7eb);
 }
 
-.thread-detail-header h4 {
+.conversation-section .thread-detail-header h4 {
   margin: 0 0 8px 0;
 }
 
-.thread-detail-header p {
+.conversation-section .thread-detail-header p {
   margin: 4px 0;
   font-size: 0.875rem;
   color: var(--text-secondary, #6b7280);
 }
 
-.thread-messages {
+.conversation-section .thread-messages {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.message-card {
+.conversation-section .message-card {
   padding: 12px;
   border-radius: 6px;
   border-left: 3px solid;
 }
 
-.message-card.incoming {
+.conversation-section .message-card.incoming {
   background: var(--info-light, #eff6ff);
   border-color: var(--info-color, #3b82f6);
 }
 
-.message-card.outgoing {
+.conversation-section .message-card.outgoing {
   background: var(--success-light, #f0fdf4);
   border-color: var(--success-color, #10b981);
 }
 
-.message-header {
+.conversation-section .message-header {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
 }
 
-.message-direction {
+.conversation-section .message-direction {
   font-size: 0.75rem;
   font-weight: 600;
 }
 
-.message-from {
+.conversation-section .message-from {
   font-weight: 500;
   font-size: 0.875rem;
 }
 
-.message-date {
+.conversation-section .message-date {
   font-size: 0.75rem;
   color: var(--text-secondary, #6b7280);
   margin-left: auto;
 }
 
-.message-body {
+.conversation-section .message-body {
   font-size: 0.875rem;
   line-height: 1.5;
   color: var(--text-primary, #111827);
 }
 
-/* Button Styles */
-.btn-primary {
+/* Button Styles — scoped to conversation section */
+.conversation-section .btn-primary {
   background: var(--primary-color, #3b82f6);
   color: white;
   border: none;
@@ -558,11 +562,11 @@
   transition: background 0.2s;
 }
 
-.btn-primary:hover {
+.conversation-section .btn-primary:hover {
   background: var(--primary-dark, #2563eb);
 }
 
-.btn-secondary {
+.conversation-section .btn-secondary {
   background: var(--secondary-color, #6b7280);
   color: white;
   border: none;
@@ -573,11 +577,11 @@
   transition: background 0.2s;
 }
 
-.btn-secondary:hover {
+.conversation-section .btn-secondary:hover {
   background: var(--secondary-dark, #4b5563);
 }
 
-.btn-sm {
+.conversation-section .btn-sm {
   padding: 4px 10px;
   font-size: 0.75rem;
   border-radius: 4px;
@@ -588,28 +592,28 @@
   transition: background 0.2s;
 }
 
-.btn-sm:hover {
+.conversation-section .btn-sm:hover {
   background: var(--primary-dark, #2563eb);
 }
 
-.btn-outline {
+.conversation-section .btn-outline {
   background: transparent;
   color: var(--primary-color, #3b82f6);
   border: 1px solid var(--primary-color, #3b82f6);
 }
 
-.btn-outline:hover {
+.conversation-section .btn-outline:hover {
   background: var(--primary-light, #dbeafe);
 }
 
-/* Utility Classes */
-.loading {
+/* Utility Classes — scoped */
+.conversation-section .loading {
   text-align: center;
   padding: 40px;
   color: var(--text-secondary, #6b7280);
 }
 
-.empty {
+.conversation-section .empty {
   text-align: center;
   padding: 40px;
   color: var(--text-secondary, #6b7280);
@@ -617,7 +621,7 @@
   border-radius: 8px;
 }
 
-.error {
+.conversation-section .error {
   text-align: center;
   padding: 20px;
   color: var(--error-color, #ef4444);
@@ -642,7 +646,7 @@
   }
 }
 
-/* Thread Summary Panel */
+/* Thread Summary Panel — inside modal, keep global */
 .thread-summary-panel {
   background: #f0f9ff;
   border: 1px solid #bae6fd;

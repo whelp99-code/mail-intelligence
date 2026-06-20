@@ -3,6 +3,9 @@
  * - Shows integrated email threads with call recordings
  * - Displays conversation learning patterns
  * - Allows feedback on conversation classification
+ *
+ * Phase 0: Unified rendering path — populates static #conversationView in index.html
+ * instead of overwriting <main> innerHTML.
  */
 
 // State
@@ -11,136 +14,90 @@ let callRecordings = [];
 let conversationStats = null;
 
 /**
- * Initialize conversation view
- */
-export function initConversationView() {
-  // Add conversation tab to navigation
-  const nav = document.querySelector('.nav-tabs') || document.querySelector('nav');
-  if (nav) {
-    const tab = document.createElement('button');
-    tab.className = 'nav-tab';
-    tab.dataset.tab = 'conversations';
-    tab.textContent = '📞 대화 분석';
-    tab.onclick = () => showConversationTab();
-    nav.appendChild(tab);
-  }
-}
-
-/**
- * Show conversation tab
- */
-async function showConversationTab() {
-  const container = document.getElementById('main-content') || document.querySelector('main');
-  if (!container) return;
-  
-  container.innerHTML = `
-    <div class="conversation-view">
-      <div class="conversation-header">
-        <h2>📞 통합 대화 분석</h2>
-        <div class="conversation-actions">
-          <button onclick="loadConversationData()" class="btn-primary">
-            🔄 새로고침
-          </button>
-          <button onclick="transcribeAllCalls()" class="btn-secondary">
-            🎤 전체 녹음 분석
-          </button>
-        </div>
-      </div>
-      
-      <div class="conversation-stats" id="conversation-stats">
-        <div class="stat-card">
-          <div class="stat-value" id="stat-threads">-</div>
-          <div class="stat-label">메일 스레드</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-replies">-</div>
-          <div class="stat-label">회신 완료</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-calls">-</div>
-          <div class="stat-label">통화 녹음</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-avg-response">-</div>
-          <div class="stat-label">평균 응답 시간</div>
-        </div>
-      </div>
-      
-      <div class="conversation-tabs">
-        <button class="tab-btn active" onclick="showConversationSection('threads')">
-          📧 메일 스레드
-        </button>
-        <button class="tab-btn" onclick="showConversationSection('calls')">
-          📞 통화 녹음
-        </button>
-        <button class="tab-btn" onclick="showConversationSection('integrated')">
-          🔗 통합 뷰
-        </button>
-      </div>
-      
-      <div id="conversation-content" class="conversation-content">
-        <div class="loading">데이터 로딩 중...</div>
-      </div>
-    </div>
-  `;
-  
-  await loadConversationData();
-}
-
-/**
- * Load conversation data
+ * Load conversation data — populates the static #conversationView section.
+ * Called by app.js toggle and refresh button.
  */
 export async function loadConversationData() {
-  try {
-    // Load threads, calls, and stats in parallel
-    const [threadsRes, callsRes] = await Promise.all([
-      fetch('/api/conversations/threads').then(r => r.json()),
-      fetch('/api/calls/recordings').then(r => r.json())
-    ]);
-    
-    conversationThreads = threadsRes.threads || [];
-    conversationStats = threadsRes.stats || {};
-    callRecordings = callsRes.recordings || [];
-    
-    // Update stats
-    updateConversationStats();
-    
-    // Show threads by default
-    showConversationSection('threads');
-    
-  } catch (error) {
-    console.error('Failed to load conversation data:', error);
-    document.getElementById('conversation-content').innerHTML = 
-      `<div class="error">데이터 로딩 실패: ${error.message}</div>`;
+  const contentEl = document.getElementById('conversation-content');
+  if (contentEl) {
+    contentEl.innerHTML = '<div class="loading">데이터 로딩 중...</div>';
+  }
+
+  const [threadsResult, callsResult] = await Promise.allSettled([
+    fetch('/api/conversations/threads').then(r => {
+      if (!r.ok) throw new Error(`스레드 API 오류 (${r.status})`);
+      return r.json();
+    }),
+    fetch('/api/calls/recordings').then(r => {
+      if (!r.ok) throw new Error(`통화 API 오류 (${r.status})`);
+      return r.json();
+    })
+  ]);
+
+  // Handle threads result
+  if (threadsResult.status === 'fulfilled') {
+    conversationThreads = threadsResult.value.threads || [];
+    conversationStats = threadsResult.value.stats || {};
+  } else {
+    console.error('Failed to load threads:', threadsResult.reason);
+    conversationThreads = [];
+    conversationStats = null;
+  }
+
+  // Handle calls result
+  if (callsResult.status === 'fulfilled') {
+    callRecordings = callsResult.value.recordings || [];
+  } else {
+    console.error('Failed to load calls:', callsResult.reason);
+    callRecordings = [];
+  }
+
+  // Update stats (tolerant of partial failure)
+  updateConversationStats();
+
+  // Show threads by default
+  showConversationSection('threads');
+
+  // Show partial errors in content area if both failed
+  if (threadsResult.status === 'rejected' && callsResult.status === 'rejected') {
+    if (contentEl) {
+      contentEl.innerHTML = `<div class="error">데이터 로딩 실패: ${threadsResult.reason?.message || '알 수 없는 오류'}</div>`;
+    }
   }
 }
 
 /**
- * Update conversation statistics
+ * Update conversation statistics using static HTML IDs.
  */
 function updateConversationStats() {
-  if (!conversationStats) return;
-  
-  document.getElementById('stat-threads').textContent = conversationStats.totalThreads || 0;
-  document.getElementById('stat-replies').textContent = conversationStats.withReply || 0;
-  document.getElementById('stat-calls').textContent = callRecordings.length;
-  document.getElementById('stat-avg-response').textContent = 
-    conversationStats.avgResponseTime ? `${conversationStats.avgResponseTime}시간` : '-';
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+
+  if (conversationStats) {
+    set('conv-stat-threads', conversationStats.totalThreads || 0);
+    set('conv-stat-replies', conversationStats.withReply || 0);
+    set('conv-stat-avg-response',
+      conversationStats.avgResponseTime ? `${conversationStats.avgResponseTime}시간` : '-'
+    );
+  }
+  set('conv-stat-calls', callRecordings.length);
 }
 
 /**
- * Show conversation section
+ * Show conversation section (threads / calls / integrated).
+ * Tab button active state is managed by app.js click handlers.
  */
 export function showConversationSection(section) {
   // Update tab buttons
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.includes(
-      section === 'threads' ? '메일' : section === 'calls' ? '통화' : '통합'
-    ));
+  document.querySelectorAll('.conversation-tabs .tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === section);
   });
-  
+
   const content = document.getElementById('conversation-content');
-  
+  if (!content) return;
+
   switch (section) {
     case 'threads':
       renderEmailThreads(content);
@@ -162,7 +119,7 @@ function renderEmailThreads(container) {
     container.innerHTML = '<div class="empty">메일 스레드가 없습니다.</div>';
     return;
   }
-  
+
   const html = `
     <div class="threads-list">
       ${conversationThreads.slice(0, 50).map(thread => `
@@ -174,18 +131,18 @@ function renderEmailThreads(container) {
               <span class="thread-reply ${thread.hasReply ? 'replied' : 'pending'}">
                 ${thread.hasReply ? '✅ 회신완료' : '⏳ 미회신'}
               </span>
-              ${thread.calls && thread.calls.length > 0 ? 
+              ${thread.calls && thread.calls.length > 0 ?
                 `<span class="thread-call">📞 ${thread.calls.length}건 통화</span>` : ''}
             </div>
           </div>
           <div class="thread-participants">
-            ${thread.participants.slice(0, 5).map(p => 
+            ${thread.participants.slice(0, 5).map(p =>
               `<span class="participant">${escapeHtml(p)}</span>`
             ).join('')}
           </div>
           <div class="thread-dates">
-            ${thread.startDate ? new Date(thread.startDate).toLocaleDateString('ko-KR') : ''} 
-            ~ 
+            ${thread.startDate ? new Date(thread.startDate).toLocaleDateString('ko-KR') : ''}
+            ~
             ${thread.endDate ? new Date(thread.endDate).toLocaleDateString('ko-KR') : ''}
           </div>
           <div class="thread-actions">
@@ -200,7 +157,7 @@ function renderEmailThreads(container) {
       `).join('')}
     </div>
   `;
-  
+
   container.innerHTML = html;
 }
 
@@ -212,7 +169,7 @@ function renderCallRecordings(container) {
     container.innerHTML = '<div class="empty">통화 녹음이 없습니다.</div>';
     return;
   }
-  
+
   const html = `
     <div class="calls-list">
       <div class="calls-summary">
@@ -245,7 +202,7 @@ function renderCallRecordings(container) {
       `).join('')}
     </div>
   `;
-  
+
   container.innerHTML = html;
 }
 
@@ -254,11 +211,12 @@ function renderCallRecordings(container) {
  */
 async function renderIntegratedView(container) {
   container.innerHTML = '<div class="loading">통합 뷰 로딩 중...</div>';
-  
+
   try {
     const res = await fetch('/api/conversations/integrated');
+    if (!res.ok) throw new Error(`통합 뷰 API 오류 (${res.status})`);
     const data = await res.json();
-    
+
     const html = `
       <div class="integrated-view">
         <div class="integrated-summary">
@@ -292,13 +250,13 @@ async function renderIntegratedView(container) {
             </div>
           </div>
         `).join('')}
-        ${data.threads.filter(t => t.hasCallMatch).length === 0 ? 
+        ${data.threads.filter(t => t.hasCallMatch).length === 0 ?
           '<div class="empty">통화와 매칭된 메일 스레드가 없습니다.</div>' : ''}
       </div>
     `;
-    
+
     container.innerHTML = html;
-    
+
   } catch (error) {
     container.innerHTML = `<div class="error">통합 뷰 로딩 실패: ${error.message}</div>`;
   }
@@ -314,17 +272,16 @@ async function transcribeCall(filePath) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filePath, model: 'base', language: 'ko' })
     });
-    
+
     const result = await res.json();
-    
+
     if (result.error) {
       alert(`변환 실패: ${result.error}`);
       return;
     }
-    
-    // Show transcript in modal
+
     showTranscriptModal(result);
-    
+
   } catch (error) {
     alert(`변환 실패: ${error.message}`);
   }
@@ -340,21 +297,21 @@ async function matchCallWithEmails(filePath) {
       alert('통화 정보를 찾을 수 없습니다.');
       return;
     }
-    
+
     const res = await fetch('/api/calls/match', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ callInfo, mailboxKey: 'me' })
     });
-    
+
     const data = await res.json();
-    
+
     if (data.matches && data.matches.length > 0) {
       showMatchResultsModal(callInfo, data.matches);
     } else {
       alert('매칭되는 메일이 없습니다.');
     }
-    
+
   } catch (error) {
     alert(`매칭 실패: ${error.message}`);
   }
@@ -379,7 +336,7 @@ function showTranscriptModal(transcript) {
           <p><strong>통화시간:</strong> ${transcript.duration}초</p>
         </div>
         <div class="transcript-text">
-          ${transcript.transcript ? transcript.transcript.map(s => 
+          ${transcript.transcript ? transcript.transcript.map(s =>
             `<p><span class="timestamp">[${Math.floor(s.start / 60)}:${String(Math.floor(s.start % 60)).padStart(2, '0')}]</span> ${escapeHtml(s.text)}</p>`
           ).join('') : '<p>변환된 텍스트가 없습니다.</p>'}
         </div>
@@ -394,7 +351,7 @@ function showTranscriptModal(transcript) {
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(modal);
 }
 
@@ -430,14 +387,13 @@ function showMatchResultsModal(callInfo, matches) {
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(modal);
 }
 
 /**
- * View thread detail
+ * Fetch thread summary asynchronously
  */
-
 async function fetchThreadSummary(conversationId, modal) {
   const content = modal.querySelector('#threadSummaryContent');
   const loading = modal.querySelector('.summary-loading');
@@ -457,10 +413,13 @@ async function fetchThreadSummary(conversationId, modal) {
   }
 }
 
+/**
+ * View thread detail (modal)
+ */
 function viewThreadDetail(threadId) {
   const thread = conversationThreads.find(t => t.id === threadId);
   if (!thread) return;
-  
+
   const modal = document.createElement('div');
   modal.className = 'modal';
   modal.innerHTML = `
@@ -498,10 +457,9 @@ function viewThreadDetail(threadId) {
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(modal);
 
-  // Fetch thread summary asynchronously
   const conversationId = thread.messages[0]?.conversationId;
   if (conversationId && thread.messageCount >= 3) {
     fetchThreadSummary(conversationId, modal);
@@ -520,7 +478,7 @@ async function transcribeAllCalls() {
   if (!confirm('전체 통화 녹음을 분석하시겠습니까? (시간이 오래 걸릴 수 있습니다)')) {
     return;
   }
-  
+
   alert('전체 분석은 백그라운드에서 진행됩니다. 완료 후 알림을 받으실 수 있습니다.');
 }
 
@@ -528,7 +486,6 @@ async function transcribeAllCalls() {
  * Provide thread feedback
  */
 function provideThreadFeedback(threadId) {
-  // TODO: Implement feedback UI
   alert('피드백 기능은 준비 중입니다.');
 }
 
@@ -541,8 +498,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Expose functions to global scope for onclick handlers
-window.showConversationTab = showConversationTab;
+// Expose functions to global scope for onclick handlers in static HTML
 window.loadConversationData = loadConversationData;
 window.showConversationSection = showConversationSection;
 window.transcribeCall = transcribeCall;

@@ -15,15 +15,18 @@
 }
 
 * { box-sizing: border-box; }
-html, body { min-height: 100%; }
-body {
+html, body {
+  height: 100vh;
   margin: 0;
+  overflow: hidden;
+}
+body {
   color: var(--ink);
   background: var(--bg);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
-  overflow: auto;
+  grid-template-rows: 100vh;
 }
 
 h1, h2, h3, h4, p { margin-top: 0; }
@@ -42,7 +45,8 @@ button.primary { background: var(--green); border-color: var(--green); color: #f
 button:disabled { cursor: wait; opacity: 0.7; }
 
 .sidebar {
-  min-height: 100vh;
+  height: 100vh;
+  overflow-y: auto;
   background: #10251d;
   color: #fff;
   padding: 24px;
@@ -100,19 +104,39 @@ button:disabled { cursor: wait; opacity: 0.7; }
 }
 .folder-list, .idea-list {
   display: grid;
-  gap: 8px;
+  gap: 4px;
+}
+.folder-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255,255,255,0.4);
+  padding: 8px 0 2px;
+}
+.folder-section-label:first-child {
+  padding-top: 0;
 }
 .folder-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 38px;
+  min-height: 34px;
   background: rgba(255,255,255,0.04);
   border-color: rgba(255,255,255,0.12);
   color: #e8f3ef;
+  font-size: 13px;
 }
 .folder-item strong {
+  color: #92dcc0;
+}
+.folder-counts {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  white-space: nowrap;
+}
+.folder-counts strong {
   color: #92dcc0;
 }
 .idea-item {
@@ -453,8 +477,10 @@ textarea {
   overflow: auto;
 }
 .message-list {
-  display: grid;
-  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 0;
 }
 .message-group {
@@ -481,26 +507,75 @@ textarea {
   border: 0;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
-  display: grid;
-  gap: 7px;
-  padding: 13px 14px;
+  padding: 12px 14px 10px;
 }
 .message-card:hover, .message-card.selected { background: var(--soft-green); }
-.message-card.unread .message-subject::before {
+.message-card.promo {
+  background: #fffaf0;
+}
+.message-card.ai-enhanced {
+  border-left: 3px solid var(--green);
+}
+/* Outlook-style: line1 = sender + time */
+.mc-line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.mc-sender {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.message-card.unread .mc-sender {
+  color: var(--ink, #111);
+}
+.mc-time {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* line2 = subject */
+.mc-line2 {
+  margin-top: 3px;
+}
+.mc-subject {
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink, #111);
+}
+.message-card.unread .mc-subject {
+  font-weight: 700;
+}
+.message-card.unread .mc-subject::before {
   background: var(--green);
   border-radius: 999px;
   content: "";
   display: inline-block;
-  height: 8px;
-  margin-right: 7px;
-  width: 8px;
+  height: 7px;
+  margin-right: 6px;
+  width: 7px;
+  vertical-align: middle;
 }
-.message-card.promo {
-  background: #fffaf0;
+/* line3 = preview */
+.mc-line3 {
+  margin-top: 2px;
 }
-.message-card.ai-enhanced .message-next {
-  background: #ecfdf5;
-  color: #047857;
+.mc-preview {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .message-row {
   align-items: start;
@@ -990,17 +1065,17 @@ textarea {
 .thread-card {
   border: 1px solid var(--line);
   border-radius: 6px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   overflow: hidden;
   background: #fff;
 }
 
 .thread-card-head {
-  align-items: center;
+  align-items: stretch;
   cursor: pointer;
   display: flex;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 10px 12px;
 }
 
 .thread-expand-btn {
@@ -1010,13 +1085,64 @@ textarea {
   cursor: pointer;
   flex-shrink: 0;
   font-size: 9px;
-  padding: 2px;
+  padding: 2px 4px;
+  align-self: center;
 }
 
 .thread-card-main {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+}
+
+/* Outlook-style thread head: line1 = sender + badges + time */
+.tc-line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.tc-sender {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.tc-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.tc-time {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* line2 = subject + preview */
+.tc-line2 {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.tc-subject {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+.tc-preview {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 .thread-card-title {
@@ -1059,20 +1185,25 @@ textarea {
 
 .thread-card-body {
   border-top: 1px solid var(--line);
-  padding: 8px 12px;
+  padding: 0;
   background: #fafafa;
 }
 
 .thread-card-body .message-card {
-  margin-top: 6px;
-  padding: 8px 10px;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background: #fff;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid #eee;
+  border-radius: 0;
+  background: #fafafa;
+  min-height: auto;
+}
+
+.thread-card-body .message-card:last-child {
+  border-bottom: none;
 }
 
 .thread-card-body .message-card:hover {
-  background: #f5f5f5;
+  background: #f0f0f0;
 }
 
 /* 카반 카드 제목/요약 */

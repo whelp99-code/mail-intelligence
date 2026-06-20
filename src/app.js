@@ -5,7 +5,7 @@ import { initStats } from './stats.js';
 import { initTheme } from './theme.js';
 import { initSearch } from './search.js';
 import { initNotifications } from './notifications.js';
-import { initConversationView, loadConversationData, showConversationSection } from './conversationView.js';
+import { loadConversationData, showConversationSection } from './conversationView.js';
 import {
   groupMessagesByThread,
   latestMessageInThread,
@@ -74,9 +74,11 @@ let currentResult = null;
 let currentMessages = [];
 let visibleMessages = [];
 let activeFilter = 'all';
+let activeFolderId = 'inbox';
 let searchQuery = '';
 let selectedMessageId = '';
 let attachmentEntries = [];
+let outlookFolders = [];
 let lastSyncedAt = null;
 let restoredUiState = null;
 const LAST_MAILBOX_KEY = 'mail-intelligence-last-mailbox';
@@ -161,6 +163,20 @@ function empty(label) {
   return node;
 }
 
+function formatMailTime(dateStr) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  if (isToday) {
+    return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  const isThisYear = d.getFullYear() === now.getFullYear();
+  if (isThisYear) {
+    return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+  }
+  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function insightFor(messageId) {
   return currentResult?.messageInsights?.find((item) => item.id === messageId);
 }
@@ -194,22 +210,30 @@ function threadCard(items, { expanded = false } = {}) {
   section.className = 'message-group thread-card';
   section.dataset.threadKey = threadKeyForList(items);
 
+  const senderName = rep?.fromName || rep?.from || 'unknown';
+  const timeStr = rep?.receivedAt ? formatMailTime(rep.receivedAt) : '';
   const head = document.createElement('div');
   head.className = 'thread-card-head';
   head.innerHTML = `
     <button type="button" class="thread-expand-btn" aria-expanded="${expanded}">${expanded ? '▼' : '▶'}</button>
     <div class="thread-card-main">
-      <strong class="thread-card-title"></strong>
-      <span class="thread-badges"></span>
-      <p class="thread-card-preview"></p>
+      <div class="tc-line1">
+        <strong class="tc-sender"></strong>
+        <span class="tc-badges"></span>
+        <span class="tc-time"></span>
+      </div>
+      <div class="tc-line2">
+        <span class="tc-subject"></span>
+        <span class="tc-preview"></span>
+      </div>
     </div>
-    <span class="status-pill thread-lane-pill"></span>
   `;
-  head.querySelector('.thread-card-title').textContent = groupLabelFor(items);
-  head.querySelector('.thread-card-preview').textContent =
+  head.querySelector('.tc-sender').textContent = senderName;
+  head.querySelector('.tc-time').textContent = timeStr;
+  head.querySelector('.tc-subject').textContent = groupLabelFor(items);
+  head.querySelector('.tc-preview').textContent =
     insightFor(rep?.id)?.summary?.[0] || rep?.bodyPreview || '';
-  head.querySelector('.thread-lane-pill').textContent = statusLabel(lane);
-  const badges = head.querySelector('.thread-badges');
+  const badges = head.querySelector('.tc-badges');
   if (items.length > 1) {
     const count = document.createElement('span');
     count.className = 'thread-badge';
@@ -254,30 +278,24 @@ function messageCard(message) {
   const article = document.createElement('article');
   article.className = 'message-card';
   article.dataset.messageId = message.id;
+  const senderName = message.fromName || message.from || 'unknown';
+  const timeStr = message.receivedAt ? formatMailTime(message.receivedAt) : '';
   article.innerHTML = `
-    <div class="message-row">
-      <strong class="message-subject"></strong>
-      <span class="urgency-badge"></span>
-      <span class="status-pill"></span>
+    <div class="mc-line1">
+      <strong class="mc-sender"></strong>
+      <span class="mc-time"></span>
     </div>
-    <div class="message-meta"></div>
-    <div class="message-summary"></div>
-    <div class="message-next"></div>
+    <div class="mc-line2">
+      <span class="mc-subject"></span>
+    </div>
+    <div class="mc-line3">
+      <span class="mc-preview"></span>
+    </div>
   `;
-  article.querySelector('.message-subject').textContent = message.subject || '(제목 없음)';
-  article.querySelector('.status-pill').textContent = `${statusLabel(lane)}${insight?.userFeedback ? ' · 내 보정' : ''}`;
-  const urgencyEl = article.querySelector('.urgency-badge');
-  if (typeof insight?.urgency === 'number') {
-    const u = insight.urgency;
-    urgencyEl.textContent = u;
-    urgencyEl.className = `urgency-badge ${u >= 80 ? 'urgency-high' : u >= 50 ? 'urgency-mid' : u >= 30 ? 'urgency-low' : 'urgency-minimal'}`;
-    urgencyEl.style.display = '';
-  } else {
-    urgencyEl.style.display = 'none';
-  }
-  article.querySelector('.message-meta').textContent = `${message.isRead ? '읽음' : '읽지않음'} · ${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}${insight?.isSpamCandidate ? ' · 광고성 후보' : ''}${insight?.isOnHold ? ' · 보류' : ''}`;
-  article.querySelector('.message-summary').textContent = insight?.summary?.[0] || message.bodyPreview || '';
-  article.querySelector('.message-next').textContent = insight?.nextActions?.[0]?.recommendedAction || '후속 필요 여부 확인';
+  article.querySelector('.mc-sender').textContent = senderName;
+  article.querySelector('.mc-time').textContent = timeStr;
+  article.querySelector('.mc-subject').textContent = message.subject || '(제목 없음)';
+  article.querySelector('.mc-preview').textContent = insight?.summary?.[0] || message.bodyPreview || '';
   if (insight?.aiEnhanced) article.classList.add('ai-enhanced');
   if (!message.isRead) article.classList.add('unread');
   if (insight?.isSpamCandidate) article.classList.add('promo');
@@ -688,17 +706,21 @@ async function sendComposedMail() {
 
 function laneForMessage(messageId) {
   const insight = insightFor(messageId);
-  if (!insight) return 'active';
-  const applied = effectiveStatus(insight);
-  if (applied === 'urgent') return 'urgent';
-  if (applied === 'waiting') return 'waiting';
-  if (applied === 'done') return 'done';
-  if (applied === 'active' || applied === 'reference') return 'active';
-  if (insight.tasks?.some((task) => task.lane === 'urgent')) return 'urgent';
-  if (insight.tasks?.some((task) => task.lane === 'waiting')) return 'waiting';
-  if (insight.tasks?.some((task) => task.lane === 'active')) return 'active';
-  if (insight.tasks?.some((task) => task.lane === 'done')) return 'done';
-  return 'active';
+  if (insight) {
+    const applied = effectiveStatus(insight);
+    if (applied === 'urgent') return 'urgent';
+    if (applied === 'waiting') return 'waiting';
+    if (applied === 'done') return 'done';
+    if (applied === 'active' || applied === 'reference') return 'active';
+    if (insight.tasks?.some((task) => task.lane === 'urgent')) return 'urgent';
+    if (insight.tasks?.some((task) => task.lane === 'waiting')) return 'waiting';
+    if (insight.tasks?.some((task) => task.lane === 'active')) return 'active';
+    if (insight.tasks?.some((task) => task.lane === 'done')) return 'done';
+    return 'active';
+  }
+  // Fallback: use lightweight _status from server
+  const msg = currentMessages.find((m) => m.id === messageId);
+  return msg?._status || 'reference';
 }
 
 function statusLabel(status) {
@@ -728,11 +750,20 @@ function searchableText(message) {
 function filteredMessages() {
   const query = searchQuery.trim().toLowerCase();
   return currentMessages.filter((message) => {
-    const matchesLane =
-      activeFilter === 'all'
-      || (activeFilter === 'unread' ? !message.isRead : laneForMessage(message.id) === activeFilter);
+    // Folder filter: match mailFolder against activeFolderId
+    const mf = (message.mailFolder || 'inbox').toLowerCase();
+    const matchesFolder = activeFolderId === 'all'
+      || mf === activeFolderId
+      || mf.replace(/\s+/g, '') === activeFolderId;
+    // Status filter: use insight if available, otherwise use _status
+    let matchesLane = true;
+    if (activeFilter !== 'all') {
+      const insight = insightFor(message.id);
+      const status = insight ? laneForMessage(message.id) : (message._status || 'reference');
+      matchesLane = activeFilter === 'unread' ? !message.isRead : status === activeFilter;
+    }
     const matchesSearch = !query || searchableText(message).includes(query);
-    return matchesLane && matchesSearch;
+    return matchesFolder && matchesLane && matchesSearch;
   });
 }
 
@@ -772,7 +803,11 @@ function renderFilteredView() {
   refreshFilterButtons();
 
   Object.keys(counts).forEach((lane) => {
-    counts[lane].textContent = currentMessages.filter((message) => laneForMessage(message.id) === lane).length;
+    counts[lane].textContent = currentMessages.filter((message) => {
+      const insight = insightFor(message.id);
+      if (insight) return laneForMessage(message.id) === lane;
+      return (message._status || 'reference') === lane;
+    }).length;
   });
 
   clear(messageList);
@@ -955,20 +990,70 @@ function renderSidebar() {
     <span>${outlookConnected ? '증분 동기화 사용 중' : '연결 필요'} · 전체 ${currentMessages.length}건 · 미읽음 ${unreadCount}건</span>
     ${lastSyncedAt ? `<span class="sidebar-sync-time">마지막 동기화: ${new Date(lastSyncedAt).toLocaleString('ko-KR')}</span>` : ''}
   `;
-  folderList.innerHTML = [
-    { key: 'all', label: '받은편지함', count: currentMessages.length },
+
+  // Well-known folder display names
+  const folderNames = {
+    inbox: '받은편지함',
+    sentitems: '보낸편지함',
+    drafts: '임시 보관함',
+    deleteditems: '삭제된 항목',
+    junkemail: '정크 메일',
+    archive: '보관함',
+    outbox: '보낼 편지함'
+  };
+
+  // Build folder list: real Outlook folders first, then virtual filters
+  const folderItems = [];
+  if (outlookFolders.length > 0) {
+    outlookFolders.forEach((f) => {
+      const key = f.key || f.name.toLowerCase().replace(/\s+/g, '');
+      const label = folderNames[key] || f.name;
+      // Count messages in this folder using the key
+      const folderMsgCount = currentMessages.filter((m) => {
+        const mf = (m.mailFolder || 'inbox').toLowerCase();
+        return mf === key;
+      }).length;
+      const folderUnread = currentMessages.filter((m) => {
+        const mf = (m.mailFolder || 'inbox').toLowerCase();
+        return !m.isRead && mf === key;
+      }).length;
+      folderItems.push({ key, label, count: folderMsgCount, unread: folderUnread, isFolder: true });
+    });
+  } else {
+    // Fallback: show inbox/sent if no folder data
+    folderItems.push({ key: 'inbox', label: '받은편지함', count: currentMessages.filter((m) => (m.mailFolder || 'inbox') === 'inbox').length, unread: currentMessages.filter((m) => !m.isRead && (m.mailFolder || 'inbox') === 'inbox').length, isFolder: true });
+    folderItems.push({ key: 'sentitems', label: '보낸편지함', count: currentMessages.filter((m) => m.mailFolder === 'sentitems').length, unread: 0, isFolder: true });
+  }
+
+  // Virtual filters
+  const virtualFilters = [
     { key: 'unread', label: '읽지 않음', count: unreadCount },
     { key: 'urgent', label: '긴급', count: countsByStatus.urgent },
     { key: 'active', label: '진행중', count: countsByStatus.active },
     { key: 'waiting', label: '대기', count: countsByStatus.waiting },
-    { key: 'done', label: '완료', count: countsByStatus.done },
-    { key: 'attachments', label: '첨부 보관함', count: attachmentEntries.length }
-  ].map((item) => `
-    <button type="button" class="folder-item${activeFilter === item.key ? ' selected' : ''}" data-folder="${item.key}">
-      <span>${item.label}</span>
-      <strong>${item.count}</strong>
+    { key: 'done', label: '완료', count: countsByStatus.done }
+  ];
+
+  folderList.innerHTML = `
+    <div class="folder-section-label">폴더</div>
+    ${folderItems.map((item) => `
+      <button type="button" class="folder-item${activeFolderId === item.key ? ' selected' : ''}" data-folder="${item.key}" data-type="folder">
+        <span>${escapeHtml(item.label)}</span>
+        <span class="folder-counts">${item.unread > 0 ? `<strong>${item.unread}</strong> / ` : ''}${item.count}</span>
+      </button>
+    `).join('')}
+    <div class="folder-section-label">상태 필터</div>
+    ${virtualFilters.map((item) => `
+      <button type="button" class="folder-item${activeFilter === item.key ? ' selected' : ''}" data-folder="${item.key}" data-type="filter">
+        <span>${item.label}</span>
+        <strong>${item.count}</strong>
+      </button>
+    `).join('')}
+    <button type="button" class="folder-item${activeFilter === 'attachments' ? ' selected' : ''}" data-folder="attachments" data-type="filter">
+      <span>첨부 보관함</span>
+      <strong>${attachmentEntries.length}</strong>
     </button>
-  `).join('');
+  `;
   // Smart recommendations
   const replyNeeded = currentMessages.filter((m) => {
     const ins = insightFor(m.id);
@@ -992,18 +1077,27 @@ function renderSidebar() {
   folderList.querySelectorAll('.folder-item').forEach((button) => {
     button.addEventListener('click', () => {
       const folder = button.dataset.folder;
+      const type = button.dataset.type;
       if (folder === 'attachments') {
         openAttachmentExplorer();
         return;
       }
-      if (folder === 'unread') {
+      if (type === 'folder') {
+        // Folder navigation: filter by mailFolder, clear status filter
+        activeFolderId = folder;
+        activeFilter = 'all';
         searchQuery = '';
         mailSearch.value = '';
-        activeFilter = 'unread';
-        renderFilteredView();
-        return;
+      } else {
+        // Status filter: keep current folder, set status filter
+        if (folder === 'unread') {
+          searchQuery = '';
+          mailSearch.value = '';
+          activeFilter = 'unread';
+        } else {
+          activeFilter = folder;
+        }
       }
-      activeFilter = folder === 'all' ? 'all' : folder;
       renderFilteredView();
     });
   });
@@ -1080,6 +1174,18 @@ function closeAttachmentExplorer() {
   persistMailboxUiState();
 }
 
+async function fetchFolders() {
+  try {
+    const response = await fetch('/api/outlook/folders');
+    if (!response.ok) return;
+    const data = await response.json();
+    outlookFolders = data.folders || [];
+    renderSidebar();
+  } catch {
+    outlookFolders = [];
+  }
+}
+
 async function loadAttachments() {
   try {
     const response = await fetch('/api/outlook/attachments');
@@ -1143,9 +1249,13 @@ async function bootMailbox() {
   if (cached?.messages?.length) {
     fetchStatus.textContent = `캐시에서 ${cached.messages.length}건 메일을 표시했습니다.`;
     await loadAttachments();
+    fetchFolders();
     // Try auto sync in background if connected
     if (outlookConnected) {
-      refreshMailbox({ sync: 'auto', silent: true }).then(() => loadAttachments());
+      refreshMailbox({ sync: 'auto', silent: true }).then(() => {
+        loadAttachments();
+        fetchFolders();
+      });
     }
     return;
   }
@@ -1155,6 +1265,7 @@ async function bootMailbox() {
   }
   await refreshMailbox({ sync: 'auto' });
   await loadAttachments();
+  fetchFolders();
 }
 
 function applyConfigFormFromStatus(status) {
@@ -1321,7 +1432,6 @@ initStats();
 initTheme();
 initSearch();
 initNotifications();
-initConversationView();
 restoreUiPresentation(restoredUiState);
 
 // Conversation toggle
