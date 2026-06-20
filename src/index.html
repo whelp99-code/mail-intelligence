@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mail Intelligence</title>
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./conversation-styles.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -13,11 +14,25 @@
         <h1>Mail Intelligence</h1>
         <p class="lede">Outlook 메일을 요약하고 다음 액션까지 정리합니다.</p>
       </div>
-      <nav class="nav" aria-label="분석 섹션">
-        <a href="#messages">메일</a>
-        <a href="#messageDetail">요약</a>
-        <a href="#actions">액션</a>
-      </nav>
+      <section class="sidebar-section">
+        <div id="sidebarAccount" class="account-card">
+          <strong>계정 정보 로딩 중</strong>
+          <span>Outlook 연결 상태를 확인합니다.</span>
+        </div>
+      </section>
+      <section class="sidebar-section">
+        <div class="sidebar-head">
+          <h2>폴더</h2>
+          <button id="openAttachments" type="button" class="sidebar-link">첨부 전체 보기</button>
+        </div>
+        <div id="folderList" class="folder-list"></div>
+      </section>
+      <section class="sidebar-section">
+        <div class="sidebar-head">
+          <h2>추천</h2>
+        </div>
+        <div id="sidebarIdeas" class="idea-list"></div>
+      </section>
       <div class="connector">
         <span class="dot"></span>
         <span id="connectionStatus">Outlook 연결 확인 중</span>
@@ -26,9 +41,9 @@
 
     <main class="main">
       <section class="topbar">
-        <div>
+        <div class="topbar-title">
           <h2>메일 업무함</h2>
-          <p id="fetchStatus">아직 Outlook을 가져오지 않았습니다.</p>
+          <p id="fetchStatus">연결되면 캐시된 메일을 표시하고 변경분을 자동 동기화합니다.</p>
         </div>
         <div class="actions">
           <label class="search-field" aria-label="메일 검색">
@@ -43,9 +58,34 @@
               <option value="50">50개</option>
             </select>
           </label>
-          <button id="loadOutlook" type="button" class="primary">Outlook 가져오기</button>
-          <button id="loadSample" type="button">데모</button>
+          <button id="loadOutlook" type="button" title="Graph에서 최근 메일을 다시 가져옵니다">전체 새로고침</button>
+          <button id="kanbanToggle" type="button">칸반 보기</button>
+          <button id="statsToggle" type="button">통계 보기</button>
+          <button id="conversationToggle" type="button">📞 대화 분석</button>
+          <button id="themeToggle" type="button">🌙 다크모드</button>
         </div>
+      </section>
+
+      <section id="attachmentExplorer" class="attachment-explorer hidden" aria-hidden="true">
+        <div class="panel-head compact">
+          <h3>첨부파일 전체 보기</h3>
+          <div class="attachment-head-actions">
+            <span id="attachmentCount">0건</span>
+            <button id="refreshAttachments" type="button" class="sidebar-link">과거 자료 재탐색</button>
+            <button id="closeAttachments" type="button">닫기</button>
+          </div>
+        </div>
+        <div class="attachment-toolbar">
+          <input id="attachmentSearch" type="search" placeholder="파일명, 발신자, 제목, 태그 검색" />
+          <div id="attachmentCategoryFilter" class="attachment-category-filter">
+            <button type="button" class="cat-btn selected" data-cat="all">전체</button>
+            <button type="button" class="cat-btn" data-cat="document">문서</button>
+            <button type="button" class="cat-btn" data-cat="spreadsheet">스프레드시트</button>
+            <button type="button" class="cat-btn" data-cat="presentation">프레젠테이션</button>
+            <button type="button" class="cat-btn" data-cat="sales">영업/견적</button>
+          </div>
+        </div>
+        <div id="attachmentList" class="attachment-list"></div>
       </section>
 
       <details class="config-panel">
@@ -112,7 +152,7 @@
           </label>
           <div class="config-actions">
             <button id="loginOutlook" type="button">Outlook으로 로그인</button>
-            <button id="saveConfig" type="submit" class="primary">저장 후 가져오기</button>
+            <button id="saveConfig" type="button" class="primary">저장 후 가져오기</button>
             <button id="clearConfig" type="button">입력 지우기</button>
           </div>
         </form>
@@ -162,8 +202,48 @@
           </section>
         </aside>
       </section>
+
+      <section id="conversationView" class="conversation-section hidden" aria-hidden="true">
+        <div class="conversation-header">
+          <h2>📞 통합 대화 분석</h2>
+          <div class="conversation-actions">
+            <button id="refreshConversations" type="button" class="btn-primary">🔄 새로고침</button>
+            <button id="transcribeAll" type="button" class="btn-secondary">🎤 전체 녹음 분석</button>
+          </div>
+        </div>
+        
+        <div class="conversation-stats">
+          <div class="stat-card">
+            <div class="stat-value" id="conv-stat-threads">-</div>
+            <div class="stat-label">메일 스레드</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="conv-stat-replies">-</div>
+            <div class="stat-label">회신 완료</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="conv-stat-calls">-</div>
+            <div class="stat-label">통화 녹음</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="conv-stat-avg-response">-</div>
+            <div class="stat-label">평균 응답 시간</div>
+          </div>
+        </div>
+        
+        <div class="conversation-tabs">
+          <button class="tab-btn active" data-tab="threads">📧 메일 스레드</button>
+          <button class="tab-btn" data-tab="calls">📞 통화 녹음</button>
+          <button class="tab-btn" data-tab="integrated">🔗 통합 뷰</button>
+        </div>
+        
+        <div id="conversation-content" class="conversation-content">
+          <div class="loading">데이터 로딩 중...</div>
+        </div>
+      </section>
     </main>
 
     <script type="module" src="./app.js"></script>
+    <div id="toastContainer"></div>
   </body>
 </html>

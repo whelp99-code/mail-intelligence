@@ -8,12 +8,23 @@ node_modules/
 .outlook-config.json
 runtime-config.json
 
-# Data files (generated at runtime)
+# Data files (generated at runtime) — never commit secrets or mail bodies
+data/
 .mail-cache.json
+.mail-cache.json.*
+.outlook-config.json
+.outlook-accounts.json
+.oauth-states.json
+.attachment-archive.json
+.attachment-archive-meta.json
 attachment-archive.json
 attachment-archive-meta.json
 accounts.json
 oauth-states.json
+runtime-config.json
+.codex-backups/
+"* 2.example"
+"* 2.json"
 
 # Logs
 *.log
@@ -41,4 +52,4 @@ coverage/
 
 # Temporary files
 *.tmp
-*.temp
+*.tempcursor/
