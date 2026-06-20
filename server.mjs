@@ -1317,11 +1317,14 @@ function clip(value = '', max = 5000) {
 function extractJson(text) {
   const raw = String(text || '').trim();
   if (!raw) throw new Error('AI returned empty response.');
+  // Strip thinking tags if present
+  const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!cleaned) throw new Error('AI returned empty response after stripping thinking tags.');
   try {
-    return JSON.parse(raw);
-  } catch {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error(`AI response did not contain JSON. Response: ${raw.slice(0, 200)}`);
+    return JSON.parse(cleaned);
+  } catch (e) {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error(`AI response did not contain JSON. Response: ${cleaned.slice(0, 200)}`);
     try {
       return JSON.parse(match[0]);
     } catch {
@@ -1333,7 +1336,9 @@ function extractJson(text) {
         .replace(/}\s*\n\s*"/g, '},"')  // Fix missing commas after objects
         .replace(/,\s*,/g, ',')         // Remove double commas
         .replace(/\[\s*,/g, '[')        // Remove leading commas in arrays
-        .replace(/,\s*\]/g, ']');       // Remove trailing commas in arrays
+        .replace(/,\s*\]/g, ']')        // Remove trailing commas in arrays
+        .replace(/"\s*\n\s*\]/g, '"]')  // Fix unclosed string before ]
+        .replace(/"\s*\n\s*\}/g, '"}'); // Fix unclosed string before }
       return JSON.parse(fixed);
     }
   }
@@ -1586,7 +1591,7 @@ async function enrichWithAI(messages, result) {
     } else if (provider === 'gemini') {
       aiText = await callGeminiApi(prompt);
     } else if (provider === 'mimo') {
-      aiText = await callMiMoApi(prompt, { maxTokens: 2000, timeoutMs: 120000 });
+      aiText = await callMiMoApi(prompt, { maxTokens: 4000, timeoutMs: 180000 });
     } else {
       aiText = await callLmStudio(prompt);
     }
@@ -1739,6 +1744,7 @@ async function handleApi(req, res) {
       createdAt: Date.now(),
       redirectUri: redirectUri(req)
     });
+    console.log(`[OAuth] State created: ${state.substring(0,8)}... pendingOAuth size: ${pendingOAuth.size}`);
 
     const authorize = new URL(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/authorize`);
     authorize.searchParams.set('client_id', clientId);
@@ -1863,6 +1869,56 @@ async function handleApi(req, res) {
     });
   }
 
+  if (url.pathname === '/api/outlook/folders') {
+    try {
+      const token = await getGraphAccessToken();
+      const base = mailboxBaseForCurrentUser();
+      const params = new URLSearchParams({
+        '$top': '100',
+        '$select': 'id,displayName,totalItemCount,unreadItemCount,childFolderCount,isHidden',
+        '$orderby': 'displayName asc'
+      });
+      const response = await fetch(`${graphBaseUrl}${base}/mailFolders?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Graph folders request failed: ${response.status} ${text}`);
+      }
+      const payload = await response.json();
+      // Map display names to well-known folder keys for message matching
+      const displayNameToKey = {
+        '받은 편지함': 'inbox', 'inbox': 'inbox',
+        '보낸 편지함': 'sentitems', 'sent items': 'sentitems', 'sentitems': 'sentitems',
+        '임시 보관함': 'drafts', 'drafts': 'drafts',
+        '삭제된 항목': 'deleteditems', 'deleted items': 'deleteditems', 'deleteditems': 'deleteditems',
+        '지운 편지함': 'deleteditems',
+        '정크 메일': 'junkemail', 'junk email': 'junkemail', 'junkemail': 'junkemail',
+        '보관': 'archive', 'archive': 'archive',
+        '보낼 편지함': 'outbox', 'outbox': 'outbox',
+        '대화 내용': 'conversationhistory', 'conversation history': 'conversationhistory'
+      };
+      const folders = (payload.value || [])
+        .filter((f) => !f.isHidden)
+        .map((f) => {
+          const lowerName = f.displayName.toLowerCase();
+          const key = displayNameToKey[lowerName] || lowerName.replace(/\s+/g, '');
+          return {
+            id: f.id,
+            name: f.displayName,
+            key,
+            total: f.totalItemCount || 0,
+            unread: f.unreadItemCount || 0,
+            childCount: f.childFolderCount || 0
+          };
+        });
+      return json(res, 200, { folders });
+    } catch (error) {
+      return json(res, 500, {
+        message: error instanceof Error ? error.message : 'Failed to fetch folders'
+      });
+    }
+  }
 
   if (url.pathname === '/api/outlook/send-request' && req.method === 'POST') {
     try {
@@ -2285,11 +2341,13 @@ async function handleApi(req, res) {
       }
       if (url.pathname === '/api/outlook/messages') return json(res, 200, data);
       let threadGroupingResult = { messages: data.messages, threadGroups: [], threadGrouping: { enabled: false } };
+      let allMessages = data.messages;
       try {
         const mailboxUser = getConfigValue('mailboxUser', 'OUTLOOK_MAILBOX_USER');
         const cache = await loadMailCache();
         const cacheKey = mailboxCacheKey(mailboxUser);
         const fullMessages = sortMessages(cache.mailboxes[cacheKey]?.messages || data.messages);
+        allMessages = fullMessages;
         threadGroupingResult = await enrichWithThreadGrouping(fullMessages);
         data.messages = sliceDisplayMessages(threadGroupingResult.messages, top);
       } catch (error) {
@@ -2309,10 +2367,31 @@ async function handleApi(req, res) {
         aiError = error instanceof Error ? error.message : 'AI enhancement failed.';
         result = { ...baseResult, ai: { enabled: false, provider: 'rules', error: aiError } };
       }
+      // Lightweight status counts for ALL messages (no task extraction)
+      const statusRules = [
+        { lane: 'done', patterns: [/완료|종료|처리했습니다|발송했습니다|resolved|completed|done/i] },
+        { lane: 'waiting', patterns: [/대기|회신\s*대기|승인\s*대기|확인\s*부탁|waiting|pending approval/i] },
+        { lane: 'urgent', patterns: [/긴급|오늘\s*중|금일\s*중|마감|장애|critical|urgent|asap/i] },
+        { lane: 'active', patterns: [/진행|준비|검토|작성|공유|follow.?up|in progress|review/i] }
+      ];
+      const allCounts = { urgent: 0, active: 0, waiting: 0, done: 0, reference: 0 };
+      for (const msg of allMessages) {
+        const text = `${msg.subject || ''} ${msg.bodyPreview || ''} ${msg.body || ''}`;
+        let lane = 'reference';
+        for (const rule of statusRules) {
+          if (rule.patterns.some((p) => p.test(text))) {
+            lane = rule.lane;
+            break;
+          }
+        }
+        msg._status = lane;
+        allCounts[lane]++;
+      }
       return json(res, 200, {
         ...data,
+        messages: allMessages,
         analyzedAt: new Date().toISOString(),
-        result: { ...result, threadGroups: threadGroupingResult.threadGroups },
+        result: { ...result, threadGroups: threadGroupingResult.threadGroups, allCounts },
         threadGroups: threadGroupingResult.threadGroups,
         threadGrouping: threadGroupingResult.threadGrouping,
         aiError
@@ -2507,10 +2586,12 @@ const server = createServer(async (req, res) => {
     const state = url.searchParams.get('state') || '';
     const code = url.searchParams.get('code') || '';
     const error = url.searchParams.get('error_description') || url.searchParams.get('error');
+    console.log(`[OAuth] Callback received: state=${state.substring(0,8)}... code=${code.substring(0,8)}... error=${error || 'none'} pendingOAuth size: ${pendingOAuth.size}`);
     const pending = pendingOAuth.get(state);
     pendingOAuth.delete(state);
 
     if (error || !pending || !code || Date.now() - pending.createdAt > 10 * 60_000) {
+      console.log(`[OAuth] FAILED: error=${error || 'none'}, pending=${!!pending}, code=${!!code}, state=${state.substring(0,8)}...`);
       res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(`<h1>Outlook login failed</h1><p>${error || 'Invalid or expired OAuth state.'}</p>`);
       return;
@@ -2703,13 +2784,17 @@ ${JSON.stringify(messagesForAi.map((message) => ({
 async function callFaiosServer(prompt) {
   const serverUrl = runtimeConfig.faiosServerUrl || 'http://localhost:3201';
   
-  const response = await fetch(`${serverUrl}/api/workflow/execute`, {
+  const response = await fetch(`${serverUrl}/api/ai/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      workflow: 'email-analysis',
-      input: {
-        prompt,
+      role: 'executor',
+      taskType: 'email-analysis',
+      messages: [
+        { role: 'system', content: 'You are an email analysis assistant. Return ONLY valid JSON.' },
+        { role: 'user', content: prompt }
+      ],
+      options: {
         model: runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b',
         temperature: 0.2,
         max_tokens: 8192
@@ -2723,7 +2808,7 @@ async function callFaiosServer(prompt) {
   }
   
   const payload = await response.json();
-  return payload.output?.response || payload.response || JSON.stringify(payload);
+  return payload.content || payload.output?.response || payload.response || JSON.stringify(payload);
 }
 
 async function callGeminiApi(prompt) {
@@ -2753,12 +2838,12 @@ async function callGeminiApi(prompt) {
   return payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
 }
 
-async function callMiMoApi(prompt, { maxTokens = 2400, timeoutMs = 60000 } = {}) {
+async function callMiMoApi(prompt, { maxTokens = 2400, timeoutMs = 120000 } = {}) {
   const apiKey = runtimeConfig.mimoApiKey || getConfigValue('mimoApiKey', 'MIMO_API_KEY');
   if (!apiKey) throw new Error('MiMo API key not configured');
   
-  const model = runtimeConfig.mimoModel || 'MiMo-V2.5';
-  const baseUrl = (runtimeConfig.mimoBaseUrl || 'https://api.xiaomimimo.com/v1').replace(/\/+$/, '');
+  const model = runtimeConfig.mimoModel || 'mimo-v2.5';
+  const baseUrl = (runtimeConfig.mimoBaseUrl || 'https://token-plan-sgp.xiaomimimo.com/v1').replace(/\/+$/, '');
   
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -2770,7 +2855,7 @@ async function callMiMoApi(prompt, { maxTokens = 2400, timeoutMs = 60000 } = {})
     body: JSON.stringify({
       model,
       messages: [
-        { role: 'system', content: 'You are an AI email analysis assistant. You MUST respond with ONLY valid JSON, no markdown, no explanation, no thinking.' },
+        { role: 'system', content: 'You are an AI email analysis assistant. You MUST respond with ONLY valid JSON, no markdown, no explanation, no thinking tags. Output raw JSON only.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.1,
@@ -2786,9 +2871,10 @@ async function callMiMoApi(prompt, { maxTokens = 2400, timeoutMs = 60000 } = {})
   
   const payload = await response.json();
   const choice = payload.choices?.[0]?.message || {};
-  // MiMo is a reasoning model - combine reasoning + content
-  const content = choice.content || '';
+  let content = choice.content || '';
   const reasoning = choice.reasoning_content || '';
+  // Strip thinking tags if present
+  content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   return content || reasoning || '';
 }
 
