@@ -881,6 +881,30 @@ async function enrichWithAI(messages, result) {
   };
 }
 
+const dataPlaneHookUrl =
+  process.env.DATA_PLANE_HOOK_URL || 'http://localhost:3110/api/projects/from-mail';
+
+async function notifyDataPlaneHook(message) {
+  if (!message || process.env.DATA_PLANE_HOOK_DISABLED === '1') return null;
+  try {
+    const response = await fetch(dataPlaneHookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messageId: message.id,
+        subject: message.subject,
+        from: message.from?.emailAddress?.address || message.from || '',
+        bodyPreview: message.bodyPreview || '',
+        receivedAt: message.receivedDateTime || new Date().toISOString()
+      })
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', `http://localhost:${port}`);
   if (url.pathname === '/api/outlook/oauth/start') {
@@ -1015,6 +1039,39 @@ async function handleApi(req, res) {
         connected: false,
         mode: 'error',
         message: error instanceof Error ? error.message : 'Outlook fetch failed.'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/hooks/data-plane' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const result = await notifyDataPlaneHook(body.message || body);
+      return json(res, 200, { ok: true, result });
+    } catch (error) {
+      return json(res, 502, {
+        ok: false,
+        message: error instanceof Error ? error.message : 'data-plane hook failed'
+      });
+    }
+  }
+
+  if (url.pathname === '/api/fixtures/ingest-mail' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const fixture = {
+        id: body.messageId || `fixture-${Date.now()}`,
+        subject: body.subject || 'E2E fixture: 신규 프로젝트 문의',
+        from: { emailAddress: { address: body.from || 'fixture@example.com' } },
+        bodyPreview: body.bodyPreview || 'PoC 요청 메일 fixture',
+        receivedDateTime: new Date().toISOString()
+      };
+      const result = await notifyDataPlaneHook(fixture);
+      return json(res, 200, { fixture, result });
+    } catch (error) {
+      return json(res, 502, {
+        ok: false,
+        message: error instanceof Error ? error.message : 'fixture ingest failed'
       });
     }
   }

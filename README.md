@@ -172,7 +172,7 @@ mail-intelligence/
 ## 실행
 
 ```bash
-cd /Users/jmpark/Documents/Playground/apps/mail-intelligence
+cd /Users/jmpark/Playground/apps/mail-intelligence
 PORT=3010 node server.mjs
 ```
 
