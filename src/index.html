@@ -11,10 +11,13 @@
       <div>
         <p class="eyebrow">Outlook Work OS</p>
         <h1>Mail Intelligence</h1>
-        <p class="lede">Outlook 메일을 요약하고 다음 액션까지 정리합니다.</p>
+        <span class="version-badge">v1.2.0 · Precision Intelligence</span>
+        <p class="lede">메일을 과하게 쪼개지 않고, 지금의 상태·다음 행동 주체·프로젝트·기한을 정확하게 정리합니다.</p>
       </div>
       <nav class="nav" aria-label="분석 섹션">
         <a href="#messages">메일</a>
+        <a href="#precisionIntelligence">정밀 분류</a>
+        <a href="#persistentMemory">메일 DB</a>
         <a href="#messageDetail">요약</a>
         <a href="#actions">액션</a>
       </nav>
@@ -33,8 +36,9 @@
         <div class="actions">
           <label class="search-field" aria-label="메일 검색">
             <span>Search</span>
-            <input id="mailSearch" type="search" placeholder="제목, 보낸사람, 본문, 액션 검색" />
+            <input id="mailSearch" type="search" placeholder="예: 오늘 내가 처리할 견적 / 고객 회신 대기" />
           </label>
+          <button id="searchDatabase" type="button">지능형 탐색</button>
           <label class="field-inline">
             최근
             <select id="mailLimit">
@@ -44,8 +48,63 @@
             </select>
           </label>
           <button id="loadOutlook" type="button" class="primary">Outlook 가져오기</button>
-          <button id="loadSample" type="button">데모</button>
         </div>
+      </section>
+
+      <section class="notice safety-notice" aria-label="안전 모드 안내">
+        <strong>v1.2.0 읽기 전용 Precision Intelligence</strong>
+        <span>분류를 억지로 늘리지 않습니다. 애매한 메일은 검토 필요로 남기고, 프로젝트와 업무를 자동 생성하지 않습니다. 메일 발송·원본 변경·외부 시스템 전송은 계속 차단됩니다.</span>
+      </section>
+
+      <section id="precisionIntelligence" class="precision-panel" aria-live="polite">
+        <div class="precision-head">
+          <div>
+            <span class="memory-label">Precision Classification</span>
+            <strong id="precisionStatus">정밀 분류 확인 중</strong>
+            <p id="precisionSummary">현재 상태, 다음 행동 주체, 프로젝트, 기한과 근거를 확인합니다.</p>
+          </div>
+          <button id="reclassifyPrecision" type="button">정밀 분류 새로고침</button>
+        </div>
+        <div class="precision-kpi" role="group" aria-label="정밀 업무 상태 필터">
+          <button class="metric action-required" type="button" data-filter="action_required"><span>내 행동 필요</span><strong id="actionRequiredCount">0</strong></button>
+          <button class="metric waiting" type="button" data-filter="waiting"><span>대기</span><strong id="precisionWaitingCount">0</strong></button>
+          <button class="metric decision" type="button" data-filter="decision_required"><span>결정 필요</span><strong id="decisionRequiredCount">0</strong></button>
+          <button class="metric completed" type="button" data-filter="completed"><span>완료</span><strong id="precisionCompletedCount">0</strong></button>
+          <button class="metric reference" type="button" data-filter="reference"><span>참고</span><strong id="precisionReferenceCount">0</strong></button>
+          <button class="metric review" type="button" data-filter="review_required"><span>검토 필요</span><strong id="reviewRequiredCount">0</strong></button>
+        </div>
+        <div id="smartViews" class="smart-views" aria-label="저장된 지능형 탐색"></div>
+        <details class="project-registry">
+          <summary>확정 프로젝트 등록·보기 <strong id="projectRegistryCount">0개</strong></summary>
+          <p>프로젝트는 자동 생성하지 않습니다. 사용자가 등록한 프로젝트와 정확한 이름·별칭만 메일에 연결합니다.</p>
+          <form id="projectForm" class="project-form">
+            <label>프로젝트명<input id="projectName" type="text" maxlength="200" placeholder="예: 선진엔지니어링 HCI 구축" required /></label>
+            <label>프로젝트 키<input id="projectKey" type="text" maxlength="120" placeholder="선택, 예: sunjin-hci" /></label>
+            <label>별칭<input id="projectAliases" type="text" maxlength="1000" placeholder="쉼표로 구분, 예: 선진 HCI, HCI 구축 건" /></label>
+            <button id="createProject" type="submit">프로젝트 등록</button>
+          </form>
+          <div id="projectRegistryList" class="project-list"></div>
+        </details>
+      </section>
+
+      <section id="persistentMemory" class="memory-panel" aria-live="polite">
+        <div>
+          <span class="memory-label">Authoritative Storage</span>
+          <strong id="memoryStatus">SQLite 확인 중</strong>
+          <p id="memorySummary">DB 스키마와 동기화 상태를 불러오는 중입니다.</p>
+        </div>
+        <dl class="memory-metrics">
+          <div><dt>메일</dt><dd id="memoryMessageCount">0</dd></div>
+          <div><dt>폴더</dt><dd id="memoryFolderCount">0</dd></div>
+          <div><dt>작업</dt><dd id="memoryJobCount">0</dd></div>
+          <div><dt>경고</dt><dd id="memoryWarningCount">0</dd></div>
+        </dl>
+        <div class="memory-actions">
+          <button id="refreshMemory" type="button">상태 새로고침</button>
+          <button id="syncPersistentMail" type="button" class="primary">Delta 동기화</button>
+          <button id="backupPersistentMail" type="button">검증 백업</button>
+        </div>
+        <div id="databaseSearchResults" class="memory-search-results" hidden></div>
       </section>
 
       <details class="config-panel">
@@ -55,7 +114,8 @@
         </summary>
         <div class="notice">
           Outlook 로그인 방식에서는 Client Secret을 비워두세요. 개인 Outlook.com 계정은 App registration의 Supported account types가
-          Personal Microsoft accounts를 허용해야 합니다. 메일 발송 기능을 쓰려면 Microsoft 권한에 Mail.Send가 승인되어야 합니다.
+          Personal Microsoft accounts를 허용해야 합니다. 현재 버전은 <strong>Mail.Read</strong>만 요청하며 메일 발송 권한은 요청하지 않습니다.
+          Access Token, Client Secret, Gemini API Key는 서버 메모리에서만 사용하며 설정 파일에는 저장하지 않습니다.
         </div>
         <form id="configForm" class="config-grid">
           <label>
@@ -97,18 +157,33 @@
           <label>
             AI 프로바이더
             <select id="aiProvider" name="aiProvider">
-              <option value="f-aios-v3" selected>F-AIOS-v3 (로컬 LM Studio)</option>
+              <option value="rules" selected>규칙 기반만 사용 (기본·메일 외부 전달 없음)</option>
+              <option value="f-aios-v3">F-AIOS-v3 (로컬 LM Studio)</option>
               <option value="lmstudio">LM Studio (직접 연결)</option>
               <option value="gemini">Google Gemini (API 키 필요)</option>
             </select>
           </label>
+          <label id="externalAiConsentField" class="external-ai-consent" hidden>
+            외부 AI 데이터 정책 동의
+            <span class="checkbox-row">
+              <input id="aiDataPolicyAccepted" name="aiDataPolicyAccepted" type="checkbox" />
+              Gemini 사용 시 선택한 메일의 제목·발신자·본문이 Google API로 전송됨을 이해하고 동의합니다.
+            </span>
+          </label>
           <label>
             F-AIOS-v3 서버 URL
-            <input id="faiosServerUrl" name="faiosServerUrl" type="text" autocomplete="off" value="http://localhost:3200" />
+            <input id="faiosServerUrl" name="faiosServerUrl" type="text" autocomplete="off" value="http://localhost:3201" />
           </label>
           <label>
             LM Studio 모델
             <input id="lmstudioModel" name="lmstudioModel" type="text" autocomplete="off" value="qwen/qwen3.5-9b" />
+          </label>
+          <label>
+            업무 도메인 프로필
+            <select id="domainProfile" name="domainProfile">
+              <option value="generic" selected>범용 업무</option>
+              <option value="sangfor">Sangfor 엔지니어링</option>
+            </select>
           </label>
           <div class="config-actions">
             <button id="loginOutlook" type="button">Outlook으로 로그인</button>
@@ -117,13 +192,6 @@
           </div>
         </form>
       </details>
-
-      <section class="kpi-strip" aria-live="polite">
-        <button class="metric urgent" type="button" data-filter="urgent"><span>긴급</span><strong id="urgentCount">0</strong></button>
-        <button class="metric active" type="button" data-filter="active"><span>진행중</span><strong id="activeCount">0</strong></button>
-        <button class="metric waiting" type="button" data-filter="waiting"><span>대기</span><strong id="waitingCount">0</strong></button>
-        <button class="metric done" type="button" data-filter="done"><span>완료</span><strong id="doneCount">0</strong></button>
-      </section>
 
       <section class="mail-shell" id="mailShell">
         <aside id="messages" class="mail-list-panel">

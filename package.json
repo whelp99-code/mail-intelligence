@@ -1,24 +1,46 @@
 {
   "name": "standalone-mail-intelligence",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "PORT=3010 node server.mjs",
     "start": "PORT=3010 node server.mjs",
-    "check": "node --check server.mjs && node --check src/app.js && node --check src/analyzer.js",
+    "check": "node --check server.mjs && node --check src/app.js && node --check src/analyzer.js && node --check src/ai-contract.js && node --check src/ai/response.js && node --check src/ai/resilience.js && node --check src/safety.js && node --check src/security/safety-policy.js && node --check src/security/static-path.js && node --check src/security/service-url.js && node --check src/domain-profiles/index.js && node --check src/domain-profiles/sangfor.js && node --check src/resilience.js && node --check src/runtime-safety.js && node --check src/adapters/microsoft-graph-mail.js && node --check src/application/mail-sync.js && node --check src/application/persistent-mail-memory.js && node --check src/application/precision-intelligence.js && node --check src/domain/mail-normalizer.js && node --check src/domain/precision-classifier.js && node --check src/domain/intelligent-search.js && node --check src/storage/legacy-import.js && node --check src/storage/sqlite-store.js && node --check src/storage/storage-paths.js && node --check src/storage/backup-restore.js && node --check src/version.js && node --check scripts/mail-memory-admin.mjs && node --check scripts/evaluate-precision-classification.mjs && node --check scripts/verify-health.mjs && node --check scripts/verify-safety-contract.mjs && node --check scripts/verify-repository-hygiene.mjs && node --check src/security/tcp-allowlist-proxy.js && node --check scripts/run-tailnet-proxy.mjs && node --check scripts/verify-tailnet-exposure.mjs && node --check scripts/verify-live-deployment.mjs && node --check scripts/verify-live-restart.mjs",
+    "test": "node --test test/*.test.js",
+    "verify:core": "npm run check && npm test && npm run verify:safety && npm run verify:health:full",
+    "verify:safety": "node scripts/verify-safety-contract.mjs && node scripts/verify-repository-hygiene.mjs",
     "verify:health": "node scripts/verify-health.mjs",
     "verify:health:full": "node scripts/verify-health.mjs --full",
-    "lint": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs",
-    "lint:fix": "eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs --fix",
+    "lint": "eslint server.mjs src test scripts --ext .js,.mjs",
+    "lint:fix": "eslint server.mjs src test scripts --ext .js,.mjs --fix",
     "validate:html": "htmlhint src/index.html",
     "validate:css": "stylelint src/styles.css",
-    "audit": "npm audit --audit-level=high"
+    "audit": "npm audit --audit-level=high",
+    "audit:fix": "npm audit fix --ignore-scripts --no-fund",
+    "memory:status": "node scripts/mail-memory-admin.mjs status",
+    "memory:integrity": "node scripts/mail-memory-admin.mjs integrity",
+    "memory:backup": "node scripts/mail-memory-admin.mjs backup",
+    "evaluate:precision": "node scripts/evaluate-precision-classification.mjs",
+    "verify": "npm run verify:v1.2.0",
+    "verify:v1.0.1": "npm run check && npm test && npm run lint && npm run validate:html && npm run validate:css && npm run verify:health:full && npm run verify:safety && npm run audit",
+    "verify:v1.1.0": "npm run check && npm test && npm run lint && npm run validate:html && npm run validate:css && npm run verify:health:full && npm run verify:safety && npm run audit",
+    "verify:v1.2.0": "npm run check && npm test && npm run evaluate:precision && npm run lint && npm run validate:html && npm run validate:css && npm run verify:health:full && npm run verify:safety && npm run audit",
+    "verify:tailnet": "node scripts/verify-tailnet-exposure.mjs",
+    "tailnet:activate": "bash scripts/activate-tailnet-proxy.sh",
+    "tailnet:status": "XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus systemctl --user status mail-intelligence-tailnet.service --no-pager",
+    "verify:live:local": "node scripts/verify-live-deployment.mjs",
+    "verify:live:restart": "node scripts/verify-live-restart.mjs",
+    "verify:fresh": "bash scripts/verify-fresh-extract.sh"
   },
   "devDependencies": {
     "eslint": "^8.57.0",
     "htmlhint": "^1.1.4",
     "stylelint": "^16.0.0",
     "stylelint-config-standard": "^36.0.0"
+  },
+  "description": "Read-only Outlook intelligence with authoritative SQLite memory, precision classification, and intelligent exploration",
+  "engines": {
+    "node": ">=22"
   }
 }

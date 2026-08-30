@@ -1,0 +1,31 @@
+[Unit]
+Description=Mail Intelligence v1.2.0 read-only precision intelligence
+Documentation=file:///home/jm/orca/projects/mail-intelligence/docs/runbooks/UBUNTU-DEPLOYMENT.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jm/orca/projects/mail-intelligence
+EnvironmentFile=/home/jm/orca/projects/mail-intelligence/data/runtime.env
+ExecStart=/usr/bin/node /home/jm/orca/projects/mail-intelligence/server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+
+# User-service-compatible hardening. The application also enforces loopback,
+# authenticated sessions, CSRF, Mail.Read-only scopes and external-action kill switches.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/jm/orca/projects/mail-intelligence/data
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target

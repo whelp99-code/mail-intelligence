@@ -10,6 +10,12 @@ runtime-config.json
 
 # Data files (generated at runtime)
 .mail-cache.json
+mail-intelligence.sqlite
+mail-intelligence.sqlite-*
+*.sqlite-wal
+*.sqlite-shm
+/data/
+/backups/
 attachment-archive.json
 attachment-archive-meta.json
 accounts.json
@@ -42,3 +48,5 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+.chatgpt2codex/
+.mail-intelligence-test-*/

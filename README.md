@@ -1,179 +1,526 @@
 # Mail Intelligence
 
-Outlook 메일을 AI로 분석하여 요약, 다음 액션, 일정을 정리하는 워크 OS.
+Mail Intelligence는 **Outlook 전체 메일을 지속적으로 분석해 프로젝트·업무·사람·회사·결정·일정·자료별로 연결**하고, 그 결과를 누적하여 시간이 지날수록 더 정확한 업무 지식을 제공하는 메일 기반 업무 인텔리전스 시스템입니다.
 
-## 아키텍처
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   프론트엔드     │    │    서버           │    │   외부 API      │
-│  (src/app.js)   │───▶│  (server.mjs)    │───▶│  Microsoft Graph│
-│  index.html     │    │  port: 3010      │    │  /me/messages   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                              │
-                              ▼
-                       ┌──────────────┐
-                       │  AI 분석     │
-                       │  1) 규칙 기반 │  (analyzer.js)
-                       │  2) F-AIOS-v3│  (localhost:3201)
-                       │  3) LM Studio│  (localhost:1234)
-                       │  4) Gemini   │  (API Key 필요)
-                       └──────────────┘
+```text
+전체 메일 수집
+→ 스레드·사람·첨부 메타데이터 정규화
+→ 프로젝트·업무 신호 추출
+→ 근거와 신뢰도 기록
+→ 사용자 보정
+→ Persistent Mail Memory에 누적
+→ 관련 과거 정보 재평가
+→ 더 정확한 검색·판단·추천
+→ 승인된 행동만 실행
 ```
 
-## 파일 구조
+## 현재 버전
 
-```
-mail-intelligence/
-├── server.mjs              # Node.js HTTP 서버 (메인)
-├── package.json            # 의존성 없음, type:module
-├── .outlook-config.json    # Azure AD 설정 (clientId, clientSecret, tenantId)
-├── .mail-cache.json        # 메일 캐시 + 분석 결과 + 사용자 피드백
-│
-├── src/
-│   ├── index.html          # 메인 HTML (설정, 메일목록, 상세, 액션)
-│   ├── app.js              # 프론트엔드 로직 (DOM 조작, API 호출)
-│   ├── analyzer.js         # 규칙 기반 메일 분석 엔진
-│   └── styles.css          # 스타일 (dark sidebar, 3칼럼 레이아웃)
-│
-└── data/
-    ├── accounts.json       # Outlook 계정 정보 (다중 계정 지원)
-    ├── runtime-config.json # 런타임 설정 (토큰, 설정값)
-    ├── oauth-states.json   # OAuth 상태 관리
-    └── *.json              # 기타 데이터
+**Version: 1.2.0 — Precision Classification & Intelligent Exploration**
+
+v1.2.0은 v1.1.0의 **authoritative SQLite** Persistent Mail Memory와 읽기 전용 안전 기준 위에서, 분류 종류를 무작정 늘리는 대신 **세분화가 아니라 정밀화**를 적용한 버전입니다.
+
+메일마다 다음 여섯 항목만 현재 판단으로 확정합니다.
+
+```text
+현재 업무 상태 1개
+다음 행동 주체 1개
+주 프로젝트 최대 1개 또는 미분류
+우선순위와 기한
+원문 근거
+필드별 신뢰도
 ```
 
-## API 엔드포인트
+애매하거나 서로 충돌하는 메일은 억지로 확정하지 않고 `REVIEW_REQUIRED`, `UNKNOWN`, `UNASSIGNED` 상태로 보류합니다. 프로젝트와 업무는 자동 생성하지 않습니다.
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/api/outlook/config` | 설정 상태 조회 |
-| `POST` | `/api/outlook/config` | 설정 저장 |
-| `DELETE` | `/api/outlook/config` | 설정 초기화 |
-| `GET` | `/api/outlook/status` | 연결 상태 확인 |
-| `GET` | `/api/outlook/messages?top=25` | 메일 목록 조회 |
-| `GET` | `/api/outlook/analyze?top=25` | 메일 분석 (AI 포함) |
-| `POST` | `/api/outlook/send` | 메일 발송 |
-| `POST` | `/api/outlook/read` | 읽음 상태 업데이트 |
-| `POST` | `/api/outlook/feedback` | 분류 보정 피드백 저장 |
-| `GET` | `/api/outlook/oauth/start` | OAuth 로그인 시작 |
-| `GET` | `/auth/callback` | OAuth 콜백 |
+| 기능 | v1.2.0 상태 |
+|---|---|
+| Outlook 폴더 탐색 | 지원 |
+| Graph 페이지네이션 | 지원 |
+| 폴더별 Delta 동기화 | 지원 |
+| 중단 후 `nextLink` 재개 | 지원 |
+| 이동·삭제 tombstone 반영 | 지원 |
+| 스레드·사람·수신자 정규화 | 지원 |
+| 첨부파일 메타데이터 저장 | 지원, 파일 본문은 미수집 |
+| SQLite 영속 저장 | authoritative |
+| FTS5 전체 메일 검색 | 지원 |
+| 사용자 분류 보정 | SQLite에 영속 저장 |
+| AI 분석 캐시 | Provider·모델·Prompt 버전별 영속 저장 |
+| 정밀 업무 상태 | 6개 상호배타 상태 지원 |
+| 다음 행동 주체 | 내 차례·내부 팀·외부·공동·없음·불명 |
+| 프로젝트 연결 | 사용자가 등록한 프로젝트만 확정 연결 |
+| 프로젝트 후보 | 후보로만 보관, 자동 생성 없음 |
+| 지능형 탐색 | 자연어 업무 질의 + 구조화 필터 + FTS 근거 검색 |
+| 정밀 분류 보정 | 자동 판단보다 우선하며 변경 이력 보존 |
+| Garbage 방지 | 낮은 신뢰도 보류·중복 프로젝트 차단·변경 시에만 이벤트 기록 |
+| 작업 이력·Dead Letter | 지원 |
+| 검증 백업·오프라인 복원 | 지원 |
+| 메일 발송·원본 변경 | 비활성화 |
+| CRM·Calendar·Data Plane 쓰기 | 비활성화 |
 
-## 데이터 흐름
 
-### 1. 메일 동기화 (fetchOutlookMessages)
-```
-1. 캐시에서 기존 메일 로드
-2. shouldFetchOnlyNew 판단:
-   - 캐시 >= 요청수 → since(마지막 수신일) 이후만
-   - 캐시 < 요청수 → 전체
-3. Microsoft Graph API 호출
-4. mergeMessages: 새 메일 추가, 변경 메일 업데이트
-5. 캐시 저장 (.mail-cache.json)
-```
+## v1.2.0 정밀 분류 원칙
 
-### 2. 메일 분석 (analyzeMessages + enrichWithAI)
-```
-1. 규칙 기반 분석 (analyzer.js):
-   - STATUS_RULES 패턴 매칭 (urgent/active/waiting/done)
-   - OWNER_PATTERN, DATE_PATTERN, ACTION_PATTERN 추출
-   - actionScenariosForMessage: 3가지 시나리오 생성
+v1.2.0은 분류 항목을 늘리는 대신 다음 여섯 가지를 정확하게 판단합니다.
 
-2. AI 강화 (enrichWithAI):
-   - 캐시된 분석 결과 먼저 확인
-   - 프로바이더 선택: f-aios-v3 → lmstudio → gemini
-   - 프롬프트: 피드백 예시 + 메일 내용 → JSON 응답
-   - normalizeActionScenarios: 3가지 시나리오 보정
-   - 분석 결과 캐시 저장
+```text
+현재 업무 상태 1개
+다음 행동 주체 1개
+주 프로젝트 후보 최대 1개 또는 UNASSIGNED
+기한과 우선순위
+원문 근거
+필드별 신뢰도와 검토 사유
 ```
 
-### 3. 사용자 피드백 (saveClassificationFeedback)
-```
-1. 사용자가 메일 분류 보정 (urgent/active/waiting/done)
-2. feedback 객체에 저장 (messageId → userStatus, reasonCode, note)
-3. 유사 메일 판단 시 feedbackHint 제공
-4. 다음 분석 시 피드백 예시로 활용
-```
+현재 업무 상태:
 
-## 런타임 설정 (runtimeConfig)
-
-```javascript
-{
-  accessToken: '',          // Microsoft Graph 액세스 토큰
-  tenantId: '',             // Azure AD Tenant ID
-  clientId: '',             // Azure AD Application Client ID
-  clientSecret: '',         // Azure AD Client Secret
-  mailboxUser: '',          // 메일박스 사용자 (비어있으면 /me)
-  loginTenant: 'common',    // common | organizations | consumers
-  geminiApiKey: '',         // Google AI Studio API Key
-  geminiModel: 'gemini-2.5-flash',
-  refreshToken: '',         // OAuth Refresh Token
-  expiresAt: 0,             // 토큰 만료 시간
-  aiProvider: 'f-aios-v3',  // f-aios-v3 | gemini | lmstudio
-  faiosServerUrl: 'http://localhost:3201',
-  lmstudioModel: 'qwen/qwen3.5-9b'
-}
+```text
+ACTION_REQUIRED
+WAITING
+DECISION_REQUIRED
+COMPLETED
+REFERENCE
+REVIEW_REQUIRED
 ```
 
-## UI 구성
+다음 행동 주체:
 
-### 3칼럼 레이아웃 (mail-shell)
+```text
+ME
+INTERNAL_TEAM
+EXTERNAL_PARTY
+SHARED
+NONE
+UNKNOWN
 ```
-┌─────────────┬─────────────┬─────────────┐
-│  메일 목록   │   상세 패널   │   액션 패널   │
-│  (messages) │ (detail)    │  (actions)  │
-│             │             │  (calendar) │
-│             │             │ (reminders) │
-└─────────────┴─────────────┴─────────────┘
+
+금액·견적·계약·첨부·일정·승인·장애·보안은 여러 개가 동시에 존재할 수 있는 보조 신호입니다. 보조 신호만으로 프로젝트나 업무를 자동 생성하지 않습니다. 모호한 요청, 충돌하는 기한, 비슷한 프로젝트 후보는 억지로 확정하지 않고 `REVIEW_REQUIRED` 또는 `UNASSIGNED`로 보류합니다.
+
+지능형 탐색 API:
+
+```text
+GET /api/intelligence/search?q=검색어&limit=25
+GET /api/intelligence/smart-views
 ```
 
-### 설정 패널 (config-panel)
-- Login Tenant: common/organizations/consumers
-- Access Token, Tenant ID, Client ID, Client Secret
-- Mailbox User
-- Google AI Studio API Key, Gemini Model
-- AI 프로바이더: F-AIOS-v3 / LM Studio / Gemini
-- F-AIOS-v3 서버 URL, LM Studio 모델
+자연어 질의는 상태·다음 행동 주체·기한·프로젝트 조건으로 구조화한 뒤 SQLite FTS와 결합합니다. 저장된 스마트 뷰는 오늘의 행동, 외부 회신 대기, 검토 필요 등을 제공합니다.
 
-## 동기화 로직
+```text
+오늘 내가 처리할 견적
+고객 회신 대기
+기한이 지난 보안 장애
+프로젝트: 선진엔지니어링 HCI 구축
+```
 
-### 초기 동기화
-- 캐시가 비어있거나 요청 수보다 적을 때
-- `since` 파라미터 없이 전체 메일 가져오기
+사용자 보정 API:
 
-### 増量 동기화
-- 캐시가 요청 수 이상일 때
-- `since`: 마지막 수신일 이후만 가져오기
-- mergeMessages: 새 메일 추가, 변경 메일 업데이트
+```text
+POST /api/intelligence/correct
+```
 
-## 주요 함수
+모든 보정은 세션·Origin·CSRF 보호를 통과해야 하며 Outlook 원본을 변경하지 않습니다.
 
-### 서버 (server.mjs)
-- `fetchGraphMessages()`: Microsoft Graph API에서 메일 가져오기
-- `fetchOutlookMessages()`: 캐시 + 동기화 로직
-- `mergeMessages()`: 메일 병합 (새 메일/변경 메일)
-- `enrichWithAI()`: AI 분석 강화 (프로바이더 선택)
-- `saveClassificationFeedback()`: 사용자 피드백 저장
-- `applyFeedbackToResult()`: 피드백 적용
+## 고정 운영 원칙
 
-### 프론트엔드 (app.js)
-- `loadStatus()`: 설정 상태 로드
-- `saveConfig()`: 설정 저장
-- `loadOutlookMessages()`: 메일 가져오기 + 분석
-- `selectMessage()`: 메일 선택 + 상세 표시
-- `saveFeedback()`: 분류 보정 저장
-- `sendComposedMail()`: 메일 발송
+1. 기본은 읽기 전용입니다.
+2. 메일을 조회하거나 분석하는 것만으로 Outlook 원본 상태를 변경하지 않습니다.
+3. Outlook이 메일 원본이며, SQLite는 Mail Intelligence의 정규화·분석·업무 기억 원본입니다.
+4. AI는 관찰과 제안만 하며 외부 행동 권한을 갖지 않습니다.
+5. 중요한 판단에는 원문 근거, 신뢰도, 분석 방식과 실패 상태가 따라야 합니다.
+6. 사용자 보정은 AI 추론보다 높은 권한을 갖습니다.
+7. 레거시 JSON은 한 번만 이관하고 원본 파일을 자동 삭제하지 않습니다.
+8. 외부 행동은 향후 `Proposal → Approval → Execution → Receipt`를 통과해야 합니다.
 
-### 분석기 (analyzer.js)
-- `analyzeMessages()`: 규칙 기반 분석
-- `actionScenariosForMessage()`: 3가지 액션 시나리오 생성
-- `summaryBullets()`: 메일 요약 생성
+## 읽기 전용 안전 경계
 
-## 실행
+### Microsoft Graph 권한
+
+대화형 OAuth는 다음 읽기 권한만 요청합니다.
+
+```text
+openid profile offline_access User.Read Mail.Read
+```
+
+`Mail.Send`와 `Mail.ReadWrite`는 요청하지 않습니다. 환경변수로 쓰기 기능을 요청해도 v1.2.0 안전 정책이 기본적으로 차단합니다.
+
+### 로컬 전용 서버
+
+기본 주소:
+
+```text
+http://127.0.0.1:3010
+```
+
+허용되는 Listen Host는 `127.0.0.1`, `localhost`, `::1`뿐입니다. 상태 변경 API는 로컬 세션, Origin, CSRF 또는 보호 헤더 검사를 통과해야 합니다.
+
+### Tailnet 전용 포트
+
+운영 서버에서는 Node 애플리케이션의 loopback 바인딩을 유지하면서 별도 사용자 systemd 프록시가 현재 Tailscale IPv4의 `3010/tcp`만 연다.
+
+```text
+Tailscale peer
+→ Tailscale IPv4:3010
+→ source allowlist 100.64.0.0/10
+→ 127.0.0.1:3010
+```
+
+활성화와 검증:
 
 ```bash
-cd /Users/jmpark/Playground/apps/mail-intelligence
-PORT=3010 node server.mjs
+npm run tailnet:activate
+npm run verify:tailnet
 ```
 
-접속: http://localhost:3010
+현재 주소 확인:
+
+```bash
+printf 'http://%s:3010\n' "$(tailscale ip -4 | head -n1)"
+```
+
+이 경로는 Tailnet 내부 전용이며 Tailscale Funnel, 공인 IP NAT, `0.0.0.0` 바인딩을 사용하지 않습니다. 최초 Microsoft OAuth 연결은 기존 SSH 터널과 `http://127.0.0.1:3010/auth/callback`을 사용합니다.
+
+### Secret 처리
+
+다음 값은 응답·로그·Git에 노출하지 않습니다.
+
+- Outlook Access Token
+- OAuth Refresh Token
+- Microsoft Client Secret
+- Gemini API Key
+
+접근키 기반 운영에서는 AES-256-GCM 암호화 파일을 사용할 수 있습니다. 공개 설정과 메일 DB는 별도로 관리합니다.
+
+## 설치와 실행
+
+요구사항:
+
+- Ubuntu
+- Node.js 22 이상
+- npm
+- 선택 사항: Microsoft Entra App Registration
+- 선택 사항: F-AIOS-v3 또는 LM Studio
+
+```bash
+cd /home/jm/orca/projects/mail-intelligence
+npm ci
+npm run verify:v1.2.0
+npm start
+```
+
+다른 포트:
+
+```bash
+PORT=3011 npm start
+```
+
+## Persistent Mail Memory
+
+기본 저장 경로:
+
+```text
+data/
+├── mail-intelligence.sqlite
+├── .outlook-config.json
+├── .outlook-secrets.enc.json     선택 사항
+├── .mail-intelligence.key        선택 사항
+└── backups/
+```
+
+권한:
+
+```text
+data/                         0700
+SQLite·설정·Secret 파일       0600
+backups/                      0700
+```
+
+SQLite에는 다음 정보가 저장됩니다.
+
+```text
+Mailbox / MailFolder / Message / Thread
+Person / Recipient / Attachment metadata
+Sync run / page checkpoint / Delta cursor / tombstone
+User feedback / feedback event
+AI analysis / evidence / observation
+Operator job / Dead Letter / Outbox foundation
+Backup manifest / audit event
+```
+
+벡터 검색은 아직 authoritative fact store가 아닙니다. 현재 검색 기준은 구조화 SQLite와 FTS5입니다.
+
+## 동기화
+
+동기화 흐름:
+
+```text
+루트 폴더 페이지 수집
+→ 하위 폴더 재귀 탐색
+→ 폴더별 Graph Delta 호출
+→ 페이지 단위 SQLite transaction
+→ nextLink 저장
+→ 마지막 페이지에서 deltaLink 확정
+→ 삭제·이동 tombstone 반영
+```
+
+서버가 중단되면 마지막으로 저장된 `nextLink`에서 재개합니다. Delta cursor가 만료되어 Graph가 410을 반환하면 해당 폴더 커서를 초기화하고 안전한 초기 동기화를 다시 수행합니다.
+
+일시적인 Graph 오류는 제한적으로 재시도합니다. 반복 실패와 폴더별 부분 실패는 `operator_jobs`와 `dead_letter_events`에 기록됩니다.
+
+## 레거시 JSON 이관
+
+과거 `.mail-cache.json`이 있으면 시작 시 digest를 기준으로 SQLite에 한 번만 이관합니다.
+
+- 메일·보정·분석 캐시를 이관합니다.
+- 같은 원본은 다시 이관하지 않습니다.
+- 원본 JSON은 자동 삭제하지 않습니다.
+- 잘못된 JSON은 서버 시작을 중단하고 원본을 보존합니다.
+
+수동 이관:
+
+```bash
+node scripts/mail-memory-admin.mjs import-legacy /absolute/path/.mail-cache.json
+```
+
+## 지능형 탐색
+
+화면의 `지능형 탐색`은 자연어 업무 표현을 구조화된 필터로 해석한 뒤 SQLite FTS5 원문 근거 검색과 결합합니다.
+
+예:
+
+```text
+오늘 내가 처리할 견적
+고객 회신 대기
+결정 필요
+프로젝트:"선진 HCI 구축" 정책표 승인
+```
+
+해석 가능한 조건:
+
+```text
+현재 업무 상태
+다음 행동 주체
+우선순위
+기한 범위
+확정 프로젝트·별칭
+승인·견적/계약·첨부·장애/보안 등의 보조 신호
+```
+
+API:
+
+```text
+GET /api/intelligence/search?q=검색어&limit=25
+GET /api/intelligence/smart-views
+```
+
+결과에는 분류값뿐 아니라 `matchedBecause`가 포함되어 왜 검색되었는지 설명합니다. 검색과 유사도는 프로젝트나 업무를 자동 생성하거나 확정하지 않습니다.
+
+## 백업과 복원
+
+### 상태와 무결성
+
+```bash
+npm run memory:status
+npm run memory:integrity
+```
+
+### 검증 백업
+
+```bash
+npm run memory:backup
+```
+
+또는:
+
+```bash
+node scripts/mail-memory-admin.mjs backup /absolute/path/backup.sqlite
+```
+
+백업 절차는 `VACUUM INTO`, SQLite quick check, foreign-key check, SHA-256, schema version, record counts를 검증하고 `backup_manifests`에 기록합니다.
+
+### 복원
+
+복원은 실행 중인 HTTP API에서 제공하지 않습니다. 서버를 먼저 정지한 뒤 오프라인 CLI로만 수행합니다.
+
+```bash
+node scripts/mail-memory-admin.mjs restore /absolute/path/backup.sqlite --confirm-stopped
+```
+
+복원 전 기존 DB는 `restore-rollbacks/`에 원자적으로 보존됩니다. Source, temporary copy, final live DB가 모두 무결성 검사를 통과해야 복원이 완료됩니다.
+
+상세 절차는 `docs/runbooks/PERSISTENT-MAIL-MEMORY.md`를 따릅니다.
+
+## Outlook 연결
+
+### 권장 방식: Delegated OAuth
+
+1. Microsoft Entra에서 App Registration을 만듭니다.
+2. Redirect URI를 등록합니다.
+
+```text
+http://127.0.0.1:3010/auth/callback
+```
+
+3. Delegated permission에 `User.Read`, `Mail.Read`만 허용합니다.
+4. UI에서 Client ID와 Tenant를 설정합니다.
+5. `Outlook으로 로그인`을 눌러 읽기 권한만 승인합니다.
+
+실제 Microsoft OAuth 연결과 실제 회사 Outlook 메일함 검증은 별도의 통제된 read-only pilot에서 수행해야 합니다. 자동 테스트는 실제 운영 메일을 사용하지 않습니다.
+
+## AI 분석
+
+지원 Provider:
+
+```text
+rules      기본값, 외부 모델 호출 없음
+f-aios-v3  명시적 옵트인, loopback URL만 허용
+lmstudio   명시적 옵트인, loopback URL만 허용
+gemini     명시적 데이터 정책 동의와 API Key 필요
+```
+
+AI 응답은 JSON 스키마, Message ID, 상태, 신뢰도, 액션 수, 원문 근거를 검증한 뒤에만 저장됩니다. 메일 원문에 없는 근거와 허용되지 않은 도구 실행 액션은 거부됩니다.
+
+## 주요 API
+
+### 읽기·운영 상태
+
+| Method | Path | 설명 |
+|---|---|---|
+| `GET` | `/api/health` | 공개 최소 Health와 SQLite 준비 상태 |
+| `GET` | `/api/session` | 로컬 세션·CSRF 발급 |
+| `GET` | `/api/storage/status` | DB 무결성·건수·작업·경고·백업 상태 |
+| `GET` | `/api/outlook/sync/status` | 폴더별 Delta·재개 상태 |
+| `GET` | `/api/outlook/messages?top=25` | Delta 동기화 후 최근 저장 메일 |
+| `GET` | `/api/outlook/analyze?top=25` | 저장 메일 분석 |
+| `GET` | `/api/intelligence/summary` | 정밀 상태·행동 주체·우선순위·프로젝트 연결 요약 |
+| `GET` | `/api/intelligence/smart-views` | 오늘의 행동·외부 대기·검토 필요 등 저장된 업무 뷰 |
+| `GET` | `/api/intelligence/projects` | 사용자가 등록한 확정 프로젝트 목록 |
+| `GET` | `/api/intelligence/classification?messageId=...` | 현재 정밀 분류·보정·변경 이력 |
+| `GET` | `/api/intelligence/search?q=...` | 구조화 필터와 SQLite FTS를 결합한 지능형 탐색 |
+
+### 허용된 로컬 관리 작업
+
+| Method | Path | 설명 |
+|---|---|---|
+| `POST` | `/api/outlook/config` | 설정 저장 |
+| `DELETE` | `/api/outlook/config` | 설정 초기화 |
+| `POST` | `/api/outlook/feedback` | 사용자 보정 저장 |
+| `POST` | `/api/outlook/sync` | 읽기 전용 Delta 동기화 |
+| `POST` | `/api/storage/backup` | 검증된 로컬 SQLite 백업 |
+| `POST` | `/api/intelligence/classify` | 저장 메일 정밀 분류 또는 재평가 |
+| `POST` | `/api/intelligence/projects` | 확정 프로젝트를 명시적으로 등록 |
+| `POST` | `/api/intelligence/correct` | 상태·행동 주체·우선순위·프로젝트·기한 보정 |
+
+### 차단된 외부 행동
+
+| Method | Path | 결과 |
+|---|---|---|
+| `POST` | `/api/outlook/send` | `403 EXTERNAL_ACTION_DISABLED` |
+| `POST` | `/api/outlook/read` | `403 EXTERNAL_ACTION_DISABLED` |
+| `POST` | `/api/hooks/data-plane` | `403 EXTERNAL_ACTION_DISABLED` |
+| `POST` | `/api/fixtures/ingest-mail` | `403 EXTERNAL_ACTION_DISABLED` |
+
+복원 API는 존재하지 않습니다.
+
+## 검증
+
+전체 엔지니어링 게이트:
+
+```bash
+npm run verify:v1.2.0
+```
+
+포함 항목:
+
+```text
+문법 검사
+전체 node:test
+ESLint
+HTMLHint
+Stylelint
+격리 서버 Health
+읽기 전용 안전 계약
+저장소 위생 검사
+전체 npm dependency audit
+20개 골든 fixture·77개 필드 assertion 정밀 분류 평가
+```
+
+주요 테스트 범위:
+
+- Migration v1→v2→v3→v4
+- 레거시 JSON 1회 이관과 원본 보존
+- 전체 폴더 탐색과 페이지네이션
+- Delta nextLink·deltaLink
+- 중단 후 재개
+- 커서 만료 복구
+- 삭제 tombstone
+- idempotent upsert
+- 한글 FTS5
+- 사용자 보정·AI 캐시 재시작 영속성
+- 최소 충분 분류: 상태 1개·행동 주체 1개·프로젝트 최대 1개
+- 애매한 표현의 `REVIEW_REQUIRED` 보류
+- 프로젝트 명시 등록·별칭 중복 차단·자동 생성 금지
+- 정밀 분류 fingerprint idempotency와 변경 이벤트
+- 사용자 정밀 보정의 재분류·재시작 우선권
+- 한국어 자연어 질의와 구조화 조건·FTS 결합 탐색
+- 검색 결과 일치 이유와 삭제 메일 제외
+- 20개 골든 fixture·77개 필드 assertion 기반 정밀 분류 평가
+- 작업 이력·재시도·Dead Letter
+- 검증 백업·원자적 복원·rollback
+- Prompt injection·원문 근거 검증
+- 세션·Host·Origin·CSRF·Secret 경계
+- 외부 변경 기능 차단
+
+## 구조
+
+```text
+mail-intelligence/
+├── server.mjs
+├── migrations/
+├── src/
+│   ├── adapters/
+│   ├── application/
+│   ├── domain/
+│   ├── storage/
+│   ├── security/
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
+├── scripts/
+│   ├── mail-memory-admin.mjs
+│   ├── verify-health.mjs
+│   └── verify-safety-contract.mjs
+├── test/
+├── docs/planning/
+├── docs/releases/
+├── docs/runbooks/
+├── AGENTS.md
+└── package.json
+```
+
+## 로드맵
+
+| Version | 목표 |
+|---|---|
+| `1.0.1` | 안전성과 분석 정합성 복구 — 완료 |
+| `1.1.0` | SQLite 기반 전체 메일 Persistent Memory — 완료 |
+| `1.2.0` | 최소 충분 정밀 분류·명시적 프로젝트 연결·지능형 탐색 — 현재 |
+| `1.3.0` | 실제 사용자 보정·결과 데이터 기반 지속 학습과 영향 범위 재평가 |
+| `1.4.0` | 오늘의 업무함·프로젝트 인텔리전스·근거 기반 질의응답 |
+| `1.5.0` | 외부 시스템 읽기 연결·운영 준비 |
+| `2.0.0` | 승인·실행·영수증 기반 외부 행동 |
+
+## 현재 운영 판정
+
+v1.2.0은 엔지니어링 검증 대상이며, 실제 Outlook read-only production pilot은 별도입니다. 정밀 분류는 프로젝트·업무를 자동 생성하지 않으며, 실제 보정 데이터가 충분히 축적되기 전에는 “지속 학습 완료”로 표현하지 않습니다.
+
+다음 항목은 실제 증거가 확보되기 전까지 완료로 간주하지 않습니다.
+
+- 실제 Microsoft OAuth 연결
+- 실제 회사 Outlook의 전체 폴더·대용량 페이지 수집
+- 실환경 Delta 변경·삭제·이동
+- Microsoft throttling과 토큰 만료
+- 실제 F-AIOS·LM Studio·Gemini
+- 장시간 운영·용량 추세·백업 보존 정책
+- 실제 사용자 평가 데이터셋
+
+이 파일럿 전에도 메일 발송이나 다른 업무 시스템 쓰기 기능은 활성화하지 않습니다.

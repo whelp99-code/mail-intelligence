@@ -1,0 +1,28 @@
+[Unit]
+Description=Mail Intelligence v1.2.0 tailnet-only TCP exposure
+Documentation=file:///home/jm/orca/projects/mail-intelligence/docs/runbooks/UBUNTU-DEPLOYMENT.md
+Wants=network-online.target mail-intelligence.service
+After=network-online.target mail-intelligence.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jm/orca/projects/mail-intelligence
+EnvironmentFile=/home/jm/orca/projects/mail-intelligence/data/tailnet-proxy.env
+ExecStart=/usr/bin/node /home/jm/orca/projects/mail-intelligence/scripts/run-tailnet-proxy.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target

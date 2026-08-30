@@ -6,9 +6,56 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  lint-and-test:
-    name: Lint & Test
+  verify:
+    name: Required verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: npm run check
+
+      - name: Verify v1.2.0 precision-intelligence safety contract
+        run: npm run verify:safety
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Precision classification evaluation
+        run: npm run evaluate:precision
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Validate HTML
+        run: npm run validate:html
+
+      - name: Validate CSS
+        run: npm run validate:css
+
+      - name: Real local startup and health probe
+        run: npm run verify:health:full
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+  config-contract:
+    name: Configuration contract
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -17,99 +64,19 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '22'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run ESLint (report only)
-        run: npx eslint server.mjs src/app.js src/analyzer.js --ext .js,.mjs || true
-
-      - name: Validate package.json
-        run: node -e "require('./package.json')"
-
-      - name: Check syntax (Node.js)
+      - name: Validate JSON templates
         run: |
-          node --check server.mjs
-          node --check src/app.js
-          node --check src/analyzer.js
+          node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('package-lock.json', 'utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('.outlook-config.json.example', 'utf8'))"
 
-      - name: Test server startup (smoke test)
+      - name: Verify secret and runtime files are ignored
         run: |
-          PORT=3010 timeout 10s node server.mjs &
-          sleep 3
-          curl -sf http://localhost:3010/api/outlook/status || true
-          pkill -f "node server.mjs" || true
-
-  validate-frontend:
-    name: Validate Frontend
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Validate HTML (report only)
-        run: npx htmlhint src/index.html || true
-
-      - name: Validate CSS (report only)
-        run: npx stylelint src/styles.css || true
-
-  check-config-files:
-    name: Check Config Files
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Check JSON syntax (package.json, *.json.example)
-        run: |
-          for f in package.json .outlook-config.json.example; do
-            if [ -f "$f" ]; then
-              echo "Validating $f"
-              node -e "JSON.parse(require('fs').readFileSync('$f', 'utf8'))"
-            fi
+          for pattern in node_modules .mail-cache.json .outlook-config.json mail-intelligence.sqlite '*.sqlite-wal' '*.sqlite-shm' /data/ /backups/ '*.log' runtime-config.json accounts.json; do
+            grep -Fq "$pattern" .gitignore || { echo "Missing .gitignore rule: $pattern"; exit 1; }
           done
-
-      - name: Check .gitignore coverage (report only)
-        run: |
-          if [ -f .gitignore ]; then
-            echo "Checking .gitignore..."
-            for pattern in "node_modules" ".mail-cache.json" ".outlook-config.json" "*.log" "runtime-config.json" "accounts.json"; do
-              grep -q "$pattern" .gitignore && echo "  ✓ $pattern" || echo "  ✗ MISSING: $pattern"
-            done
-          fi
-
-  dependency-audit:
-    name: Dependency Audit
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run npm audit
-        run: npm audit --audit-level=high || true
-
-      - name: Check for outdated packages
-        run: npm outdated || true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -1,6 +1,6 @@
-import { analyzeMessages } from './analyzer.js';
+let serverCapabilities = { sendMail: false, markRead: false, dataPlane: false };
+let localSessionPromise = null;
 
-const loadSample = document.querySelector('#loadSample');
 const loadOutlook = document.querySelector('#loadOutlook');
 const mailLimit = document.querySelector('#mailLimit');
 const fetchStatus = document.querySelector('#fetchStatus');
@@ -9,6 +9,28 @@ const messageList = document.querySelector('#messageList');
 const messageCount = document.querySelector('#messageCount');
 const messageDetail = document.querySelector('#messageDetail');
 const mailSearch = document.querySelector('#mailSearch');
+const searchDatabase = document.querySelector('#searchDatabase');
+const memoryStatus = document.querySelector('#memoryStatus');
+const memorySummary = document.querySelector('#memorySummary');
+const memoryMessageCount = document.querySelector('#memoryMessageCount');
+const memoryFolderCount = document.querySelector('#memoryFolderCount');
+const memoryJobCount = document.querySelector('#memoryJobCount');
+const memoryWarningCount = document.querySelector('#memoryWarningCount');
+const refreshMemory = document.querySelector('#refreshMemory');
+const syncPersistentMail = document.querySelector('#syncPersistentMail');
+const backupPersistentMail = document.querySelector('#backupPersistentMail');
+const databaseSearchResults = document.querySelector('#databaseSearchResults');
+const precisionStatus = document.querySelector('#precisionStatus');
+const precisionSummaryNode = document.querySelector('#precisionSummary');
+const reclassifyPrecision = document.querySelector('#reclassifyPrecision');
+const smartViews = document.querySelector('#smartViews');
+const projectForm = document.querySelector('#projectForm');
+const projectName = document.querySelector('#projectName');
+const projectKey = document.querySelector('#projectKey');
+const projectAliases = document.querySelector('#projectAliases');
+const createProjectButton = document.querySelector('#createProject');
+const projectRegistryCount = document.querySelector('#projectRegistryCount');
+const projectRegistryList = document.querySelector('#projectRegistryList');
 const configForm = document.querySelector('#configForm');
 const configStatus = document.querySelector('#configStatus');
 const clearConfig = document.querySelector('#clearConfig');
@@ -22,14 +44,18 @@ const loginOutlook = document.querySelector('#loginOutlook');
 const geminiApiKey = document.querySelector('#geminiApiKey');
 const geminiModel = document.querySelector('#geminiModel');
 const aiProvider = document.querySelector('#aiProvider');
+const externalAiConsentField = document.querySelector('#externalAiConsentField');
+const aiDataPolicyAccepted = document.querySelector('#aiDataPolicyAccepted');
 const faiosServerUrl = document.querySelector('#faiosServerUrl');
 const lmstudioModel = document.querySelector('#lmstudioModel');
 
 const counts = {
-  urgent: document.querySelector('#urgentCount'),
-  active: document.querySelector('#activeCount'),
-  waiting: document.querySelector('#waitingCount'),
-  done: document.querySelector('#doneCount')
+  action_required: document.querySelector('#actionRequiredCount'),
+  waiting: document.querySelector('#precisionWaitingCount'),
+  decision_required: document.querySelector('#decisionRequiredCount'),
+  completed: document.querySelector('#precisionCompletedCount'),
+  reference: document.querySelector('#precisionReferenceCount'),
+  review_required: document.querySelector('#reviewRequiredCount')
 };
 
 const actionList = document.querySelector('#actionList');
@@ -43,10 +69,11 @@ const feedbackReasons = {
   active: '우리가 처리해야 할 작업 있음',
   waiting: '상대방 회신/승인/자료 필요',
   done: '이미 처리/발송/종료됨',
+  reference: '참고용이며 후속 업무 없음',
   hold: '보류: 지금 처리하지 않고 추후 확인'
 };
-const feedbackStatuses = ['urgent', 'active', 'waiting', 'done'];
-const feedbackReasonOptions = ['urgent', 'active', 'waiting', 'done', 'hold'];
+const feedbackStatuses = ['urgent', 'active', 'waiting', 'done', 'reference'];
+const feedbackReasonOptions = ['urgent', 'active', 'waiting', 'done', 'reference', 'hold'];
 
 let currentResult = null;
 let currentMessages = [];
@@ -54,6 +81,54 @@ let visibleMessages = [];
 let activeFilter = 'all';
 let searchQuery = '';
 let selectedMessageId = '';
+let precisionProjects = [];
+let precisionSmartViews = [];
+
+function syncExternalAiConsent() {
+  const requiresConsent = aiProvider.value === 'gemini';
+  externalAiConsentField.hidden = !requiresConsent;
+  aiDataPolicyAccepted.disabled = !requiresConsent;
+  if (!requiresConsent) aiDataPolicyAccepted.checked = false;
+}
+async function ensureLocalSession() {
+  if (!localSessionPromise) {
+    localSessionPromise = fetch('/api/session', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(async (response) => {
+      const payload = await response.json();
+      if (!response.ok || !payload.csrfToken) {
+        throw new Error(payload.message || '로컬 보안 세션을 만들지 못했습니다.');
+      }
+      serverCapabilities = { ...serverCapabilities, ...(payload.capabilities || {}) };
+      return payload;
+    }).catch((error) => {
+      localSessionPromise = null;
+      throw error;
+    });
+  }
+  return localSessionPromise;
+}
+
+async function apiFetch(url, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  const headers = new Headers(options.headers || {});
+  const requiresSession = !String(url).startsWith('/api/session')
+    && !String(url).startsWith('/api/outlook/status');
+  const session = requiresSession ? await ensureLocalSession() : null;
+  if (!['GET', 'HEAD'].includes(method)) {
+    headers.set('X-CSRF-Token', session.csrfToken);
+    headers.set('X-Mail-Intelligence-Request', '1');
+  }
+  return fetch(url, {
+    ...options,
+    method,
+    headers,
+    credentials: 'same-origin',
+    cache: 'no-store'
+  });
+}
 
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
@@ -68,6 +143,15 @@ function escapeHtml(value) {
     .replace(/'/g, '&#039;');
 }
 
+function safeExternalUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''), window.location.origin);
+    return parsed.protocol === 'https:' ? parsed.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
 function empty(label) {
   const node = document.createElement('div');
   node.className = 'empty';
@@ -77,6 +161,86 @@ function empty(label) {
 
 function insightFor(messageId) {
   return currentResult?.messageInsights?.find((item) => item.id === messageId);
+}
+
+function precisionFor(messageId) {
+  return currentMessages.find((item) => item.id === messageId)?.precision || null;
+}
+
+function precisionStateLabel(value) {
+  return {
+    action_required: '내 행동 필요',
+    waiting: '대기',
+    decision_required: '결정 필요',
+    completed: '완료',
+    reference: '참고',
+    review_required: '검토 필요'
+  }[value] || value || '검토 필요';
+}
+
+function nextActorLabel(value) {
+  return {
+    me: '내 차례',
+    internal_team: '내부 팀 차례',
+    external_party: '고객·외부 차례',
+    shared: '공동 대응',
+    none: '다음 행동 없음',
+    unknown: '행동 주체 불명'
+  }[value] || value || '행동 주체 불명';
+}
+
+function priorityLabel(value) {
+  return {
+    critical: '최우선',
+    high: '높음',
+    normal: '보통',
+    low: '낮음'
+  }[value] || value || '보통';
+}
+
+function projectResolutionLabel(value) {
+  return {
+    confirmed: '확정 프로젝트',
+    candidate: '프로젝트 후보',
+    unassigned: '미분류',
+    review_required: '프로젝트 충돌 검토'
+  }[value] || value || '미분류';
+}
+
+function signalLabel(value) {
+  return {
+    deadline: '기한',
+    amount: '금액',
+    quotation_contract: '견적·계약·발주',
+    attachment: '첨부',
+    attachment_missing: '첨부 누락 가능',
+    schedule: '일정',
+    approval: '승인',
+    incident_security: '장애·보안'
+  }[value] || value;
+}
+
+function confidencePercent(value) {
+  return Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 100)}%` : '미측정';
+}
+
+function projectDisplay(classification) {
+  if (!classification) return '미분류';
+  if (classification.projectResolution === 'confirmed') return classification.projectName || classification.projectKey || '확정 프로젝트';
+  if (classification.projectResolution === 'candidate') return classification.projectCandidate?.label || '프로젝트 후보';
+  if (classification.projectResolution === 'review_required') return '프로젝트 충돌 검토';
+  return '미분류';
+}
+
+function precisionSummaryLine(classification) {
+  if (!classification) return '정밀 분류 전';
+  const parts = [
+    nextActorLabel(classification.nextActor),
+    priorityLabel(classification.priority),
+    projectDisplay(classification)
+  ];
+  if (classification.dueText) parts.push(`기한 ${classification.dueText}`);
+  return parts.join(' · ');
 }
 
 function normalizedSubject(subject = '') {
@@ -98,9 +262,10 @@ function groupLabelFor(message) {
 
 function messageCard(message) {
   const insight = insightFor(message.id);
-  const lane = effectiveStatus(insight);
+  const precision = message.precision;
+  const lane = precision?.workState || legacyToPrecisionState(effectiveStatus(insight));
   const article = document.createElement('article');
-  article.className = 'message-card';
+  article.className = `message-card precision-${lane.replaceAll('_', '-')}`;
   article.innerHTML = `
     <div class="message-row">
       <strong class="message-subject"></strong>
@@ -111,10 +276,12 @@ function messageCard(message) {
     <div class="message-next"></div>
   `;
   article.querySelector('.message-subject').textContent = message.subject || '(제목 없음)';
-  article.querySelector('.status-pill').textContent = `${statusLabel(lane)}${insight?.userFeedback ? ' · 내 보정' : ''}`;
+  article.querySelector('.status-pill').textContent = `${precisionStateLabel(lane)}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : ''}`;
   article.querySelector('.message-meta').textContent = `${message.isRead ? '읽음' : '읽지않음'} · ${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}${insight?.isSpamCandidate ? ' · 광고성 후보' : ''}${insight?.isOnHold ? ' · 보류' : ''}`;
   article.querySelector('.message-summary').textContent = insight?.summary?.[0] || message.bodyPreview || '';
-  article.querySelector('.message-next').textContent = insight?.nextActions?.[0]?.recommendedAction || '후속 필요 여부 확인';
+  article.querySelector('.message-next').textContent = precision
+    ? precisionSummaryLine(precision)
+    : insight?.nextActions?.[0]?.recommendedAction || '정밀 분류 필요';
   if (insight?.aiEnhanced) article.classList.add('ai-enhanced');
   if (!message.isRead) article.classList.add('unread');
   if (insight?.isSpamCandidate) article.classList.add('promo');
@@ -122,55 +289,38 @@ function messageCard(message) {
   return article;
 }
 
-function actionCard(action) {
-  const article = document.createElement('article');
-  article.className = `mini-card ${action.lane}`;
-  article.innerHTML = `
-    <div class="mini-title"></div>
-    <div class="mini-meta"></div>
-    <p></p>
-  `;
-  article.querySelector('.mini-title').textContent = action.title || action.recommendedAction;
-  article.querySelector('.mini-meta').textContent = [
-    `P${action.priority}`,
-    action.due ? `일정 ${action.due}` : '',
-    action.owner && action.owner !== '미지정' ? action.owner : '',
-    action.subject || ''
-  ].filter(Boolean).join(' · ');
-  article.querySelector('p').textContent = action.evidence || action.title || '';
-  if (action.messageId) article.addEventListener('click', () => selectMessage(action.messageId));
-  return article;
-}
-
 function scenarioActionCard(action) {
   const article = document.createElement('article');
   article.className = `mini-card scenario-action ${action.lane || 'active'}`;
+  const isDraft = ['draft_reply', 'request_info', 'share_document'].includes(action.actionType);
   article.innerHTML = `
     <div class="mini-title"></div>
     <div class="mini-meta"></div>
     <p></p>
     <div class="scenario-action-buttons">
-      <button type="button" class="prepare-mail">회신내용</button>
-      <button type="button" class="custom-action">custom 작성</button>
+      ${isDraft ? '<button type="button" class="prepare-mail">회신 초안 보기</button><button type="button" class="custom-action">직접 작성</button>' : '<span class="read-only-action">읽기 전용 추천 · 외부 실행 없음</span>'}
     </div>
   `;
   article.querySelector('.mini-title').textContent = action.title || action.recommendedAction || '추천 액션';
-  article.querySelector('.mini-meta').textContent = `추천 첨부파일: ${recommendedAttachment(action)}`;
+  article.querySelector('.mini-meta').textContent = isDraft
+    ? `초안 · 추천 첨부파일: ${recommendedAttachment(action)}`
+    : `${statusLabel(action.lane)} · ${action.actionType || 'review'}`;
   article.querySelector('p').textContent = action.body || action.recommendedAction || '';
-  article.querySelector('.prepare-mail').addEventListener('click', () => mountComposer(action));
-  article.querySelector('.custom-action').addEventListener('click', () => mountComposer({
+  article.querySelector('.prepare-mail')?.addEventListener('click', () => mountComposer(action));
+  article.querySelector('.custom-action')?.addEventListener('click', () => mountComposer({
     ...action,
     id: `custom-${action.messageId || 'message'}`,
-    title: 'custom 작성',
+    actionType: 'draft_reply',
+    title: '직접 작성',
     body: '',
-    recommendedAction: '사용자 직접 작성'
+    recommendedAction: '사용자 직접 작성',
   }));
   return article;
 }
 
 function recommendedAttachment(action) {
   const text = `${action.subject || ''} ${action.recommendedAction || ''} ${action.evidence || ''}`.toLowerCase();
-  if (/sangfor|vdi|hci|제안|소개|자료|manual|메뉴얼|매뉴얼/.test(text)) return 'Sangfor 소개자료/메뉴얼/관련 제안서 확인';
+  if (/제안|소개|자료|manual|메뉴얼|매뉴얼|제품/.test(text)) return '관련 제품 자료·매뉴얼·제안서 확인';
   if (/견적|quote|가격|발주|계약/.test(text)) return '견적서 또는 계약 관련 문서 확인';
   if (/일정|미팅|회의|schedule/.test(text)) return '일정표 또는 회의 초대 확인';
   return '첨부 추천 없음. 필요 시 custom에서 직접 지정';
@@ -203,6 +353,97 @@ function detailBlock(title, values) {
 
 function effectiveStatus(insight) {
   return insight?.effectiveStatus || insight?.status || 'reference';
+}
+
+function legacyToPrecisionState(status) {
+  return {
+    urgent: 'action_required',
+    active: 'action_required',
+    waiting: 'waiting',
+    done: 'completed',
+    reference: 'reference'
+  }[status] || 'review_required';
+}
+
+function precisionEvidenceList(classification) {
+  if (!classification?.evidence) return [];
+  return Object.entries(classification.evidence)
+    .filter(([, item]) => item?.text)
+    .map(([field, item]) => `${field}: ${item.text} (${item.rule || '근거'})`);
+}
+
+function precisionConfidenceList(classification) {
+  if (!classification?.confidence) return [];
+  return Object.entries(classification.confidence)
+    .map(([field, value]) => `${field}: ${confidencePercent(value)}`);
+}
+
+function projectOptions(classification) {
+  const current = classification?.primaryProjectId == null ? '' : String(classification.primaryProjectId);
+  return [
+    '<option value="">자동 판단 유지 / 미분류</option>',
+    ...precisionProjects.map((project) => `<option value="${project.id}" ${String(project.id) === current ? 'selected' : ''}>${escapeHtml(project.name)}</option>`)
+  ].join('');
+}
+
+function precisionCorrectionPanel(message, classification) {
+  if (!classification) {
+    return '<section class="precision-detail"><p>정밀 분류 결과가 아직 없습니다. 상단의 정밀 분류 새로고침을 실행하세요.</p></section>';
+  }
+  return `
+    <section class="precision-detail">
+      <div class="precision-detail-head">
+        <div>
+          <span class="memory-label">정밀 분류</span>
+          <strong>${escapeHtml(precisionStateLabel(classification.workState))}</strong>
+        </div>
+        <span class="precision-review ${escapeHtml(classification.reviewStatus.replaceAll('_', '-'))}">${escapeHtml(classification.reviewStatus === 'corrected' ? '사용자 보정' : classification.reviewStatus === 'review_required' ? '검토 필요' : '자동 분류')}</span>
+      </div>
+      <dl class="precision-facts">
+        <div><dt>다음 행동</dt><dd>${escapeHtml(nextActorLabel(classification.nextActor))}</dd></div>
+        <div><dt>우선순위</dt><dd>${escapeHtml(priorityLabel(classification.priority))}</dd></div>
+        <div><dt>프로젝트</dt><dd>${escapeHtml(projectDisplay(classification))}<small>${escapeHtml(projectResolutionLabel(classification.projectResolution))}</small></dd></div>
+        <div><dt>기한</dt><dd>${escapeHtml(classification.dueText || '없음')}<small>${classification.dueAt ? escapeHtml(new Date(classification.dueAt).toLocaleString('ko-KR')) : ''}</small></dd></div>
+      </dl>
+      <div class="signal-row">${(classification.signals || []).map((signal) => `<span>${escapeHtml(signalLabel(signal))}</span>`).join('') || '<span>보조 신호 없음</span>'}</div>
+      ${detailBlock('필드별 신뢰도', precisionConfidenceList(classification))}
+      ${detailBlock('정밀 판단 근거', precisionEvidenceList(classification))}
+      ${classification.reviewReasons?.length ? detailBlock('검토 사유', classification.reviewReasons) : ''}
+      <details class="precision-correction">
+        <summary>이 분류를 직접 보정</summary>
+        <form id="precisionCorrectionForm">
+          <input type="hidden" name="messageId" value="${escapeHtml(message.id)}" />
+          <label>현재 업무 상태
+            <select name="workState">
+              ${['action_required', 'waiting', 'decision_required', 'completed', 'reference', 'review_required']
+    .map((value) => `<option value="${value}" ${classification.workState === value ? 'selected' : ''}>${precisionStateLabel(value)}</option>`).join('')}
+            </select>
+          </label>
+          <label>다음 행동 주체
+            <select name="nextActor">
+              ${['me', 'internal_team', 'external_party', 'shared', 'none', 'unknown'].map((value) => `<option value="${value}" ${classification.nextActor === value ? 'selected' : ''}>${nextActorLabel(value)}</option>`).join('')}
+            </select>
+          </label>
+          <label>우선순위
+            <select name="priority">
+              ${['critical', 'high', 'normal', 'low'].map((value) => `<option value="${value}" ${classification.priority === value ? 'selected' : ''}>${priorityLabel(value)}</option>`).join('')}
+            </select>
+          </label>
+          <label>확정 프로젝트
+            <select name="primaryProjectId">${projectOptions(classification)}</select>
+          </label>
+          <label class="checkbox-row"><input type="checkbox" name="clearProject" />프로젝트 연결을 해제하고 미분류로 유지</label>
+          <label>기한 원문<input name="dueText" type="text" maxlength="160" value="${escapeHtml(classification.dueText || '')}" placeholder="예: 내일 오후 3시" /></label>
+          <label>보정 이유 코드<input name="reasonCode" type="text" maxlength="120" value="manual-review" /></label>
+          <label>보정 메모<input name="note" type="text" maxlength="1000" placeholder="왜 수정했는지 간단히 기록" /></label>
+          <div class="precision-correction-actions">
+            <button type="submit" class="primary">정밀 분류 저장</button>
+            <span id="precisionCorrectionStatus">자동 판단보다 우선해 저장됩니다.</span>
+          </div>
+        </form>
+      </details>
+    </section>
+  `;
 }
 
 function feedbackPanel(insight) {
@@ -241,8 +482,8 @@ function mailComposer(action) {
   return `
     <section class="mail-composer" data-compose-action="${escapeHtml(action.id)}">
       <div class="composer-head">
-        <h4>발송 메일 편집</h4>
-        <span id="sendStatus">보낸 메일함에 저장됩니다.</span>
+        <h4>회신 초안 편집</h4>
+        <span id="sendStatus">v1.2.0은 읽기 전용입니다. 초안은 복사만 할 수 있습니다.</span>
       </div>
       <label>받는 사람
         <input id="composeTo" type="email" value="${escapeHtml(action.to || '')}" />
@@ -257,7 +498,7 @@ function mailComposer(action) {
         <textarea id="composeBody" rows="12">${escapeHtml(action.body || action.recommendedAction || '')}</textarea>
       </label>
       <div class="composer-actions">
-        <button id="sendMail" type="button" class="primary">Outlook으로 발송</button>
+        <button id="copyDraft" type="button" class="primary">초안 복사</button>
         <button id="cancelCompose" type="button">닫기</button>
       </div>
     </section>
@@ -271,35 +512,64 @@ function mountComposer(action) {
     mount.innerHTML = '';
     renderActionPanel();
   });
-  mount.querySelector('#sendMail').addEventListener('click', sendComposedMail);
+  mount.querySelector('#copyDraft').addEventListener('click', copyComposedDraft);
   mount.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function copyComposedDraft() {
+  const status = document.querySelector('#sendStatus');
+  const payload = {
+    to: document.querySelector('#composeTo')?.value || '',
+    cc: document.querySelector('#composeCc')?.value || '',
+    subject: document.querySelector('#composeSubject')?.value || '',
+    body: document.querySelector('#composeBody')?.value || '',
+  };
+  const draft = [`To: ${payload.to}`, payload.cc ? `Cc: ${payload.cc}` : '', `Subject: ${payload.subject}`, '', payload.body]
+    .filter((value, index) => value || index === 3)
+    .join('\n');
+  try {
+    await navigator.clipboard.writeText(draft);
+    status.textContent = '초안을 클립보드에 복사했습니다. Outlook에서 최종 확인 후 직접 발송하세요.';
+  } catch {
+    const body = document.querySelector('#composeBody');
+    body?.focus();
+    body?.select();
+    status.textContent = '클립보드 접근이 차단되었습니다. 본문을 직접 복사하세요.';
+  }
 }
 
 function selectMessage(messageId) {
   selectedMessageId = messageId;
   const message = currentMessages.find((item) => item.id === messageId);
   const insight = insightFor(messageId);
+  const precision = message?.precision || null;
   if (!message && !insight) return;
 
-  const actions = insight?.nextActions || [];
   const tasks = insight?.tasks || [];
   const preview = insight?.bodyPreview || message?.bodyPreview || message?.body || '';
   const fullBody = message?.body || preview || '';
-  markMessageRead(messageId);
+  const outlookLink = safeExternalUrl(message?.webLink);
+  const confidence = Number.isFinite(insight?.confidence) ? `${Math.round(insight.confidence * 100)}%` : '미측정';
+  const analysisState = insight?.analysisState === 'degraded'
+    ? 'AI 실패 · 규칙 기반 임시 판단'
+    : insight?.analysisMode === 'ai'
+      ? 'AI 분석'
+      : '규칙 기반 분석';
 
   messageDetail.innerHTML = `
     <div class="detail-head">
-      <span class="status-pill">${escapeHtml(statusLabel(effectiveStatus(insight)))}${insight?.userFeedback ? ' · 내 보정' : insight?.aiEnhanced ? ' · AI' : ''}</span>
-      ${message?.webLink ? `<a href="${escapeHtml(message.webLink)}" target="_blank" rel="noreferrer">Outlook에서 열기</a>` : ''}
+      <span class="status-pill">${escapeHtml(precision ? precisionStateLabel(precision.workState) : statusLabel(effectiveStatus(insight)))}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : insight?.aiEnhanced ? ' · AI' : ''}</span>
+      ${outlookLink ? `<a href="${escapeHtml(outlookLink)}" target="_blank" rel="noreferrer noopener">Outlook에서 열기</a>` : ''}
     </div>
     <div class="detail-content">
       <h3>${escapeHtml(insight?.subject || message?.subject || '(제목 없음)')}</h3>
-      <p class="detail-meta">${escapeHtml(insight?.fromName || message?.fromName || message?.from || 'unknown')} · ${message?.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${escapeHtml(message?.importance || 'normal')}</p>
+      <p class="detail-meta">${escapeHtml(insight?.fromName || message?.fromName || message?.from || 'unknown')} · ${message?.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${escapeHtml(message?.importance || 'normal')} · ${escapeHtml(analysisState)} · 신뢰도 ${escapeHtml(confidence)}</p>
       <section class="detail-block first">
         <h4>메일 내용</h4>
         <p class="detail-body">${escapeHtml(fullBody).slice(0, 5000)}</p>
       </section>
-      ${feedbackPanel(insight)}
+      ${precisionCorrectionPanel(message, precision)}
+      ${insight ? feedbackPanel(insight) : ''}
       ${detailBlock('요약', insight?.summary || [])}
       ${detailBlock('판단 근거', insight?.evidenceItems?.length ? insight.evidenceItems : tasks.map((task) => `${task.title} (${task.lane}) - ${task.body}`))}
       ${insight?.userFeedback ? detailBlock('내 보정 메모', [insight.userFeedback.note || insight.userFeedback.reasonLabel || feedbackReasons[insight.userFeedback.reasonCode] || '보정 사유 없음']) : ''}
@@ -311,26 +581,12 @@ function selectMessage(messageId) {
   messageDetail.querySelectorAll('.feedback-status').forEach((button) => {
     button.addEventListener('click', () => saveFeedback(messageId, button.dataset.status));
   });
+  messageDetail.querySelector('#precisionCorrectionForm')?.addEventListener('submit', savePrecisionCorrection);
 
   messageList.querySelectorAll('.message-card').forEach((node) => node.classList.remove('selected'));
   const index = currentMessages.findIndex((item) => item.id === messageId);
   if (index >= 0) messageList.querySelectorAll('.message-card')[index]?.classList.add('selected');
   renderActionPanel();
-}
-
-async function markMessageRead(messageId) {
-  const message = currentMessages.find((item) => item.id === messageId);
-  if (!message || message.isRead) return;
-  message.isRead = true;
-  try {
-    await fetch('/api/outlook/read', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, isRead: true })
-    });
-  } catch {
-    // Keep local read state; Outlook update can be retried on next click.
-  }
 }
 
 async function saveFeedback(messageId, userStatus) {
@@ -340,7 +596,7 @@ async function saveFeedback(messageId, userStatus) {
   const note = messageDetail.querySelector('#feedbackNote')?.value || '';
   status.textContent = '보정값 저장 중입니다.';
   try {
-    const response = await fetch('/api/outlook/feedback', {
+    const response = await apiFetch('/api/outlook/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -366,46 +622,59 @@ async function saveFeedback(messageId, userStatus) {
   }
 }
 
-async function sendComposedMail() {
-  const status = document.querySelector('#sendStatus');
-  const button = document.querySelector('#sendMail');
+async function savePrecisionCorrection(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const messageId = String(formData.get('messageId') || '');
+  const status = form.querySelector('#precisionCorrectionStatus');
+  status.textContent = '정밀 분류 보정값 저장 중입니다.';
+  const primaryProjectId = String(formData.get('primaryProjectId') || '').trim();
   const payload = {
-    to: document.querySelector('#composeTo')?.value || '',
-    cc: document.querySelector('#composeCc')?.value || '',
-    subject: document.querySelector('#composeSubject')?.value || '',
-    body: document.querySelector('#composeBody')?.value || ''
+    messageId,
+    workState: formData.get('workState'),
+    nextActor: formData.get('nextActor'),
+    priority: formData.get('priority'),
+    dueText: String(formData.get('dueText') || ''),
+    primaryProjectId: primaryProjectId || undefined,
+    clearProject: formData.get('clearProject') === 'on',
+    reasonCode: String(formData.get('reasonCode') || 'manual-review'),
+    note: String(formData.get('note') || '')
   };
-  button.disabled = true;
-  status.textContent = 'Outlook으로 발송 중입니다.';
   try {
-    const response = await fetch('/api/outlook/send', {
+    const response = await apiFetch('/api/intelligence/correct', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || '메일 발송 실패');
-    status.textContent = `발송 완료 · 보낸 메일함 저장 · ${new Date(result.sentAt).toLocaleString('ko-KR')}`;
+    if (!response.ok) throw new Error(result.message || '정밀 분류 보정 저장 실패');
+    const message = currentMessages.find((item) => item.id === messageId);
+    if (message) message.precision = result.classification;
+    status.textContent = '저장됨 · 사용자 보정이 자동 판단보다 우선합니다.';
+    await loadPrecisionOverview({ classify: false });
+    renderFilteredView();
   } catch (error) {
-    status.textContent = error instanceof Error ? error.message : '메일 발송 실패';
-  } finally {
-    button.disabled = false;
+    status.textContent = error instanceof Error ? error.message : '정밀 분류 보정 저장 실패';
   }
 }
 
 function laneForMessage(messageId) {
+  const precision = precisionFor(messageId);
+  if (precision?.workState) return precision.workState;
   const insight = insightFor(messageId);
-  if (!insight) return 'active';
+  if (!insight) return 'review_required';
   const applied = effectiveStatus(insight);
-  if (applied === 'urgent') return 'urgent';
+  if (applied === 'urgent') return 'action_required';
   if (applied === 'waiting') return 'waiting';
-  if (applied === 'done') return 'done';
-  if (applied === 'active' || applied === 'reference') return 'active';
-  if (insight.tasks?.some((task) => task.lane === 'urgent')) return 'urgent';
+  if (applied === 'done') return 'completed';
+  if (applied === 'reference') return 'reference';
+  if (applied === 'active') return 'action_required';
+  if (insight.tasks?.some((task) => task.lane === 'urgent')) return 'action_required';
   if (insight.tasks?.some((task) => task.lane === 'waiting')) return 'waiting';
-  if (insight.tasks?.some((task) => task.lane === 'active')) return 'active';
-  if (insight.tasks?.some((task) => task.lane === 'done')) return 'done';
-  return 'active';
+  if (insight.tasks?.some((task) => task.lane === 'active')) return 'action_required';
+  if (insight.tasks?.some((task) => task.lane === 'done')) return 'completed';
+  return 'reference';
 }
 
 function statusLabel(status) {
@@ -414,7 +683,11 @@ function statusLabel(status) {
     active: '진행중',
     waiting: '대기',
     done: '완료',
-    reference: '참고'
+    reference: '참고',
+    action_required: '내 행동 필요',
+    decision_required: '결정 필요',
+    completed: '완료',
+    review_required: '검토 필요'
   }[status] || status || '참고';
 }
 
@@ -476,10 +749,10 @@ function renderFilteredView() {
     groups.forEach((items, label) => {
       const group = document.createElement('section');
       group.className = 'message-group';
-      const laneSummary = feedbackStatuses
+      const laneSummary = Object.keys(counts)
         .map((lane) => `${statusLabel(lane)} ${items.filter((item) => laneForMessage(item.id) === lane).length}`)
         .join(' · ');
-      group.innerHTML = `<div class="group-head"><strong></strong><span></span></div>`;
+      group.innerHTML = '<div class="group-head"><strong></strong><span></span></div>';
       group.querySelector('strong').textContent = label;
       group.querySelector('span').textContent = `${items.length}건 · ${laneSummary}`;
       items.forEach((message) => group.appendChild(messageCard(message)));
@@ -520,27 +793,312 @@ function render(result, messages = []) {
   activeFilter = 'all';
   searchQuery = '';
   mailSearch.value = '';
+  if (result?.precision?.summary) renderPrecisionOverview(result.precision.summary);
   renderFilteredView();
+}
+
+function renderMemoryStatus(storage) {
+  const countsByTable = storage?.counts || {};
+  const sync = storage?.sync || {};
+  const folders = sync.folders || [];
+  const jobs = storage?.jobs || [];
+  const deadLetters = storage?.deadLetters || [];
+  const ready = storage?.ready === true;
+  memoryStatus.textContent = ready
+    ? `SQLite schema v${storage.schemaVersion} · 정상`
+    : 'SQLite 점검 필요';
+  memoryMessageCount.textContent = String(countsByTable.messages || 0);
+  memoryFolderCount.textContent = String(countsByTable.mail_folders || folders.length || 0);
+  memoryJobCount.textContent = String(countsByTable.operator_jobs || jobs.length || 0);
+  memoryWarningCount.textContent = String(deadLetters.length);
+  const cursorFolders = folders.filter((folder) => folder.has_delta_cursor === 1).length;
+  const resumeFolders = folders.filter((folder) => folder.has_resume_cursor === 1).length;
+  memorySummary.textContent = ready
+    ? `DB ${Math.max(Number(storage.sizeBytes || 0) / 1024 / 1024, 0).toFixed(1)} MB · Delta 커서 ${cursorFolders}개 · 재개 대기 ${resumeFolders}개 · 백업 ${(storage.backups || []).length}개`
+    : '무결성 검사 결과를 확인하세요.';
+}
+
+function renderPrecisionOverview(summary) {
+  const states = summary?.states || {};
+  Object.entries(counts).forEach(([state, node]) => {
+    if (node) node.textContent = String(states[state] || 0);
+  });
+  const total = Number(summary?.total || 0);
+  const review = Number(summary?.reviewRequired || 0);
+  const corrected = Number(summary?.corrected || 0);
+  const confirmed = Number(summary?.projectResolution?.confirmed || summary?.assignedProjects || 0);
+  precisionStatus.textContent = total
+    ? `정밀 분류 ${total}건 · 검토 필요 ${review}건`
+    : '정밀 분류할 저장 메일이 없습니다.';
+  precisionSummaryNode.textContent = total
+    ? `사용자 보정 ${corrected}건 · 확정 프로젝트 연결 ${confirmed}건 · 애매한 판단은 검토 필요로 보류합니다.`
+    : 'Outlook을 연결하거나 저장 메일을 동기화하면 정밀 분류가 시작됩니다.';
+}
+
+function renderProjectRegistry() {
+  projectRegistryCount.textContent = `${precisionProjects.length}개`;
+  clear(projectRegistryList);
+  if (!precisionProjects.length) {
+    projectRegistryList.appendChild(empty('등록된 확정 프로젝트가 없습니다. 자동 생성하지 않습니다.'));
+    return;
+  }
+  precisionProjects.forEach((project) => {
+    const item = document.createElement('article');
+    item.className = 'project-item';
+    const name = document.createElement('strong');
+    const detail = document.createElement('span');
+    name.textContent = project.name;
+    detail.textContent = `${project.projectKey} · 별칭 ${(project.aliases || []).join(', ') || '없음'}`;
+    item.append(name, detail);
+    projectRegistryList.appendChild(item);
+  });
+}
+
+async function loadPrecisionProjects() {
+  try {
+    const response = await apiFetch('/api/intelligence/projects');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '프로젝트 목록 확인 실패');
+    precisionProjects = payload.projects || [];
+    renderProjectRegistry();
+  } catch (error) {
+    projectRegistryList.textContent = error instanceof Error ? error.message : '프로젝트 목록 확인 실패';
+  }
+}
+
+function renderSmartViews() {
+  clear(smartViews);
+  precisionSmartViews.forEach((view) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'smart-view';
+    button.textContent = view.label;
+    button.addEventListener('click', () => {
+      mailSearch.value = view.query;
+      searchPersistentMemory();
+    });
+    smartViews.appendChild(button);
+  });
+}
+
+async function loadSmartViews() {
+  try {
+    const response = await apiFetch('/api/intelligence/smart-views');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '스마트 뷰 확인 실패');
+    precisionSmartViews = payload.views || [];
+    renderSmartViews();
+  } catch {
+    precisionSmartViews = [];
+    renderSmartViews();
+  }
+}
+
+async function loadPrecisionOverview({ classify = true, force = false } = {}) {
+  reclassifyPrecision.disabled = true;
+  try {
+    if (classify) {
+      const classifyResponse = await apiFetch('/api/intelligence/classify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force })
+      });
+      const classifyPayload = await classifyResponse.json();
+      if (!classifyResponse.ok) throw new Error(classifyPayload.message || '정밀 분류 실패');
+    }
+    const response = await apiFetch('/api/intelligence/summary');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '정밀 분류 상태 확인 실패');
+    renderPrecisionOverview(payload);
+    await loadPrecisionProjects();
+  } catch (error) {
+    precisionStatus.textContent = '정밀 분류 확인 실패';
+    precisionSummaryNode.textContent = error instanceof Error ? error.message : '정밀 분류 상태 확인 실패';
+  } finally {
+    reclassifyPrecision.disabled = false;
+  }
+}
+
+async function createPrecisionProject(event) {
+  event.preventDefault();
+  createProjectButton.disabled = true;
+  precisionSummaryNode.textContent = '프로젝트를 등록하고 관련 저장 메일을 다시 분류하는 중입니다.';
+  try {
+    const aliases = projectAliases.value.split(',').map((item) => item.trim()).filter(Boolean);
+    const response = await apiFetch('/api/intelligence/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: projectName.value.trim(),
+        projectKey: projectKey.value.trim(),
+        aliases
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '프로젝트 등록 실패');
+    projectForm.reset();
+    await loadPrecisionOverview({ classify: false });
+    precisionSummaryNode.textContent = `${payload.project.name} 등록 완료 · 기존 메일 ${payload.reclassification?.processed || 0}건 재평가`;
+    if (currentMessages.length) await loadOutlookMessages();
+  } catch (error) {
+    precisionSummaryNode.textContent = error instanceof Error ? error.message : '프로젝트 등록 실패';
+  } finally {
+    createProjectButton.disabled = false;
+  }
+}
+
+async function loadMemoryStatus() {
+  refreshMemory.disabled = true;
+  try {
+    const response = await apiFetch('/api/storage/status');
+    const storage = await response.json();
+    if (!response.ok) throw new Error(storage.message || '메일 DB 상태 확인 실패');
+    renderMemoryStatus(storage);
+  } catch (error) {
+    memoryStatus.textContent = 'SQLite 상태 확인 실패';
+    memorySummary.textContent = error instanceof Error ? error.message : '메일 DB 상태 확인 실패';
+  } finally {
+    refreshMemory.disabled = false;
+  }
+}
+
+async function synchronizePersistentMemory() {
+  syncPersistentMail.disabled = true;
+  fetchStatus.textContent = 'Outlook 전체 폴더 Delta 동기화를 실행 중입니다.';
+  try {
+    const response = await apiFetch('/api/outlook/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ top: Number(mailLimit.value), forceInitial: false })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || 'Delta 동기화 실패');
+    const sync = payload.sync || {};
+    fetchStatus.textContent = `Delta 동기화 완료 · 폴더 ${sync.completedFolders || 0}/${sync.discoveredFolders || 0} · 수집 ${sync.fetchedFromGraph || 0} · 반영 ${sync.upserted || 0} · 삭제 ${sync.deleted || 0} · 경고 ${sync.failedFolders || 0}`;
+    await loadMemoryStatus();
+  } catch (error) {
+    fetchStatus.textContent = error instanceof Error ? error.message : 'Delta 동기화 실패';
+  } finally {
+    syncPersistentMail.disabled = false;
+  }
+}
+
+async function createPersistentMemoryBackup() {
+  backupPersistentMail.disabled = true;
+  memorySummary.textContent = 'SQLite 무결성 검사와 검증 백업을 실행 중입니다.';
+  try {
+    const response = await apiFetch('/api/storage/backup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '백업 생성 실패');
+    memorySummary.textContent = `검증 백업 완료 · ${payload.backup.name} · ${(payload.backup.sizeBytes / 1024 / 1024).toFixed(1)} MB · SHA-256 ${payload.backup.checksumSha256.slice(0, 12)}…`;
+    await loadMemoryStatus();
+  } catch (error) {
+    memorySummary.textContent = error instanceof Error ? error.message : '백업 생성 실패';
+  } finally {
+    backupPersistentMail.disabled = false;
+  }
+}
+
+function renderDatabaseSearchResults(results, query, parsedQuery = null) {
+  clear(databaseSearchResults);
+  databaseSearchResults.hidden = false;
+  const heading = document.createElement('strong');
+  const filters = parsedQuery?.recognized?.map((item) => `${item.type}:${item.value}`).join(' · ') || '메일 근거 검색';
+  heading.textContent = `지능형 탐색 “${query}” · ${results.length}건 · ${filters}`;
+  databaseSearchResults.appendChild(heading);
+  if (!results.length) {
+    databaseSearchResults.appendChild(empty('일치하는 저장 메일이 없습니다.'));
+    return;
+  }
+  results.forEach((result) => {
+    const message = result.message || result;
+    const classification = result.classification || message.precision;
+    const item = document.createElement('article');
+    item.className = 'memory-search-item';
+    const content = document.createElement('div');
+    const subject = document.createElement('strong');
+    const metadata = document.createElement('span');
+    subject.textContent = message.subject || '(제목 없음)';
+    metadata.textContent = classification
+      ? `${precisionStateLabel(classification.workState)} · ${nextActorLabel(classification.nextActor)} · ${priorityLabel(classification.priority)} · ${projectDisplay(classification)}${classification.dueText ? ` · ${classification.dueText}` : ''}`
+      : `${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}`;
+    content.append(subject, metadata);
+    if (result.matchedBecause?.length) {
+      const reasons = document.createElement('small');
+      reasons.textContent = result.matchedBecause.join(' · ');
+      content.appendChild(reasons);
+    }
+    item.appendChild(content);
+    const outlookUrl = safeExternalUrl(message.webLink);
+    if (outlookUrl) {
+      const link = document.createElement('a');
+      link.href = outlookUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Outlook 원문';
+      item.appendChild(link);
+    }
+    item.addEventListener('click', () => {
+      const existing = currentMessages.find((candidate) => candidate.id === message.id);
+      if (existing) existing.precision = classification || existing.precision;
+      else currentMessages.push({ ...message, precision: classification || null });
+      searchQuery = '';
+      activeFilter = 'all';
+      renderFilteredView();
+      selectMessage(message.id);
+    });
+    databaseSearchResults.appendChild(item);
+  });
+}
+
+async function searchPersistentMemory() {
+  const query = mailSearch.value.trim();
+  if (!query) {
+    fetchStatus.textContent = 'DB 전체 검색어를 입력하세요.';
+    mailSearch.focus();
+    return;
+  }
+  searchDatabase.disabled = true;
+  try {
+    const response = await apiFetch(`/api/intelligence/search?q=${encodeURIComponent(query)}&limit=25`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '지능형 탐색 실패');
+    renderDatabaseSearchResults(payload.results || [], query, payload.parsedQuery);
+    fetchStatus.textContent = `정밀 분류 + SQLite 근거 탐색 완료 · ${payload.results?.length || 0}건`;
+  } catch (error) {
+    fetchStatus.textContent = error instanceof Error ? error.message : '지능형 탐색 실패';
+  } finally {
+    searchDatabase.disabled = false;
+  }
 }
 
 async function loadStatus() {
   try {
-    const response = await fetch('/api/outlook/config');
+    const response = await apiFetch('/api/outlook/config');
     const status = await response.json();
-    connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
-    configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
+    const safetyLabel = status.safety?.mode === 'read-only' ? '읽기 전용' : status.safety?.mode || '정책 확인 필요';
+    connectionStatus.textContent = status.connected
+      ? `Outlook 연결 준비됨 (${status.authMode} · ${safetyLabel})`
+      : `Outlook 인증값 필요 · ${safetyLabel}`;
+    configStatus.textContent = status.connected ? `설정됨: ${status.authMode} · ${safetyLabel}` : `미설정 · ${safetyLabel}`;
     loginTenant.value = status.loginTenant || 'common';
     tenantId.value = status.tenantId || '';
     clientId.value = status.clientId || '';
     mailboxUser.value = status.mailboxUser || '';
     geminiModel.value = status.geminiModel || 'gemini-2.5-flash';
     // AI Provider settings
-    aiProvider.value = status.aiProvider || 'f-aios-v3';
+    aiProvider.value = status.aiProvider || 'rules';
+    aiDataPolicyAccepted.checked = aiProvider.value === 'gemini' && status.aiOptedIn === true;
+    syncExternalAiConsent();
     faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3201';
     lmstudioModel.value = status.lmstudioModel || 'qwen/qwen3.5-9b';
-    accessToken.placeholder = status.hasAccessToken ? '저장된 토큰 사용 중' : '';
-    clientSecret.placeholder = status.hasClientSecret ? '저장된 client secret 사용 중' : '';
-    geminiApiKey.placeholder = status.hasGeminiApiKey ? '저장된 Gemini API key 사용 중' : '';
+    accessToken.placeholder = status.hasAccessToken ? '현재 서버 메모리의 토큰 사용 중' : '';
+    clientSecret.placeholder = status.hasClientSecret ? '현재 서버 메모리의 Client Secret 사용 중' : '';
+    geminiApiKey.placeholder = status.hasGeminiApiKey ? '현재 서버 메모리의 Gemini API Key 사용 중' : '';
   } catch {
     connectionStatus.textContent = 'Outlook 상태 확인 실패';
     configStatus.textContent = '확인 실패';
@@ -549,71 +1107,127 @@ async function loadStatus() {
 
 async function saveConfig(event) {
   event.preventDefault();
-  configStatus.textContent = '저장 중';
-  const response = await fetch('/api/outlook/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      accessToken: accessToken.value,
-      tenantId: tenantId.value,
-      clientId: clientId.value,
-      clientSecret: clientSecret.value,
-      mailboxUser: mailboxUser.value,
-      loginTenant: loginTenant.value,
-      geminiApiKey: geminiApiKey.value,
-      geminiModel: geminiModel.value,
-      aiProvider: aiProvider.value,
-      faiosServerUrl: faiosServerUrl.value,
-      lmstudioModel: lmstudioModel.value,
-      persist: true
-    })
-  });
-  const status = await response.json();
-  if (!response.ok) {
-    configStatus.textContent = status.message || '저장 실패';
+  if (aiProvider.value === 'gemini' && !aiDataPolicyAccepted.checked) {
+    configStatus.textContent = 'Gemini로 메일 데이터를 전송하려면 외부 AI 데이터 정책에 먼저 동의하세요.';
+    aiDataPolicyAccepted.focus();
     return;
   }
-  connectionStatus.textContent = status.connected ? `Outlook 연결 준비됨 (${status.authMode})` : 'Outlook 인증값 필요';
-  configStatus.textContent = status.connected ? `설정됨: ${status.authMode}` : '미설정';
-  await loadOutlookMessages();
+  configStatus.textContent = '저장 중';
+  try {
+    const response = await apiFetch('/api/outlook/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessToken: accessToken.value,
+        tenantId: tenantId.value,
+        clientId: clientId.value,
+        clientSecret: clientSecret.value,
+        mailboxUser: mailboxUser.value,
+        loginTenant: loginTenant.value,
+        geminiApiKey: geminiApiKey.value,
+        geminiModel: geminiModel.value,
+        aiProvider: aiProvider.value,
+        aiDataPolicyAccepted: aiProvider.value === 'gemini' && aiDataPolicyAccepted.checked,
+        faiosServerUrl: faiosServerUrl.value,
+        lmstudioModel: lmstudioModel.value,
+        persist: true
+      })
+    });
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.message || '저장 실패');
+    const safetyLabel = status.safety?.mode === 'read-only' ? '읽기 전용' : status.safety?.mode || '정책 확인 필요';
+    connectionStatus.textContent = status.connected
+      ? `Outlook 연결 준비됨 (${status.authMode} · ${safetyLabel})`
+      : `Outlook 인증값 필요 · ${safetyLabel}`;
+    configStatus.textContent = status.connected ? `설정됨: ${status.authMode} · ${safetyLabel}` : `미설정 · ${safetyLabel}`;
+    accessToken.value = '';
+    clientSecret.value = '';
+    geminiApiKey.value = '';
+    aiDataPolicyAccepted.checked = status.aiProvider === 'gemini' && status.aiOptedIn === true;
+    syncExternalAiConsent();
+    await loadOutlookMessages();
+  } catch (error) {
+    configStatus.textContent = error instanceof Error ? error.message : '설정 저장 실패';
+  }
 }
 
-function startOutlookLogin() {
+async function startOutlookLogin() {
   const selectedClientId = clientId.value.trim();
   if (!selectedClientId) {
     configStatus.textContent = 'Client ID를 먼저 입력하세요.';
     clientId.focus();
     return;
   }
-  const params = new URLSearchParams({
-    clientId: selectedClientId,
-    tenantId: loginTenant.value,
-    mailboxUser: mailboxUser.value.trim()
-  });
-  window.open(`/api/outlook/oauth/start?${params}`, 'outlookLogin', 'width=720,height=760');
-  configStatus.textContent = 'Microsoft 로그인 창에서 권한을 승인하세요.';
+  const popup = window.open('', 'outlookLogin', 'width=720,height=760');
+  if (!popup) {
+    configStatus.textContent = '로그인 팝업이 차단되었습니다. 브라우저에서 팝업을 허용하세요.';
+    return;
+  }
+  try {
+    popup.document.title = 'Outlook 로그인 준비 중';
+    const response = await apiFetch('/api/outlook/oauth/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: selectedClientId,
+        tenantId: loginTenant.value,
+        mailboxUser: mailboxUser.value.trim()
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.authorizeUrl) throw new Error(payload.message || 'OAuth 시작 실패');
+    const authorize = new URL(payload.authorizeUrl);
+    if (authorize.protocol !== 'https:' || authorize.hostname !== 'login.microsoftonline.com') {
+      throw new Error('허용되지 않은 OAuth 주소가 반환되었습니다.');
+    }
+    popup.location.href = authorize.href;
+    configStatus.textContent = 'Microsoft 로그인 창에서 읽기 권한을 승인하세요.';
+  } catch (error) {
+    popup.close();
+    configStatus.textContent = error instanceof Error ? error.message : '로컬 보안 세션 생성 실패';
+  }
 }
 
 async function loadOutlookMessages() {
   loadOutlook.disabled = true;
-  fetchStatus.textContent = 'Outlook 신규 메일을 확인하는 중입니다. 기존 메일은 로컬 캐시에 유지합니다.';
+  fetchStatus.textContent = 'Outlook Delta 동기화 후 SQLite 메일을 분석하는 중입니다.';
   try {
-    const response = await fetch(`/api/outlook/analyze?top=${encodeURIComponent(mailLimit.value)}`);
+    const response = await apiFetch(`/api/outlook/analyze?top=${encodeURIComponent(mailLimit.value)}`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.message || 'Outlook fetch failed');
     const sync = payload.sync;
     const syncLabel = sync
-      ? `${sync.mode === 'incremental' ? '신규 동기화' : '초기 동기화'} · 신규 ${sync.newCount}건 · 변경 ${sync.updatedCount}건 · 전체 ${sync.totalCached}건`
+      ? sync.mode === 'offline-cache'
+        ? `SQLite 메일 DB · 전체 ${sync.totalCached}건${sync.status === 'degraded' ? ' · Graph 동기화 실패' : ''}`
+        : `${sync.mode === 'full-reset' ? '전체 재동기화' : 'Delta 동기화'} · 폴더 ${sync.completedFolders || 0}/${sync.discoveredFolders || 0} · 수집 ${sync.fetchedFromGraph || 0} · 반영 ${sync.upserted || 0} · 삭제 ${sync.deleted || 0} · 전체 ${sync.totalCached || 0}건`
       : `${payload.messages.length}개 메일`;
     const ai = payload.result?.ai;
-    const aiLabel = ai?.enabled
-      ? `${ai.provider === 'f-aios-v3' ? 'F-AIOS-v3' : ai.provider === 'gemini' ? 'Gemini' : 'LM Studio'} AI 적용 (${ai.model}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
-      : '규칙 기반';
+    const providerLabel = ai?.provider === 'f-aios-v3'
+      ? 'F-AIOS-v3'
+      : ai?.provider === 'gemini'
+        ? 'Gemini'
+        : ai?.provider === 'lmstudio'
+          ? 'LM Studio'
+          : '규칙';
+    const aiLabel = ai?.status === 'failed'
+      ? `AI 실패 (${providerLabel} · ${ai.code || 'UNKNOWN'}) → 규칙 기반 임시 판단`
+      : ai?.enabled
+        ? `${providerLabel} AI 적용 (${ai.model}${ai.fallbackFrom ? ` · ${ai.fallbackFrom} 실패 후 폴백` : ''}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
+        : ai?.status === 'not-run'
+          ? 'AI 미실행 · 규칙 기반'
+          : '규칙 기반';
     fetchStatus.textContent = payload.connected
       ? `${syncLabel} 분석 완료 · ${aiLabel} · ${new Date(payload.analyzedAt).toLocaleString('ko-KR')}`
-      : `Outlook 인증값이 없어 데모 메일로 분석했습니다. ${payload.message}`;
-    connectionStatus.textContent = payload.connected ? `Outlook 연결됨 (${payload.mode})` : 'Outlook 인증값 필요';
+      : `${syncLabel} 분석 완료 · ${aiLabel} · ${payload.message}`;
+    connectionStatus.textContent = payload.connected
+      ? `Outlook 연결됨 (${payload.mode} · 읽기 전용)`
+      : payload.mode === 'offline-cache'
+        ? 'Outlook 미연결 · SQLite 메일 DB 읽기 전용'
+        : 'Outlook 인증값 필요 · 읽기 전용';
     render(payload.result, payload.messages);
+    if (payload.precision?.summary) renderPrecisionOverview(payload.precision.summary);
+    await loadPrecisionProjects();
+    await loadMemoryStatus();
   } catch (error) {
     fetchStatus.textContent = error instanceof Error ? error.message : 'Outlook을 가져오지 못했습니다.';
     connectionStatus.textContent = 'Outlook 연결 실패';
@@ -622,11 +1236,16 @@ async function loadOutlookMessages() {
   }
 }
 
-loadSample.addEventListener('click', () => {
-  fetchStatus.textContent = '데모 데이터 버튼은 비활성화되었습니다. 실제 Outlook 연동 후 사용하세요.';
-});
-
 loadOutlook.addEventListener('click', loadOutlookMessages);
+searchDatabase.addEventListener('click', searchPersistentMemory);
+refreshMemory.addEventListener('click', loadMemoryStatus);
+syncPersistentMail.addEventListener('click', synchronizePersistentMemory);
+backupPersistentMail.addEventListener('click', createPersistentMemoryBackup);
+reclassifyPrecision.addEventListener('click', async () => {
+  await loadPrecisionOverview({ force: true });
+  if (currentMessages.length) await loadOutlookMessages();
+});
+projectForm.addEventListener('submit', createPrecisionProject);
 configForm.addEventListener('submit', saveConfig);
 loginOutlook.addEventListener('click', startOutlookLogin);
 clearConfig.addEventListener('click', async () => {
@@ -638,13 +1257,20 @@ clearConfig.addEventListener('click', async () => {
   loginTenant.value = 'common';
   geminiApiKey.value = '';
   geminiModel.value = 'gemini-2.5-flash';
-  aiProvider.value = 'f-aios-v3';
+  aiProvider.value = 'rules';
+  aiDataPolicyAccepted.checked = false;
+  syncExternalAiConsent();
   faiosServerUrl.value = 'http://localhost:3201';
   lmstudioModel.value = 'qwen/qwen3.5-9b';
-  await fetch('/api/outlook/config', { method: 'DELETE' });
-  configStatus.textContent = '저장값 초기화';
-  connectionStatus.textContent = 'Outlook 인증값 필요';
+  try {
+    await apiFetch('/api/outlook/config', { method: 'DELETE' });
+    configStatus.textContent = '저장값 초기화';
+    connectionStatus.textContent = 'Outlook 인증값 필요 · 읽기 전용';
+  } catch (error) {
+    configStatus.textContent = error instanceof Error ? error.message : '설정 초기화 실패';
+  }
 });
+aiProvider.addEventListener('change', syncExternalAiConsent);
 document.querySelectorAll('.metric').forEach((button) => {
   button.addEventListener('click', () => {
     activeFilter = activeFilter === button.dataset.filter ? 'all' : button.dataset.filter;
@@ -656,22 +1282,26 @@ mailSearch.addEventListener('input', () => {
   renderFilteredView();
 });
 
+syncExternalAiConsent();
 loadStatus();
+loadMemoryStatus();
+loadPrecisionOverview();
+loadSmartViews();
 
 // --- Column Resize (Drag & Drop) ---
 (function initColumnResize() {
   const shell = document.getElementById('mailShell');
   if (!shell) return;
   const resizers = shell.querySelectorAll('.col-resizer');
-  const columns = () => [...shell.children].filter(el => 
-    el.classList.contains('mail-list-panel') || 
-    el.classList.contains('detail-panel') || 
+  const columns = () => [...shell.children].filter(el =>
+    el.classList.contains('mail-list-panel') ||
+    el.classList.contains('detail-panel') ||
     el.classList.contains('action-column')
   );
-  
+
   resizers.forEach((resizer) => {
     let startX, startWidths, colIndex;
-    
+
     resizer.addEventListener('mousedown', (e) => {
       e.preventDefault();
       colIndex = parseInt(resizer.dataset.col, 10);
@@ -680,7 +1310,7 @@ loadStatus();
       resizer.classList.add('active');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
-      
+
       const onMouseMove = (e) => {
         const dx = e.clientX - startX;
         const cols = columns();
@@ -689,12 +1319,12 @@ loadStatus();
           const newWidth2 = Math.max(200, startWidths[colIndex + 1] - dx);
           cols[colIndex].style.flex = `0 0 ${newWidth1}px`;
           cols[colIndex + 1].style.flex = `0 0 ${newWidth2}px`;
-          shell.style.gridTemplateColumns = [...cols].map(c => 
+          shell.style.gridTemplateColumns = [...cols].map(c =>
             c.style.flex || `0 0 ${c.getBoundingClientRect().width}px`
           ).join(' ');
         }
       };
-      
+
       const onMouseUp = () => {
         resizer.classList.remove('active');
         document.body.style.cursor = '';
@@ -702,11 +1332,11 @@ loadStatus();
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
       };
-      
+
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
     });
-    
+
     resizer.addEventListener('dblclick', () => {
       const cols = columns();
       shell.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
