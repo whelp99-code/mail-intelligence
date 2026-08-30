@@ -4,6 +4,7 @@
 - 프로젝트 경로: `/home/jm/orca/projects/mail-intelligence`
 - 기준 브랜치: `main`
 - 현재 제품 버전: `1.2.0`
+- 구현 릴리스 Commit: `7946344`
 - Worker name: `mailintelligence`
 - 운영 서버: Ubuntu `jm-acloud`
 - 내부 서비스: `127.0.0.1:3010`
