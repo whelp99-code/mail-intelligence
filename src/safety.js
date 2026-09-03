@@ -65,7 +65,7 @@ export function getSafetyPolicy(env = process.env) {
   return Object.freeze({
     mode: Object.values(capabilities).some(Boolean) ? 'approved-execution-test' : 'read-only',
     version: 'v1.2.0',
-    policyVersion: 'read-only-v1.2.0',
+    policyVersion: 'read-only-v1.2.2',
     approved,
     capabilities: Object.freeze(capabilities)
   });

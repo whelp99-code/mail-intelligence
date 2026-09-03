@@ -33,7 +33,7 @@ async function waitForHealth(baseUrl, child, logs) {
   throw new Error(`server did not become healthy: ${logs.join('')}`);
 }
 
-test('v1.2.0 server security boundary', async (t) => {
+test('v1.2.2 server security boundary', async (t) => {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const dataDir = await mkdtemp(join(tmpdir(), 'mail-intelligence-test-'));
@@ -69,18 +69,18 @@ test('v1.2.0 server security boundary', async (t) => {
 
   const health = await waitForHealth(baseUrl, child, logs);
   assert.equal(health.ok, true);
-  assert.equal(health.version, '1.2.0');
+  assert.equal(health.version, '1.2.2');
   assert.equal(health.storage.authoritativeStore, 'sqlite');
   assert.equal(health.storage.schemaVersion, 4);
   assert.equal(health.externalActionsAllowed, false);
 
-  await t.test('root UI serves the read-only v1.2.0 precision-intelligence application', async () => {
+  await t.test('root UI serves the read-only v1.2.2 operational-classification application', async () => {
     const response = await fetch(`${baseUrl}/`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type') || '', /text\/html/);
     const html = await response.text();
-    assert.match(html, /v1\.2\.0 · Precision Intelligence/);
-    assert.match(html, /메일 발송.*외부 시스템 전송은 계속 차단/s);
+    assert.match(html, /v1\.2\.2 · Operational Classification/);
+    assert.match(html, /초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단/);
     assert.equal(html.includes('id="loadSample"'), false);
     assert.equal(html.includes('id="sendMail"'), false);
   });
@@ -134,7 +134,7 @@ test('v1.2.0 server security boundary', async (t) => {
     assert.equal(body.secretsPersisted, false);
   });
 
-  await t.test('OAuth authorization requests only read mail in v1.2.0', async () => {
+  await t.test('OAuth authorization requests only read mail in v1.2.2', async () => {
     const response = await fetch(`${baseUrl}/api/outlook/oauth/start?clientId=test-client&tenantId=common`, {
       headers: { Cookie: cookie },
       redirect: 'manual',
@@ -233,10 +233,10 @@ test('v1.2.0 server security boundary', async (t) => {
     const response = await fetch(`${baseUrl}/api/outlook/config`, {
       method: 'POST',
       headers: mutationHeaders,
-      body: JSON.stringify({ aiProvider: 'gemini', persist: false }),
+      body: JSON.stringify({ aiProvider: 'openai-codex-oauth', persist: false }),
     });
     assert.equal(response.status, 400);
-    assert.match((await response.json()).message, /external AI provider|disabled/i);
+    assert.match((await response.json()).message, /data policy|explicitly accepted/i);
   });
 
   await t.test('external AI provider can be selected only after explicit data-policy opt-in', async () => {
@@ -244,14 +244,14 @@ test('v1.2.0 server security boundary', async (t) => {
       method: 'POST',
       headers: mutationHeaders,
       body: JSON.stringify({
-        aiProvider: 'gemini',
+        aiProvider: 'openai-codex-oauth',
         aiDataPolicyAccepted: true,
         persist: false,
       }),
     });
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.aiProvider, 'gemini');
+    assert.equal(body.aiProvider, 'openai-codex-oauth');
     assert.equal(body.aiOptedIn, true);
 
     const reset = await fetch(`${baseUrl}/api/outlook/config`, {
@@ -262,14 +262,16 @@ test('v1.2.0 server security boundary', async (t) => {
     assert.equal(reset.status, 200);
   });
 
-  await t.test('local AI URL cannot be changed to a remote SSRF target', async () => {
+  await t.test('legacy local AI URL fields are rejected instead of silently accepted', async () => {
     const response = await fetch(`${baseUrl}/api/outlook/config`, {
       method: 'POST',
       headers: mutationHeaders,
       body: JSON.stringify({ faiosServerUrl: 'http://example.com:3201', persist: false }),
     });
     assert.equal(response.status, 400);
-    assert.match((await response.json()).message, /localhost/i);
+    const body = await response.json();
+    assert.equal(body.code, 'LEGACY_AI_PROVIDER_UNSUPPORTED');
+    assert.match(body.message, /official OAuth CLI provider/i);
   });
 
   for (const [name, path, body] of [

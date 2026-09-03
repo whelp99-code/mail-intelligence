@@ -10,6 +10,8 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { deriveOperationalClassification } from '../domain/operational-classification.js';
+
 const STATUS_VALUES = new Set(['urgent', 'active', 'waiting', 'done', 'reference']);
 const FEEDBACK_VALUES = new Set(['urgent', 'active', 'waiting', 'done', 'reference']);
 const PRECISION_WORK_STATES = new Set([
@@ -93,8 +95,28 @@ function digest(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+const SENT_FOLDER_PATTERN = /^(?:sent|sentitems|sent items|sent mail|보낸 편지함|보낸메일함|보낸 메일함)$/i;
+const DELETED_FOLDER_PATTERN = /^(?:deleteditems|deleted items|trash|지운 편지함|삭제된 항목|휴지통)$/i;
+const DRAFT_FOLDER_PATTERN = /^(?:drafts|draft|임시 보관함|임시보관함)$/i;
+const JUNK_FOLDER_PATTERN = /^(?:junkemail|junk email|junk|spam|정크 메일|스팸)$/i;
+
+function folderFlags(row = {}) {
+  const folderName = String(row.folder_display_name || row.folder_well_known_name || '').trim();
+  const wellKnown = String(row.folder_well_known_name || '').trim();
+  const comparable = wellKnown || folderName;
+  return {
+    folderName,
+    folderWellKnownName: wellKnown,
+    isOutgoing: SENT_FOLDER_PATTERN.test(comparable) || SENT_FOLDER_PATTERN.test(folderName),
+    isDeletedFolder: DELETED_FOLDER_PATTERN.test(comparable) || DELETED_FOLDER_PATTERN.test(folderName),
+    isDraftFolder: DRAFT_FOLDER_PATTERN.test(comparable) || DRAFT_FOLDER_PATTERN.test(folderName),
+    isJunkFolder: JUNK_FOLDER_PATTERN.test(comparable) || JUNK_FOLDER_PATTERN.test(folderName),
+  };
+}
+
 function rowToMessage(row, recipients = []) {
   const grouped = { to: [], cc: [], bcc: [], replyTo: [] };
+  const folders = folderFlags(row);
   for (const recipient of recipients) {
     grouped[recipient.recipient_type]?.push({
       emailAddress: {
@@ -109,7 +131,7 @@ function rowToMessage(row, recipients = []) {
     changeKey: row.change_key || '',
     conversationId: row.conversation_id || '',
     internetMessageId: row.internet_message_id || '',
-    subject: row.subject || '(제목 없음)',
+    subject: row.subject || '',
     from: row.sender_email || 'unknown',
     fromName: row.sender_name || '',
     toRecipients: grouped.to,
@@ -131,8 +153,33 @@ function rowToMessage(row, recipients = []) {
     body: row.body_text || row.body_preview || '',
     webLink: row.web_link || '',
     parentFolderId: row.parent_folder_graph_id || '',
+    folderName: folders.folderName,
+    folderWellKnownName: folders.folderWellKnownName,
+    isOutgoing: folders.isOutgoing,
+    isDeletedFolder: folders.isDeletedFolder,
+    isDraftFolder: folders.isDraftFolder,
+    isJunkFolder: folders.isJunkFolder,
     deletedAt: row.deleted_at || null,
     removedReason: row.removed_reason || '',
+  };
+}
+
+function attachmentRow(row) {
+  if (!row) return null;
+  return {
+    databaseId: number(row.id),
+    messageDatabaseId: number(row.message_id),
+    graphAttachmentId: row.graph_id || '',
+    attachmentType: row.attachment_type || '',
+    name: row.name || '',
+    contentType: row.content_type || '',
+    size: number(row.size_bytes),
+    isInline: Boolean(row.is_inline),
+    contentId: row.content_id || '',
+    lastModifiedAt: row.last_modified_at || null,
+    source: parseJson(row.source_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -167,7 +214,7 @@ function projectRow(row) {
 
 function precisionRow(row) {
   if (!row) return null;
-  return {
+  const classification = {
     messageId: row.graph_id || '',
     databaseMessageId: number(row.message_id),
     workState: row.work_state,
@@ -196,6 +243,8 @@ function precisionRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+  classification.operational = deriveOperationalClassification(classification);
+  return classification;
 }
 
 export class SQLiteMailStore {
@@ -230,6 +279,7 @@ export class SQLiteMailStore {
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
+    this.db.exec('PRAGMA wal_autocheckpoint = 64;');
     this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec('PRAGMA temp_store = MEMORY;');
   }
@@ -735,9 +785,11 @@ export class SQLiteMailStore {
 
   getRecentMessages(mailboxId, { limit = 25, includeDeleted = false } = {}) {
     const rows = this.db.prepare(`
-      SELECT * FROM messages
-      WHERE mailbox_id = ? AND (? = 1 OR deleted_at IS NULL)
-      ORDER BY COALESCE(received_at, sent_at, first_seen_at) DESC, id DESC
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ? AND (? = 1 OR m.deleted_at IS NULL)
+      ORDER BY COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC, m.id DESC
       LIMIT ?
     `).all(mailboxId, includeDeleted ? 1 : 0, boundedLimit(limit));
     if (!rows.length) return [];
@@ -762,12 +814,33 @@ export class SQLiteMailStore {
     return this.getRecentMessages(mailboxId, { limit: 500, includeDeleted });
   }
 
+  getMailboxSenderAliases(mailboxId) {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT m.sender_email, m.is_draft,
+             f.display_name AS folder_display_name,
+             f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ?
+        AND m.deleted_at IS NULL
+        AND TRIM(m.sender_email) <> ''
+    `).all(mailboxId);
+    const aliases = new Set();
+    for (const row of rows) {
+      const flags = folderFlags(row);
+      if (flags.isOutgoing || Boolean(row.is_draft)) aliases.add(normalizeEmail(row.sender_email));
+    }
+    return [...aliases].filter(Boolean).sort();
+  }
+
   getMessagePage(mailboxId, { limit = 250, offset = 0, includeDeleted = false } = {}) {
     const safeOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : 0;
     const rows = this.db.prepare(`
-      SELECT * FROM messages
-      WHERE mailbox_id = ? AND (? = 1 OR deleted_at IS NULL)
-      ORDER BY id ASC
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ? AND (? = 1 OR m.deleted_at IS NULL)
+      ORDER BY m.id ASC
       LIMIT ? OFFSET ?
     `).all(mailboxId, includeDeleted ? 1 : 0, boundedLimit(limit, 250, 1000), safeOffset);
     if (!rows.length) return [];
@@ -779,7 +852,9 @@ export class SQLiteMailStore {
 
   getMessagesNeedingPrecision(mailboxId, { limit = 250 } = {}) {
     const rows = this.db.prepare(`
-      SELECT m.* FROM messages m
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
       LEFT JOIN precision_classifications pc ON pc.message_id = m.id
       WHERE m.mailbox_id = ?
         AND m.deleted_at IS NULL
@@ -800,7 +875,12 @@ export class SQLiteMailStore {
   }
 
   getMessage(mailboxId, graphId) {
-    const row = this.getMessageRecord(mailboxId, graphId);
+    const row = this.db.prepare(`
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ? AND m.graph_id = ?
+    `).get(mailboxId, graphId);
     if (!row) return null;
     const recipients = this.db.prepare(`
       SELECT * FROM message_recipients
@@ -810,7 +890,62 @@ export class SQLiteMailStore {
   }
 
   getAttachments(messageId) {
-    return this.db.prepare('SELECT * FROM attachments WHERE message_id = ? ORDER BY id').all(messageId);
+    return this.db.prepare('SELECT * FROM attachments WHERE message_id = ? ORDER BY id')
+      .all(messageId)
+      .map(attachmentRow);
+  }
+
+  getAttachmentsForMessage(mailboxId, graphId) {
+    const message = this.getMessageRecord(mailboxId, graphId);
+    if (!message) return [];
+    return this.getAttachments(message.id);
+  }
+
+  getThreadMessages(mailboxId, graphId, { limit = 100 } = {}) {
+    const anchor = this.getMessageRecord(mailboxId, graphId);
+    if (!anchor) return [];
+    const bounded = boundedLimit(limit, 100, 500);
+    const rows = anchor.conversation_id
+      ? this.db.prepare(`
+        SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+        FROM messages m
+        LEFT JOIN mail_folders f ON f.id = m.folder_id
+        WHERE m.mailbox_id = ? AND m.conversation_id = ?
+        ORDER BY COALESCE(m.received_at, m.sent_at, m.updated_at) ASC, m.id ASC
+        LIMIT ?
+      `).all(mailboxId, anchor.conversation_id, bounded)
+      : this.db.prepare(`
+        SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+        FROM messages m
+        LEFT JOIN mail_folders f ON f.id = m.folder_id
+        WHERE m.mailbox_id = ? AND m.thread_id = ?
+        ORDER BY COALESCE(m.received_at, m.sent_at, m.updated_at) ASC, m.id ASC
+        LIMIT ?
+      `).all(mailboxId, anchor.thread_id, bounded);
+    if (!rows.length) return [];
+    const recipientQuery = this.db.prepare(`
+      SELECT * FROM message_recipients WHERE message_id = ? ORDER BY recipient_type, ordinal, id
+    `);
+    return rows.map((row) => rowToMessage(row, recipientQuery.all(row.id)));
+  }
+
+  getMetadata(key, fallback = null) {
+    const row = this.db.prepare('SELECT value FROM app_metadata WHERE key = ?').get(String(key || ''));
+    if (!row) return fallback;
+    return parseJson(row.value, row.value);
+  }
+
+  setMetadata(key, value) {
+    const cleanKey = String(key || '').trim();
+    if (!cleanKey) throw new Error('metadata key is required.');
+    const serialized = typeof value === 'string' ? value : jsonText(value, null);
+    const updatedAt = this.now();
+    this.db.prepare(`
+      INSERT INTO app_metadata(key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(cleanKey, serialized, updatedAt);
+    return { key: cleanKey, value, updatedAt };
   }
 
   listProjects(mailboxId, { includeArchived = false } = {}) {
@@ -1139,14 +1274,23 @@ export class SQLiteMailStore {
     const residualTokens = String(parsedQuery?.residualText || '')
       .normalize('NFKC')
       .match(/[\p{L}\p{N}_-]+/gu) || [];
-    const clauses = ['m.mailbox_id = ?', 'm.deleted_at IS NULL'];
+    const clauses = [
+      'm.mailbox_id = ?',
+      'm.deleted_at IS NULL',
+      `NOT (
+        LOWER(COALESCE(f.well_known_name, '')) IN ('deleteditems', 'junkemail')
+        OR LOWER(COALESCE(f.display_name, '')) IN ('지운 편지함', '삭제된 항목', '휴지통', '정크 메일', '스팸')
+      )`,
+    ];
     const params = [mailboxId];
     const joins = [];
     let rankSelect = '0 AS rank';
+    let semanticRank = '';
     if (residualTokens.length) {
+      const operator = parsedQuery?.residualOperator === 'OR' ? ' OR ' : ' AND ';
       const ftsQuery = residualTokens.slice(0, 12)
-        .map((token) => `"${token.replace(/"/g, '""')}"`)
-        .join(' AND ');
+        .map((token) => `"${token.replace(/"/g, '""')}"*`)
+        .join(operator);
       joins.push('JOIN message_fts ON message_fts.rowid = m.id');
       clauses.push('message_fts MATCH ?');
       params.push(ftsQuery);
@@ -1162,6 +1306,154 @@ export class SQLiteMailStore {
     appendIn('pc.next_actor', filters.nextActors);
     appendIn('pc.priority', filters.priorities);
     appendIn('pc.project_resolution', filters.projectResolution);
+
+    const subjectText = 'LOWER(COALESCE(m.subject, \'\'))';
+    const bodyText = 'LOWER(COALESCE(NULLIF(m.body_text, \'\'), m.body_preview, \'\'))';
+    const previewText = 'LOWER(COALESCE(m.body_preview, \'\'))';
+    const stateEvidenceText = 'LOWER(COALESCE(json_extract(pc.evidence_json, \'$.workState.exactText\'), \'\'))';
+    const searchableCurrentText = `(${subjectText} || ' ' || ${bodyText} || ' ' || ${stateEvidenceText})`;
+    const strictCurrentText = `(${subjectText} || ' ' || ${previewText} || ' ' || ${stateEvidenceText})`;
+    if (filters.semanticIntent === 'completed_support_ticket') {
+      clauses.push('pc.work_state = \'completed\'');
+      clauses.push(`(${searchableCurrentText} LIKE '%patch%' OR ${searchableCurrentText} LIKE '%패치%' OR ${searchableCurrentText} LIKE '%kernel%')`);
+      clauses.push(`(${searchableCurrentText} LIKE '%ticket%' OR ${searchableCurrentText} LIKE '%티켓%' OR ${searchableCurrentText} LIKE '%case%')`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%patch%' AND (${subjectText} LIKE '%ticket%' OR ${subjectText} LIKE '%티켓%') THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'hci_license_incident') {
+      clauses.push(`${searchableCurrentText} LIKE '%hci%'`);
+      clauses.push(`(${searchableCurrentText} LIKE '%license%' OR ${searchableCurrentText} LIKE '%라이선스%' OR ${searchableCurrentText} LIKE '%라이센스%')`);
+      clauses.push(`(
+        ${searchableCurrentText} LIKE '%장애%'
+        OR ${searchableCurrentText} LIKE '%오류%'
+        OR ${searchableCurrentText} LIKE '%중단%'
+        OR ${searchableCurrentText} LIKE '%동작하지%'
+        OR ${searchableCurrentText} LIKE '%issue%'
+        OR ${searchableCurrentText} LIKE '%problem%'
+        OR ${searchableCurrentText} LIKE '%incident%'
+        OR ${searchableCurrentText} LIKE '%outage%'
+        OR ${searchableCurrentText} LIKE '%failed%'
+        OR ${searchableCurrentText} LIKE '%expired%'
+      )`);
+      semanticRank = `CASE WHEN ${stateEvidenceText} LIKE '%hci%' OR ${subjectText} LIKE '%hci%' THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'completed_sangfor_support') {
+      clauses.push('pc.work_state = \'completed\'');
+      clauses.push(`${strictCurrentText} LIKE '%sangfor%'`);
+      clauses.push(`(
+        ${strictCurrentText} LIKE '%support%'
+        OR ${strictCurrentText} LIKE '%ticket%'
+        OR ${strictCurrentText} LIKE '%case%'
+        OR ${strictCurrentText} LIKE '%지원%'
+        OR ${strictCurrentText} LIKE '%문의%'
+      )`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%sangfor%' AND (${subjectText} LIKE '%support%' OR ${subjectText} LIKE '%ticket%' OR ${subjectText} LIKE '%지원%' OR ${subjectText} LIKE '%문의%') THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'waiting_license_reply') {
+      clauses.push('pc.work_state = \'waiting\'');
+      clauses.push('pc.next_actor = \'external_party\'');
+      clauses.push(`(
+        ${strictCurrentText} LIKE '%license%'
+        OR ${strictCurrentText} LIKE '%licence%'
+        OR ${strictCurrentText} LIKE '%라이선스%'
+        OR ${strictCurrentText} LIKE '%라이센스%'
+      )`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%license%' OR ${subjectText} LIKE '%라이선스%' OR ${subjectText} LIKE '%라이센스%' THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'tax_invoice_review') {
+      clauses.push('pc.work_state = \'review_required\'');
+      clauses.push(`(
+        ${subjectText} LIKE '%세금계산서%'
+        OR ${subjectText} LIKE '%tax invoice%'
+        OR ${stateEvidenceText} LIKE '%세금계산서%'
+        OR ${stateEvidenceText} LIKE '%tax invoice%'
+      )`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%세금계산서%' OR ${subjectText} LIKE '%tax invoice%' THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'service_deactivation' || filters.semanticIntent === 'confluence_deactivation') {
+      clauses.push('pc.work_state = \'action_required\'');
+      clauses.push('pc.next_actor = \'me\'');
+      if (filters.semanticIntent === 'confluence_deactivation') {
+        clauses.push(`${strictCurrentText} LIKE '%confluence%'`);
+      }
+      clauses.push(`(
+        ${strictCurrentText} LIKE '%confluence%'
+        OR ${strictCurrentText} LIKE '%subscription%'
+        OR ${strictCurrentText} LIKE '%workspace%'
+        OR ${strictCurrentText} LIKE '%account%'
+        OR ${strictCurrentText} LIKE '%service%'
+        OR ${strictCurrentText} LIKE '%서비스%'
+        OR ${strictCurrentText} LIKE '%계정%'
+        OR ${strictCurrentText} LIKE '%구독%'
+      )`);
+      clauses.push(`(
+        ${strictCurrentText} LIKE '%deactivat%'
+        OR ${strictCurrentText} LIKE '%inactive%'
+        OR ${strictCurrentText} LIKE '%suspend%'
+        OR ${strictCurrentText} LIKE '%비활성화%'
+        OR ${strictCurrentText} LIKE '%해지%'
+        OR ${strictCurrentText} LIKE '%중지%'
+      )`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%confluence%' THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'shared_access_verification') {
+      clauses.push('pc.work_state = \'action_required\'');
+      clauses.push('pc.next_actor = \'me\'');
+      clauses.push(`(
+        ${strictCurrentText} LIKE '%shared folder%'
+        OR ${strictCurrentText} LIKE '%shared file%'
+        OR ${strictCurrentText} LIKE '%공유 폴더%'
+        OR ${strictCurrentText} LIKE '%공유 파일%'
+      )`);
+      clauses.push(`(
+        ${strictCurrentText} LIKE '%verify%'
+        OR ${strictCurrentText} LIKE '%verification%'
+        OR ${strictCurrentText} LIKE '%인증%'
+      )`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%shared%' OR ${subjectText} LIKE '%공유%' THEN 0 ELSE 1 END,`;
+    } else if (filters.semanticIntent === 'sangfor_iag') {
+      clauses.push(`(
+        (${subjectText} LIKE '%sangfor%' AND ${subjectText} LIKE '%iag%')
+        OR (${previewText} LIKE '%sangfor%' AND ${previewText} LIKE '%iag%')
+        OR (${stateEvidenceText} LIKE '%sangfor%' AND ${stateEvidenceText} LIKE '%iag%')
+      )`);
+      semanticRank = `CASE WHEN ${subjectText} LIKE '%sangfor%' AND ${subjectText} LIKE '%iag%' THEN 0 ELSE 1 END,`;
+    }
+
+    const hasDueRange = Boolean(
+      filters.dueRange
+      && Object.keys(filters.dueRange).length
+    );
+    const highSignalSearch = (filters.signals || []).some((signal) => [
+      'quotation_contract',
+      'incident_security',
+      'approval',
+      'schedule',
+    ].includes(signal));
+    const actionableSearch = (filters.workStates || []).some((state) => [
+      'action_required',
+      'decision_required',
+      'waiting',
+    ].includes(state));
+    if (highSignalSearch || actionableSearch || hasDueRange) {
+      clauses.push('(m.is_promotional = 0 OR pc.review_status = \'corrected\')');
+    }
+    let incidentRank = '';
+    if (filters.lexicalIncidentSearch) {
+      clauses.push('m.is_promotional = 0');
+      clauses.push('LOWER(COALESCE(f.display_name, \'\')) NOT LIKE \'%세금계산서%\'');
+      const signalMatch = 'EXISTS (SELECT 1 FROM json_each(pc.signals_json) WHERE json_each.value = \'incident_security\')';
+      const subject = 'LOWER(COALESCE(m.subject, \'\'))';
+      const evidence = 'LOWER(COALESCE(json_extract(pc.evidence_json, \'$.workState.exactText\'), \'\'))';
+      const kind = String(filters.lexicalIncidentKind || '').toLowerCase();
+      if (kind === '보안' || kind === 'security') {
+        const strongSubject = `(${subject} LIKE '%보안%' OR ${subject} LIKE '%security%' OR ${subject} LIKE '%침해%' OR ${subject} LIKE '%해킹%' OR ${subject} LIKE '%랜섬웨어%' OR ${subject} LIKE '%취약점%' OR ${subject} LIKE '%breach%' OR ${subject} LIKE '%malware%')`;
+        const strongEvidence = `(${evidence} LIKE '%보안%' OR ${evidence} LIKE '%security%' OR ${evidence} LIKE '%침해%' OR ${evidence} LIKE '%해킹%' OR ${evidence} LIKE '%랜섬웨어%' OR ${evidence} LIKE '%취약점%' OR ${evidence} LIKE '%breach%' OR ${evidence} LIKE '%malware%')`;
+        clauses.push(`(${strongSubject} OR ${signalMatch} OR ${strongEvidence})`);
+        incidentRank = `CASE WHEN ${strongSubject} THEN 0 WHEN ${signalMatch} THEN 1 WHEN ${strongEvidence} THEN 2 ELSE 3 END,`;
+      } else {
+        const strongSubject = `(${subject} LIKE '%장애%' OR ${subject} LIKE '%오류%' OR ${subject} LIKE '%중단%' OR ${subject} LIKE '%접속불가%' OR ${subject} LIKE '%outage%' OR ${subject} LIKE '%incident%')`;
+        const strongEvidence = `(${evidence} LIKE '%장애%' OR ${evidence} LIKE '%오류%' OR ${evidence} LIKE '%중단%' OR ${evidence} LIKE '%접속불가%' OR ${evidence} LIKE '%outage%' OR ${evidence} LIKE '%incident%')`;
+        clauses.push(`(${strongSubject} OR ${signalMatch} OR ${strongEvidence})`);
+        incidentRank = `CASE WHEN ${strongSubject} THEN 0 WHEN ${signalMatch} THEN 1 WHEN ${strongEvidence} THEN 2 ELSE 3 END,`;
+      }
+    }
+    if (hasDueRange) {
+      clauses.push('pc.work_state IN (\'action_required\', \'waiting\', \'decision_required\', \'review_required\')');
+    }
 
     for (const signal of filters.signals || []) {
       clauses.push('EXISTS (SELECT 1 FROM json_each(pc.signals_json) WHERE json_each.value = ?)');
@@ -1191,19 +1483,46 @@ export class SQLiteMailStore {
       params.push(pattern, pattern, pattern);
     }
 
+    const subjectTerms = residualTokens.slice(0, 6).map((token) => `LOWER(m.subject) LIKE ${sqlLiteral(`%${token.toLowerCase()}%`)}`);
+    const subjectRank = subjectTerms.length
+      ? `CASE WHEN ${subjectTerms.join(' AND ')} THEN 0 WHEN ${subjectTerms.join(' OR ')} THEN 1 ELSE 2 END,`
+      : '';
+    const textRank = residualTokens.length ? 'rank ASC,' : '';
+    const stateRank = residualTokens.length
+      ? `CASE pc.work_state
+          WHEN 'action_required' THEN 1
+          WHEN 'waiting' THEN 2
+          WHEN 'decision_required' THEN 3
+          WHEN 'completed' THEN 4
+          WHEN 'reference' THEN 5
+          ELSE 6
+        END,`
+      : `CASE pc.work_state
+          WHEN 'review_required' THEN 1
+          WHEN 'decision_required' THEN 2
+          WHEN 'action_required' THEN 3
+          WHEN 'waiting' THEN 4
+          ELSE 5
+        END,`;
+
     const rows = this.db.prepare(`
-      SELECT m.*, ${rankSelect}
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name, ${rankSelect}
       FROM messages m
       JOIN precision_classifications pc ON pc.message_id = m.id
       LEFT JOIN projects p ON p.id = pc.primary_project_id
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
       ${joins.join('\n')}
       WHERE ${clauses.join(' AND ')}
       ORDER BY
+        CASE WHEN m.is_promotional = 1 AND pc.review_status <> 'corrected' THEN 1 ELSE 0 END ASC,
+        ${semanticRank}
+        ${incidentRank}
+        ${subjectRank}
+        ${textRank}
+        ${stateRank}
         CASE pc.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-        CASE pc.work_state WHEN 'review_required' THEN 1 WHEN 'decision_required' THEN 2 WHEN 'action_required' THEN 3 WHEN 'waiting' THEN 4 ELSE 5 END,
         CASE WHEN pc.due_at IS NULL THEN 1 ELSE 0 END,
         pc.due_at ASC,
-        rank ASC,
         COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC
       LIMIT ?
     `).all(...params, boundedLimit(limit, 25, 100));
@@ -1385,9 +1704,11 @@ export class SQLiteMailStore {
     if (!tokens.length) return [];
     const ftsQuery = tokens.slice(0, 12).map((token) => `"${token.replace(/"/g, '""')}"`).join(' AND ');
     const rows = this.db.prepare(`
-      SELECT m.*, bm25(message_fts) AS rank
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name,
+             bm25(message_fts) AS rank
       FROM message_fts
       JOIN messages m ON m.id = message_fts.rowid
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
       WHERE message_fts MATCH ? AND m.mailbox_id = ? AND m.deleted_at IS NULL
       ORDER BY rank, COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC
       LIMIT ?
@@ -1434,10 +1755,38 @@ export class SQLiteMailStore {
   }
 
   audit(eventType, { entityType = '', entityId = '', payload = {} } = {}) {
-    this.db.prepare(`
+    const createdAt = this.now();
+    const result = this.db.prepare(`
       INSERT INTO audit_events(event_type, entity_type, entity_id, payload_json, created_at)
       VALUES (?, ?, ?, ?, ?)
-    `).run(eventType, entityType, String(entityId), jsonText(payload, {}), this.now());
+    `).run(eventType, entityType, String(entityId), jsonText(payload, {}), createdAt);
+    return {
+      id: number(result.lastInsertRowid),
+      eventType,
+      entityType,
+      entityId: String(entityId),
+      payload,
+      createdAt,
+    };
+  }
+
+  latestAuditEvent(eventType, { entityType = '', entityId = '' } = {}) {
+    const row = this.db.prepare(`
+      SELECT id, event_type, entity_type, entity_id, payload_json, created_at
+      FROM audit_events
+      WHERE event_type = ? AND entity_type = ? AND entity_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).get(eventType, entityType, String(entityId));
+    if (!row) return null;
+    return {
+      id: number(row.id),
+      eventType: row.event_type,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      payload: parseJson(row.payload_json, {}),
+      createdAt: row.created_at,
+    };
   }
 
   recordBackupManifest({
@@ -1689,6 +2038,33 @@ export class SQLiteMailStore {
       sizeBytes,
       counts: this.counts(),
       integrity,
+      wal: this.walStatus(),
+    };
+  }
+
+  walStatus() {
+    const autoCheckpoint = this.db.prepare('PRAGMA wal_autocheckpoint').get();
+    const autoCheckpointPages = number(Object.values(autoCheckpoint || {})[0]);
+    const walPath = `${this.databasePath}-wal`;
+    return {
+      autoCheckpointPages,
+      sizeBytes: existsSync(walPath) ? statSync(walPath).size : 0,
+    };
+  }
+
+  checkpointWal(mode = 'PASSIVE') {
+    const normalized = String(mode || '').trim().toUpperCase();
+    if (!['PASSIVE', 'FULL', 'RESTART', 'TRUNCATE'].includes(normalized)) {
+      throw new Error('Unsupported WAL checkpoint mode.');
+    }
+    const row = this.db.prepare(`PRAGMA wal_checkpoint(${normalized})`).get() || {};
+    this.protectDatabaseFiles();
+    return {
+      mode: normalized,
+      busy: number(row.busy ?? Object.values(row)[0]),
+      logFrames: number(row.log ?? Object.values(row)[1]),
+      checkpointedFrames: number(row.checkpointed ?? Object.values(row)[2]),
+      ...this.walStatus(),
     };
   }
 

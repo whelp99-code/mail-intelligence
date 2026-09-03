@@ -41,13 +41,21 @@ const clientSecret = document.querySelector('#clientSecret');
 const mailboxUser = document.querySelector('#mailboxUser');
 const loginTenant = document.querySelector('#loginTenant');
 const loginOutlook = document.querySelector('#loginOutlook');
-const geminiApiKey = document.querySelector('#geminiApiKey');
-const geminiModel = document.querySelector('#geminiModel');
 const aiProvider = document.querySelector('#aiProvider');
+const openaiCodexModel = document.querySelector('#openaiCodexModel');
+const xaiGrokModel = document.querySelector('#xaiGrokModel');
 const externalAiConsentField = document.querySelector('#externalAiConsentField');
 const aiDataPolicyAccepted = document.querySelector('#aiDataPolicyAccepted');
-const faiosServerUrl = document.querySelector('#faiosServerUrl');
-const lmstudioModel = document.querySelector('#lmstudioModel');
+const oauthProviderSummary = document.querySelector('#oauthProviderSummary');
+const oauthProviderCards = document.querySelector('#oauthProviderCards');
+const refreshOauthProviders = document.querySelector('#refreshOauthProviders');
+const testOauthProvider = document.querySelector('#testOauthProvider');
+const oauthLoginCommand = document.querySelector('#oauthLoginCommand');
+const assistantRole = document.querySelector('#assistantRole');
+const assistantTone = document.querySelector('#assistantTone');
+const assistantOpening = document.querySelector('#assistantOpening');
+const saveAssistantPersonalityButton = document.querySelector('#saveAssistantPersonality');
+const assistantPersonalityStatus = document.querySelector('#assistantPersonalityStatus');
 
 const counts = {
   action_required: document.querySelector('#actionRequiredCount'),
@@ -56,6 +64,12 @@ const counts = {
   completed: document.querySelector('#precisionCompletedCount'),
   reference: document.querySelector('#precisionReferenceCount'),
   review_required: document.querySelector('#reviewRequiredCount')
+};
+const operationalCounts = {
+  do_now: document.querySelector('#doNowCount'),
+  waiting: document.querySelector('#operationalWaitingCount'),
+  review: document.querySelector('#operationalReviewCount'),
+  archive: document.querySelector('#operationalArchiveCount')
 };
 
 const actionList = document.querySelector('#actionList');
@@ -85,11 +99,129 @@ let precisionProjects = [];
 let precisionSmartViews = [];
 
 function syncExternalAiConsent() {
-  const requiresConsent = aiProvider.value === 'gemini';
+  const requiresConsent = aiProvider.value !== 'rules';
   externalAiConsentField.hidden = !requiresConsent;
   aiDataPolicyAccepted.disabled = !requiresConsent;
   if (!requiresConsent) aiDataPolicyAccepted.checked = false;
+  oauthLoginCommand.textContent = aiProvider.value === 'openai-codex-oauth'
+    ? 'codex login --device-auth'
+    : aiProvider.value === 'xai-grok-oauth'
+      ? 'grok login --device-auth'
+      : '규칙 기반은 OAuth 로그인이 필요하지 않습니다.';
 }
+
+function providerOutcomeLabel(outcome, kind) {
+  const status = outcome?.status || 'never';
+  if (status === 'passed') {
+    const time = outcome.testedAt || outcome.analyzedAt || '';
+    return `${kind} 성공${time ? ` · ${new Date(time).toLocaleString('ko-KR')}` : ''}`;
+  }
+  if (status === 'failed') return `${kind} 실패 · ${outcome.safeErrorCode || 'PROVIDER_CALL_FAILED'}`;
+  return `${kind} 미실행`;
+}
+
+function renderOauthProviderStatus(payload = {}) {
+  const providers = Array.isArray(payload.providers) ? payload.providers : [];
+  oauthProviderCards.replaceChildren();
+  for (const provider of providers) {
+    const card = document.createElement('article');
+    card.className = `oauth-provider-card${provider.operationalStatus === 'available' ? ' connected' : ''}`;
+    const title = document.createElement('strong');
+    title.textContent = provider.label || provider.provider;
+    const state = document.createElement('span');
+    state.className = 'oauth-provider-state';
+    state.textContent = provider.operationalStatus === 'cli_missing'
+      ? 'CLI 미설치'
+      : provider.operationalStatus === 'oauth_login_required'
+        ? 'OAuth 로그인 필요'
+        : provider.operationalStatus === 'available'
+          ? '실제 모델 호출 가능'
+          : provider.operationalStatus === 'unavailable'
+            ? '실제 모델 호출 불가'
+            : 'OAuth 로그인됨 · 실제 모델 테스트 필요';
+    const detail = document.createElement('p');
+    detail.className = 'oauth-provider-detail';
+    detail.textContent = [
+      `CLI: ${provider.cliInstalled ? '설치됨' : '미설치'}`,
+      `OAuth: ${provider.oauthAuthenticated ? '로그인됨' : '로그인 필요'}`,
+      providerOutcomeLabel(provider.lastSyntheticTest, '합성 테스트'),
+      providerOutcomeLabel(provider.lastRealMailAnalysis, '실메일 분석'),
+    ].join(' · ');
+    const action = document.createElement('p');
+    action.className = 'oauth-provider-action';
+    const failure = provider.lastSyntheticTest?.status === 'failed'
+      ? provider.lastSyntheticTest
+      : provider.lastRealMailAnalysis?.status === 'failed'
+        ? provider.lastRealMailAnalysis
+        : null;
+    action.textContent = failure?.userAction || (!provider.oauthAuthenticated ? provider.loginCommand || '' : provider.version || '');
+    card.append(title, state, detail, action);
+    oauthProviderCards.append(card);
+  }
+  const connected = providers.filter((provider) => provider.oauthAuthenticated).length;
+  const available = providers.filter((provider) => provider.operationalStatus === 'available').length;
+  oauthProviderSummary.textContent = [
+    `CLI 설치 ${providers.filter((provider) => provider.cliInstalled).length}/${providers.length}`,
+    `OAuth 로그인 ${connected}/${providers.length}`,
+    `실제 호출 가능 ${available}/${providers.length}`,
+    payload.externalAiEnabled ? '외부 AI 실행 허용' : '외부 AI 실행 정책 잠김'
+  ].join(' · ');
+}
+
+async function loadOauthProviderStatus() {
+  refreshOauthProviders.disabled = true;
+  try {
+    const response = await apiFetch('/api/ai/oauth/status');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || 'OAuth Provider 상태 확인 실패');
+    renderOauthProviderStatus(payload);
+  } catch (error) {
+    oauthProviderSummary.textContent = error instanceof Error ? error.message : 'OAuth Provider 상태 확인 실패';
+    oauthProviderCards.replaceChildren();
+  } finally {
+    refreshOauthProviders.disabled = false;
+  }
+}
+
+async function testSelectedOauthProvider() {
+  if (aiProvider.value === 'rules') {
+    oauthProviderSummary.textContent = '규칙 기반 Provider는 외부 OAuth 연결 테스트가 필요하지 않습니다.';
+    return;
+  }
+  if (!aiDataPolicyAccepted.checked) {
+    oauthProviderSummary.textContent = 'OAuth LLM 테스트 전에 메일 데이터 외부 전송 정책에 동의하세요.';
+    aiDataPolicyAccepted.focus();
+    return;
+  }
+  testOauthProvider.disabled = true;
+  oauthProviderSummary.textContent = '실메일을 사용하지 않는 합성 OAuth 연결 테스트를 실행 중입니다.';
+  try {
+    const model = aiProvider.value === 'openai-codex-oauth'
+      ? openaiCodexModel.value.trim()
+      : xaiGrokModel.value.trim();
+    const response = await apiFetch('/api/ai/oauth/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: aiProvider.value, model })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      oauthProviderSummary.textContent = [
+        payload.message || 'OAuth Provider 연결 테스트 실패',
+        payload.userAction || '',
+      ].filter(Boolean).join(' · ');
+      await loadOauthProviderStatus();
+      return;
+    }
+    await loadOauthProviderStatus();
+    oauthProviderSummary.textContent = `${payload.provider} · ${payload.model || 'Luna'} · 합성 분석·근거 검증 PASS · ${payload.latencyMs}ms`;
+  } catch (error) {
+    oauthProviderSummary.textContent = 'OAuth Provider 상태 확인 중 오류가 발생했습니다. 다시 시도하세요.';
+  } finally {
+    testOauthProvider.disabled = false;
+  }
+}
+
 async function ensureLocalSession() {
   if (!localSessionPromise) {
     localSessionPromise = fetch('/api/session', {
@@ -235,12 +367,73 @@ function projectDisplay(classification) {
 function precisionSummaryLine(classification) {
   if (!classification) return '정밀 분류 전';
   const parts = [
+    operationalLaneLabel(classification.operational?.lane),
     nextActorLabel(classification.nextActor),
     priorityLabel(classification.priority),
     projectDisplay(classification)
   ];
   if (classification.dueText) parts.push(`기한 ${classification.dueText}`);
   return parts.join(' · ');
+}
+
+function operationalLaneForMessage(messageId) {
+  const precision = precisionFor(messageId);
+  return precision?.operational?.lane || 'review';
+}
+
+function operationalLaneLabel(value) {
+  return {
+    do_now: 'DO NOW',
+    waiting: 'WAITING',
+    review: 'REVIEW',
+    archive: 'ARCHIVE'
+  }[value] || 'REVIEW';
+}
+
+function operationalDetail(classification) {
+  const operational = classification?.operational;
+  if (!operational) return '';
+  const reasons = operational.reasons?.length
+    ? `<ul>${operational.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>`
+    : '<p>운영 배치에 추가 검토 사유가 없습니다.</p>';
+  return `
+    <section class="operational-detail lane-${escapeHtml(operational.lane.replaceAll('_', '-'))}">
+      <div>
+        <span class="memory-label">Operational Lane</span>
+        <strong>${escapeHtml(operationalLaneLabel(operational.lane))}</strong>
+      </div>
+      <span>${operational.silentRiskPrevented ? '자동 보관 차단 · 조용한 누락 방지' : operational.autoConfirmed ? '자동 배치 가능' : '사용자 확인 권장'}</span>
+      ${reasons}
+    </section>
+  `;
+}
+
+function assistantToolPanel(message, classification) {
+  if (!message || !classification) return '';
+  return `
+    <section class="assistant-tools">
+      <div class="assistant-tools-head">
+        <div>
+          <span class="memory-label">메일 도우미</span>
+          <strong>요약·초안·일정 후보</strong>
+        </div>
+        <span>초안 복사만 가능 · 자동 발송 없음</span>
+      </div>
+      <div class="assistant-tool-buttons">
+        <button type="button" data-assistant-action="confirm">맞음</button>
+        <button type="button" data-assistant-action="summary">한 줄 요약</button>
+        <button type="button" data-assistant-action="thread">스레드 요약</button>
+        <button type="button" data-assistant-action="rapid_reply">빠른 회신 초안</button>
+        <button type="button" data-assistant-action="improve">내 문장 다듬기</button>
+        <button type="button" data-assistant-action="meeting">미팅 후보</button>
+        <button type="button" data-assistant-action="meeting_confirmation">일정 확인 초안</button>
+        <button type="button" data-assistant-action="attachments">첨부 요약</button>
+        <button type="button" data-assistant-action="adjudicate">Luna 2차 검토</button>
+      </div>
+      <div id="assistantToolOutput" class="assistant-output" aria-live="polite">기능을 선택하면 현재 메일만 안전하게 처리합니다.</div>
+      <div id="composeMount"></div>
+    </section>
+  `;
 }
 
 function normalizedSubject(subject = '') {
@@ -264,8 +457,9 @@ function messageCard(message) {
   const insight = insightFor(message.id);
   const precision = message.precision;
   const lane = precision?.workState || legacyToPrecisionState(effectiveStatus(insight));
+  const operationalLane = precision?.operational?.lane || 'review';
   const article = document.createElement('article');
-  article.className = `message-card precision-${lane.replaceAll('_', '-')}`;
+  article.className = `message-card precision-${lane.replaceAll('_', '-')} operational-${operationalLane.replaceAll('_', '-')}`;
   article.innerHTML = `
     <div class="message-row">
       <strong class="message-subject"></strong>
@@ -276,7 +470,7 @@ function messageCard(message) {
     <div class="message-next"></div>
   `;
   article.querySelector('.message-subject').textContent = message.subject || '(제목 없음)';
-  article.querySelector('.status-pill').textContent = `${precisionStateLabel(lane)}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : ''}`;
+  article.querySelector('.status-pill').textContent = `${operationalLaneLabel(operationalLane)} · ${precisionStateLabel(lane)}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : ''}`;
   article.querySelector('.message-meta').textContent = `${message.isRead ? '읽음' : '읽지않음'} · ${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}${insight?.isSpamCandidate ? ' · 광고성 후보' : ''}${insight?.isOnHold ? ' · 보류' : ''}`;
   article.querySelector('.message-summary').textContent = insight?.summary?.[0] || message.bodyPreview || '';
   article.querySelector('.message-next').textContent = precision
@@ -483,7 +677,7 @@ function mailComposer(action) {
     <section class="mail-composer" data-compose-action="${escapeHtml(action.id)}">
       <div class="composer-head">
         <h4>회신 초안 편집</h4>
-        <span id="sendStatus">v1.2.0은 읽기 전용입니다. 초안은 복사만 할 수 있습니다.</span>
+        <span id="sendStatus">v1.2.2는 읽기 전용입니다. 초안은 복사만 할 수 있습니다.</span>
       </div>
       <label>받는 사람
         <input id="composeTo" type="email" value="${escapeHtml(action.to || '')}" />
@@ -503,6 +697,122 @@ function mailComposer(action) {
       </div>
     </section>
   `;
+}
+
+function renderAssistantOutput(value) {
+  const output = messageDetail.querySelector('#assistantToolOutput');
+  if (!output) return;
+  if (typeof value === 'string') {
+    output.textContent = value;
+    return;
+  }
+  output.textContent = JSON.stringify(value, null, 2);
+}
+
+function mountAssistantDraft(draft) {
+  mountComposer({
+    id: `assistant-${draft.mode || 'draft'}-${selectedMessageId}`,
+    to: draft.to || '',
+    mailSubject: draft.subject || '',
+    body: draft.body || '',
+  });
+  renderAssistantOutput('초안을 만들었습니다. 내용을 직접 확인한 뒤 클립보드로 복사하세요. 자동 발송은 차단되어 있습니다.');
+}
+
+async function runAssistantTool(action, messageId) {
+  renderAssistantOutput('처리 중입니다.');
+  try {
+    if (action === 'confirm') {
+      const response = await apiFetch('/api/intelligence/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || '분류 확인 저장 실패');
+      const message = currentMessages.find((item) => item.id === messageId);
+      if (message) message.precision = payload.classification;
+      renderAssistantOutput('현재 분류를 확인했습니다. 확인 이력은 사용자 보정으로 저장되며 자동 판단보다 우선합니다.');
+      await loadPrecisionOverview({ classify: false });
+      renderFilteredView();
+      selectMessage(messageId);
+      return;
+    }
+    if (action === 'summary' || action === 'thread' || action === 'meeting' || action === 'attachments') {
+      const endpoint = {
+        summary: `/api/intelligence/message-summary?messageId=${encodeURIComponent(messageId)}`,
+        thread: `/api/intelligence/thread-summary?messageId=${encodeURIComponent(messageId)}`,
+        meeting: `/api/intelligence/meeting-candidate?messageId=${encodeURIComponent(messageId)}&timeZone=Asia%2FSeoul`,
+        attachments: `/api/intelligence/attachments?messageId=${encodeURIComponent(messageId)}`
+      }[action];
+      const response = await apiFetch(endpoint);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || '메일 도우미 실행 실패');
+      if (action === 'summary') {
+        renderAssistantOutput([payload.oneLine, ...(payload.detail || [])].filter(Boolean).join('\n'));
+      } else if (action === 'thread') {
+        renderAssistantOutput([
+          payload.oneLine,
+          `현재 운영함: ${operationalLaneLabel(payload.currentLane)}`,
+          ...(payload.detailed || []).map((item) => `- ${item.oneLine} · ${operationalLaneLabel(item.lane)}`)
+        ].join('\n'));
+      } else if (action === 'meeting') {
+        renderAssistantOutput(payload.meetingIntent
+          ? ['미팅 의도 감지', `후보: ${(payload.candidateTimes || []).join(', ') || '시간 미확정'}`, '캘린더 가능 여부: 자동 확인 안 됨', '일정 생성: 차단'].join('\n')
+          : '현재 본문에서 미팅 의도를 찾지 못했습니다.');
+      } else {
+        const summaries = payload.summaries || [];
+        renderAssistantOutput(summaries.length
+          ? summaries.map((item) => `${item.metadata?.name || '첨부파일'} · ${item.summaryStatus}\n${item.summary}`).join('\n\n')
+          : '저장된 첨부 메타데이터가 없습니다.');
+      }
+      return;
+    }
+    if (action === 'rapid_reply' || action === 'meeting_confirmation' || action === 'improve') {
+      let draftText = '';
+      if (action === 'improve') {
+        draftText = window.prompt('다듬을 메일 문장을 입력하세요. 서버는 초안만 만들고 발송하지 않습니다.', '') || '';
+        if (!draftText.trim()) {
+          renderAssistantOutput('다듬을 문장이 입력되지 않았습니다.');
+          return;
+        }
+      }
+      const response = await apiFetch('/api/intelligence/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messageId,
+          mode: action,
+          draftText,
+          timeZone: 'Asia/Seoul'
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || '초안 생성 실패');
+      mountAssistantDraft(payload);
+      return;
+    }
+    if (action === 'adjudicate') {
+      const response = await apiFetch('/api/intelligence/adjudicate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || 'Luna 2차 검토 실패');
+      if (payload.status === 'policy_blocked') {
+        renderAssistantOutput('외부 AI가 운영 정책으로 꺼져 있습니다. Rules 결과를 유지하고 이 메일은 REVIEW에서 사람이 확인합니다.');
+      } else if (payload.status === 'agreed') {
+        renderAssistantOutput(`Rules와 Luna 후보가 일치했습니다.\n${JSON.stringify(payload.luna, null, 2)}\n자동 저장은 하지 않았습니다.`);
+      } else if (payload.status === 'disagreed') {
+        renderAssistantOutput(`Rules와 Luna가 불일치했습니다. REVIEW를 유지합니다.\nRules: ${JSON.stringify(payload.rules)}\nLuna: ${JSON.stringify(payload.luna)}`);
+      } else {
+        renderAssistantOutput(payload);
+      }
+    }
+  } catch (error) {
+    renderAssistantOutput(error instanceof Error ? error.message : '메일 도우미 실행 실패');
+  }
 }
 
 function mountComposer(action) {
@@ -550,15 +860,17 @@ function selectMessage(messageId) {
   const fullBody = message?.body || preview || '';
   const outlookLink = safeExternalUrl(message?.webLink);
   const confidence = Number.isFinite(insight?.confidence) ? `${Math.round(insight.confidence * 100)}%` : '미측정';
-  const analysisState = insight?.analysisState === 'degraded'
-    ? 'AI 실패 · 규칙 기반 임시 판단'
-    : insight?.analysisMode === 'ai'
-      ? 'AI 분석'
-      : '규칙 기반 분석';
+  const analysisState = insight?.analysisState === 'policy_blocked'
+    ? '외부 AI 정책 차단 · 규칙 기반 분석'
+    : insight?.analysisState === 'degraded'
+      ? 'AI 실패 · 규칙 기반 임시 판단'
+      : insight?.analysisMode === 'ai'
+        ? 'AI 분석'
+        : '규칙 기반 분석';
 
   messageDetail.innerHTML = `
     <div class="detail-head">
-      <span class="status-pill">${escapeHtml(precision ? precisionStateLabel(precision.workState) : statusLabel(effectiveStatus(insight)))}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : insight?.aiEnhanced ? ' · AI' : ''}</span>
+      <span class="status-pill">${escapeHtml(precision ? `${operationalLaneLabel(precision.operational?.lane)} · ${precisionStateLabel(precision.workState)}` : statusLabel(effectiveStatus(insight)))}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : insight?.aiEnhanced ? ' · AI' : ''}</span>
       ${outlookLink ? `<a href="${escapeHtml(outlookLink)}" target="_blank" rel="noreferrer noopener">Outlook에서 열기</a>` : ''}
     </div>
     <div class="detail-content">
@@ -568,7 +880,9 @@ function selectMessage(messageId) {
         <h4>메일 내용</h4>
         <p class="detail-body">${escapeHtml(fullBody).slice(0, 5000)}</p>
       </section>
+      ${operationalDetail(precision)}
       ${precisionCorrectionPanel(message, precision)}
+      ${assistantToolPanel(message, precision)}
       ${insight ? feedbackPanel(insight) : ''}
       ${detailBlock('요약', insight?.summary || [])}
       ${detailBlock('판단 근거', insight?.evidenceItems?.length ? insight.evidenceItems : tasks.map((task) => `${task.title} (${task.lane}) - ${task.body}`))}
@@ -582,6 +896,9 @@ function selectMessage(messageId) {
     button.addEventListener('click', () => saveFeedback(messageId, button.dataset.status));
   });
   messageDetail.querySelector('#precisionCorrectionForm')?.addEventListener('submit', savePrecisionCorrection);
+  messageDetail.querySelectorAll('[data-assistant-action]').forEach((button) => {
+    button.addEventListener('click', () => runAssistantTool(button.dataset.assistantAction, messageId));
+  });
 
   messageList.querySelectorAll('.message-card').forEach((node) => node.classList.remove('selected'));
   const index = currentMessages.findIndex((item) => item.id === messageId);
@@ -708,7 +1025,10 @@ function searchableText(message) {
 function filteredMessages() {
   const query = searchQuery.trim().toLowerCase();
   return currentMessages.filter((message) => {
-    const matchesLane = activeFilter === 'all' || laneForMessage(message.id) === activeFilter;
+    const matchesLane = activeFilter === 'all'
+      || (activeFilter.startsWith('op:')
+        ? operationalLaneForMessage(message.id) === activeFilter.slice(3)
+        : laneForMessage(message.id) === activeFilter);
     const matchesSearch = !query || searchableText(message).includes(query);
     return matchesLane && matchesSearch;
   });
@@ -732,6 +1052,11 @@ function renderFilteredView() {
   Object.keys(counts).forEach((lane) => {
     counts[lane].textContent = currentMessages.filter((message) => laneForMessage(message.id) === lane).length;
   });
+  Object.keys(operationalCounts).forEach((lane) => {
+    if (operationalCounts[lane]) {
+      operationalCounts[lane].textContent = currentMessages.filter((message) => operationalLaneForMessage(message.id) === lane).length;
+    }
+  });
 
   clear(messageList);
   const unreadCount = visibleMessages.filter((message) => !message.isRead).length;
@@ -752,9 +1077,12 @@ function renderFilteredView() {
       const laneSummary = Object.keys(counts)
         .map((lane) => `${statusLabel(lane)} ${items.filter((item) => laneForMessage(item.id) === lane).length}`)
         .join(' · ');
+      const operationalLaneSummary = Object.keys(operationalCounts)
+        .map((lane) => `${operationalLaneLabel(lane)} ${items.filter((item) => operationalLaneForMessage(item.id) === lane).length}`)
+        .join(' · ');
       group.innerHTML = '<div class="group-head"><strong></strong><span></span></div>';
       group.querySelector('strong').textContent = label;
-      group.querySelector('span').textContent = `${items.length}건 · ${laneSummary}`;
+      group.querySelector('span').textContent = `${items.length}건 · ${operationalLaneSummary} · ${laneSummary}`;
       items.forEach((message) => group.appendChild(messageCard(message)));
       messageList.appendChild(group);
     });
@@ -827,12 +1155,58 @@ function renderPrecisionOverview(summary) {
   const review = Number(summary?.reviewRequired || 0);
   const corrected = Number(summary?.corrected || 0);
   const confirmed = Number(summary?.projectResolution?.confirmed || summary?.assignedProjects || 0);
+  const operational = summary?.calculated?.operational || summary?.operational || {};
+  const operationalLanes = operational.lanes || {};
+  Object.entries(operationalCounts).forEach(([lane, node]) => {
+    if (node) node.textContent = String(operationalLanes[lane] || 0);
+  });
   precisionStatus.textContent = total
-    ? `정밀 분류 ${total}건 · 검토 필요 ${review}건`
+    ? `정밀 분류 ${total}건 · DO NOW ${operationalLanes.do_now || 0} · WAITING ${operationalLanes.waiting || 0} · REVIEW ${operationalLanes.review || review} · ARCHIVE ${operationalLanes.archive || 0}`
     : '정밀 분류할 저장 메일이 없습니다.';
   precisionSummaryNode.textContent = total
-    ? `사용자 보정 ${corrected}건 · 확정 프로젝트 연결 ${confirmed}건 · 애매한 판단은 검토 필요로 보류합니다.`
+    ? `사용자 보정 ${corrected}건 · 자동 보관 차단 ${operational.silentRiskPrevented || 0}건 · 확정 프로젝트 연결 ${confirmed}건 · 애매한 판단은 REVIEW에 남깁니다.`
     : 'Outlook을 연결하거나 저장 메일을 동기화하면 정밀 분류가 시작됩니다.';
+}
+
+async function loadAssistantPersonality() {
+  if (!assistantRole || !assistantTone || !assistantOpening) return;
+  try {
+    const response = await apiFetch('/api/intelligence/personality');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '초안 성격 확인 실패');
+    assistantRole.value = payload.personality?.role || '';
+    assistantTone.value = payload.personality?.tone || '';
+    assistantOpening.value = payload.personality?.opening || '';
+    assistantPersonalityStatus.textContent = '서버 로컬 설정 불러옴';
+  } catch (error) {
+    assistantPersonalityStatus.textContent = error instanceof Error ? error.message : '초안 성격 확인 실패';
+  }
+}
+
+async function saveAssistantPersonality() {
+  saveAssistantPersonalityButton.disabled = true;
+  assistantPersonalityStatus.textContent = '저장 중';
+  try {
+    const response = await apiFetch('/api/intelligence/personality', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        role: assistantRole.value,
+        tone: assistantTone.value,
+        opening: assistantOpening.value
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || '초안 성격 저장 실패');
+    assistantRole.value = payload.personality.role;
+    assistantTone.value = payload.personality.tone;
+    assistantOpening.value = payload.personality.opening;
+    assistantPersonalityStatus.textContent = '저장됨 · 초안에만 적용';
+  } catch (error) {
+    assistantPersonalityStatus.textContent = error instanceof Error ? error.message : '초안 성격 저장 실패';
+  } finally {
+    saveAssistantPersonalityButton.disabled = false;
+  }
 }
 
 function renderProjectRegistry() {
@@ -1089,16 +1463,14 @@ async function loadStatus() {
     tenantId.value = status.tenantId || '';
     clientId.value = status.clientId || '';
     mailboxUser.value = status.mailboxUser || '';
-    geminiModel.value = status.geminiModel || 'gemini-2.5-flash';
-    // AI Provider settings
     aiProvider.value = status.aiProvider || 'rules';
-    aiDataPolicyAccepted.checked = aiProvider.value === 'gemini' && status.aiOptedIn === true;
+    openaiCodexModel.value = status.openaiCodexModel || 'luna';
+    xaiGrokModel.value = status.xaiGrokModel || 'grok-4.6';
+    aiDataPolicyAccepted.checked = aiProvider.value !== 'rules' && status.aiOptedIn === true;
     syncExternalAiConsent();
-    faiosServerUrl.value = status.faiosServerUrl || 'http://localhost:3201';
-    lmstudioModel.value = status.lmstudioModel || 'qwen/qwen3.5-9b';
     accessToken.placeholder = status.hasAccessToken ? '현재 서버 메모리의 토큰 사용 중' : '';
     clientSecret.placeholder = status.hasClientSecret ? '현재 서버 메모리의 Client Secret 사용 중' : '';
-    geminiApiKey.placeholder = status.hasGeminiApiKey ? '현재 서버 메모리의 Gemini API Key 사용 중' : '';
+    await loadOauthProviderStatus();
   } catch {
     connectionStatus.textContent = 'Outlook 상태 확인 실패';
     configStatus.textContent = '확인 실패';
@@ -1107,8 +1479,8 @@ async function loadStatus() {
 
 async function saveConfig(event) {
   event.preventDefault();
-  if (aiProvider.value === 'gemini' && !aiDataPolicyAccepted.checked) {
-    configStatus.textContent = 'Gemini로 메일 데이터를 전송하려면 외부 AI 데이터 정책에 먼저 동의하세요.';
+  if (aiProvider.value !== 'rules' && !aiDataPolicyAccepted.checked) {
+    configStatus.textContent = 'OAuth LLM으로 메일 데이터를 전송하려면 외부 AI 데이터 정책에 먼저 동의하세요.';
     aiDataPolicyAccepted.focus();
     return;
   }
@@ -1124,12 +1496,10 @@ async function saveConfig(event) {
         clientSecret: clientSecret.value,
         mailboxUser: mailboxUser.value,
         loginTenant: loginTenant.value,
-        geminiApiKey: geminiApiKey.value,
-        geminiModel: geminiModel.value,
         aiProvider: aiProvider.value,
-        aiDataPolicyAccepted: aiProvider.value === 'gemini' && aiDataPolicyAccepted.checked,
-        faiosServerUrl: faiosServerUrl.value,
-        lmstudioModel: lmstudioModel.value,
+        aiDataPolicyAccepted: aiProvider.value !== 'rules' && aiDataPolicyAccepted.checked,
+        openaiCodexModel: openaiCodexModel.value,
+        xaiGrokModel: xaiGrokModel.value,
         persist: true
       })
     });
@@ -1142,9 +1512,9 @@ async function saveConfig(event) {
     configStatus.textContent = status.connected ? `설정됨: ${status.authMode} · ${safetyLabel}` : `미설정 · ${safetyLabel}`;
     accessToken.value = '';
     clientSecret.value = '';
-    geminiApiKey.value = '';
-    aiDataPolicyAccepted.checked = status.aiProvider === 'gemini' && status.aiOptedIn === true;
+    aiDataPolicyAccepted.checked = status.aiProvider !== 'rules' && status.aiOptedIn === true;
     syncExternalAiConsent();
+    await loadOauthProviderStatus();
     await loadOutlookMessages();
   } catch (error) {
     configStatus.textContent = error instanceof Error ? error.message : '설정 저장 실패';
@@ -1202,20 +1572,20 @@ async function loadOutlookMessages() {
         : `${sync.mode === 'full-reset' ? '전체 재동기화' : 'Delta 동기화'} · 폴더 ${sync.completedFolders || 0}/${sync.discoveredFolders || 0} · 수집 ${sync.fetchedFromGraph || 0} · 반영 ${sync.upserted || 0} · 삭제 ${sync.deleted || 0} · 전체 ${sync.totalCached || 0}건`
       : `${payload.messages.length}개 메일`;
     const ai = payload.result?.ai;
-    const providerLabel = ai?.provider === 'f-aios-v3'
-      ? 'F-AIOS-v3'
-      : ai?.provider === 'gemini'
-        ? 'Gemini'
-        : ai?.provider === 'lmstudio'
-          ? 'LM Studio'
-          : '규칙';
-    const aiLabel = ai?.status === 'failed'
-      ? `AI 실패 (${providerLabel} · ${ai.code || 'UNKNOWN'}) → 규칙 기반 임시 판단`
-      : ai?.enabled
-        ? `${providerLabel} AI 적용 (${ai.model}${ai.fallbackFrom ? ` · ${ai.fallbackFrom} 실패 후 폴백` : ''}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
-        : ai?.status === 'not-run'
-          ? 'AI 미실행 · 규칙 기반'
-          : '규칙 기반';
+    const providerLabel = ai?.provider === 'openai-codex-oauth'
+      ? 'OpenAI · ChatGPT OAuth'
+      : ai?.provider === 'xai-grok-oauth'
+        ? 'xAI · Grok OAuth'
+        : '규칙';
+    const aiLabel = ai?.status === 'policy_blocked'
+      ? '외부 AI 정책 차단 · Rules 결과 사용 · 운영자 승인 필요'
+      : ai?.status === 'failed'
+        ? `AI 실패 (${providerLabel} · ${ai.code || 'UNKNOWN'}) → 규칙 기반 임시 판단`
+        : ai?.enabled
+          ? `${providerLabel} AI 적용 (${ai.model}${Number.isFinite(ai.analyzed) ? ` · 신규분석 ${ai.analyzed}건` : ''}${Number.isFinite(ai.cached) ? ` · 캐시 ${ai.cached}건` : ''})`
+          : ai?.status === 'not-run'
+            ? 'AI 미실행 · 규칙 기반'
+            : '규칙 기반';
     fetchStatus.textContent = payload.connected
       ? `${syncLabel} 분석 완료 · ${aiLabel} · ${new Date(payload.analyzedAt).toLocaleString('ko-KR')}`
       : `${syncLabel} 분석 완료 · ${aiLabel} · ${payload.message}`;
@@ -1255,13 +1625,11 @@ clearConfig.addEventListener('click', async () => {
   clientSecret.value = '';
   mailboxUser.value = '';
   loginTenant.value = 'common';
-  geminiApiKey.value = '';
-  geminiModel.value = 'gemini-2.5-flash';
   aiProvider.value = 'rules';
+  openaiCodexModel.value = 'luna';
+  xaiGrokModel.value = 'grok-4.6';
   aiDataPolicyAccepted.checked = false;
   syncExternalAiConsent();
-  faiosServerUrl.value = 'http://localhost:3201';
-  lmstudioModel.value = 'qwen/qwen3.5-9b';
   try {
     await apiFetch('/api/outlook/config', { method: 'DELETE' });
     configStatus.textContent = '저장값 초기화';
@@ -1271,6 +1639,9 @@ clearConfig.addEventListener('click', async () => {
   }
 });
 aiProvider.addEventListener('change', syncExternalAiConsent);
+refreshOauthProviders.addEventListener('click', loadOauthProviderStatus);
+testOauthProvider.addEventListener('click', testSelectedOauthProvider);
+saveAssistantPersonalityButton?.addEventListener('click', saveAssistantPersonality);
 document.querySelectorAll('.metric').forEach((button) => {
   button.addEventListener('click', () => {
     activeFilter = activeFilter === button.dataset.filter ? 'all' : button.dataset.filter;
@@ -1287,6 +1658,7 @@ loadStatus();
 loadMemoryStatus();
 loadPrecisionOverview();
 loadSmartViews();
+loadAssistantPersonality();
 
 // --- Column Resize (Drag & Drop) ---
 (function initColumnResize() {

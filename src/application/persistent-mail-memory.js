@@ -3,6 +3,7 @@ import { access } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { GraphMailClient } from '../adapters/microsoft-graph-mail.js';
 import { MailSyncService } from './mail-sync.js';
+import { MailAssistantService } from './mail-assistant.js';
 import { PrecisionIntelligenceService } from './precision-intelligence.js';
 import { retryOperation } from '../resilience.js';
 import { createVerifiedBackup } from '../storage/backup-restore.js';
@@ -65,6 +66,7 @@ export class PersistentMailMemoryRuntime {
       }),
     });
     this.precision = new PrecisionIntelligenceService({ store: this.store });
+    this.assistant = new MailAssistantService({ store: this.store, precision: this.precision });
     this.legacyImports = [];
     this.syncInFlight = new Map();
     this.backupInFlight = null;
@@ -162,6 +164,50 @@ export class PersistentMailMemoryRuntime {
 
   intelligentSmartViews() {
     return this.precision.smartViews();
+  }
+
+  operationalSummary(mailboxUser = '') {
+    return this.assistant.operationalSummary(mailboxUser);
+  }
+
+  messageSummary(mailboxUser = '', messageId) {
+    return this.assistant.summary(mailboxUser, messageId);
+  }
+
+  threadSummary(mailboxUser = '', messageId, options = {}) {
+    return this.assistant.threadSummary(mailboxUser, messageId, options);
+  }
+
+  meetingCandidate(mailboxUser = '', messageId, options = {}) {
+    return this.assistant.meetingCandidate(mailboxUser, messageId, options);
+  }
+
+  messageAttachments(mailboxUser = '', messageId) {
+    return this.assistant.attachments(mailboxUser, messageId);
+  }
+
+  attachmentSummary(mailboxUser = '', messageId, attachmentId, options = {}) {
+    return this.assistant.attachmentSummary(mailboxUser, messageId, attachmentId, options);
+  }
+
+  assistantPersonality(mailboxUser = '') {
+    return this.assistant.personality(mailboxUser);
+  }
+
+  saveAssistantPersonality(mailboxUser = '', value = {}) {
+    return this.assistant.savePersonality(mailboxUser, value);
+  }
+
+  generateAssistantDraft(mailboxUser = '', messageId, options = {}) {
+    return this.assistant.draft(mailboxUser, messageId, options);
+  }
+
+  confirmPrecisionClassification(mailboxUser = '', messageId, options = {}) {
+    return this.assistant.confirmClassification(mailboxUser, messageId, options);
+  }
+
+  adjudicationCandidate(mailboxUser = '', messageId) {
+    return this.assistant.adjudicationCandidate(mailboxUser, messageId);
   }
 
   syncStatus(mailboxUser = '') {
@@ -262,6 +308,7 @@ export class PersistentMailMemoryRuntime {
         attachmentErrors: result.attachmentErrors,
         precision,
       });
+      this.store.checkpointWal('TRUNCATE');
       return {
         ...result,
         precision,
@@ -308,6 +355,7 @@ export class PersistentMailMemoryRuntime {
           sizeBytes: result.sizeBytes,
           schemaVersion: result.schemaVersion,
         });
+        this.store.checkpointWal('TRUNCATE');
         return {
           ...result,
           job: this.store.getOperatorJob(jobKey),

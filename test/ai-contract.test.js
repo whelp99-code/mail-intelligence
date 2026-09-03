@@ -7,6 +7,7 @@ import {
   executeAiProvider,
   extractJsonObject,
   parseAiAnalysis,
+  policyBlockedAiRun,
   validateAiPayload,
 } from '../src/ai-contract.js';
 
@@ -37,6 +38,20 @@ function validMessage(overrides = {}) {
     ...overrides,
   };
 }
+
+test('operator policy block is represented as Rules fallback instead of provider failure', () => {
+  const blocked = policyBlockedAiRun({ code: 'EXTERNAL_AI_DISABLED' }, {
+    provider: 'openai-codex-oauth',
+    model: 'luna',
+  });
+  assert.equal(blocked.status, 'policy_blocked');
+  assert.equal(blocked.enabled, false);
+  assert.equal(blocked.error, null);
+  assert.equal(blocked.fallback, 'rules');
+  assert.equal(blocked.rulesUsed, true);
+  assert.match(blocked.message, /Rules/);
+  assert.match(blocked.userAction, /운영자 승인/);
+});
 
 function responseFor(message = validMessage()) {
   return JSON.stringify({ messages: [message] });
@@ -176,10 +191,10 @@ test('메일 원문에 없는 근거를 모델이 인용하면 거부한다', ()
   );
 });
 
-test('F-AIOS 성공 시 실제 provider와 model을 정확히 보고한다', async () => {
+test('OpenAI Codex OAuth 성공 시 실제 provider와 model을 정확히 보고한다', async () => {
   const calls = [];
   const execution = await executeAiProvider({
-    requestedProvider: 'f-aios-v3',
+    requestedProvider: 'openai-codex-oauth',
     prompt: 'prompt',
     allowedMessageIds: ['known'],
     callProvider: async (provider) => {
@@ -188,48 +203,34 @@ test('F-AIOS 성공 시 실제 provider와 model을 정확히 보고한다', asy
     },
     getModelName: (provider) => `model-for-${provider}`,
   });
-  assert.deepEqual(calls, ['f-aios-v3']);
-  assert.equal(execution.actualProvider, 'f-aios-v3');
+  assert.deepEqual(calls, ['openai-codex-oauth']);
+  assert.equal(execution.actualProvider, 'openai-codex-oauth');
   assert.equal(execution.fallbackFrom, null);
-  assert.equal(execution.model, 'model-for-f-aios-v3');
+  assert.equal(execution.model, 'model-for-openai-codex-oauth');
 });
 
-test('F-AIOS 실패 시 LM Studio 폴백과 실제 provider를 기록한다', async () => {
+test('OAuth provider 실패 시 다른 provider로 조용히 폴백하지 않는다', async () => {
   const calls = [];
-  const execution = await executeAiProvider({
-    requestedProvider: 'f-aios-v3',
-    prompt: 'prompt',
-    allowedMessageIds: ['known'],
-    callProvider: async (provider) => {
-      calls.push(provider);
-      if (provider === 'f-aios-v3') throw new Error('primary unavailable');
-      return responseFor(validMessage({ status: 'waiting', nextActions: [validAction({ lane: 'waiting' })] }));
-    },
-    getModelName: (provider) => `model-for-${provider}`,
-  });
-  assert.deepEqual(calls, ['f-aios-v3', 'lmstudio']);
-  assert.equal(execution.actualProvider, 'lmstudio');
-  assert.equal(execution.fallbackFrom, 'f-aios-v3');
-  assert.equal(execution.payload.messages[0].status, 'waiting');
-});
-
-test('비 F-AIOS provider 실패는 다른 provider로 조용히 폴백하지 않는다', async () => {
   await assert.rejects(
     executeAiProvider({
-      requestedProvider: 'gemini',
+      requestedProvider: 'xai-grok-oauth',
       prompt: 'prompt',
       allowedMessageIds: ['known'],
-      callProvider: async () => { throw new Error('external provider failed'); },
+      callProvider: async (provider) => {
+        calls.push(provider);
+        throw new Error('oauth provider failed');
+      },
       getModelName: () => 'model',
     }),
-    /external provider failed/,
+    /oauth provider failed/,
   );
+  assert.deepEqual(calls, ['xai-grok-oauth']);
 });
 
 test('provider가 반환한 잘못된 message id는 실행 단계에서 거부한다', async () => {
   await assert.rejects(
     executeAiProvider({
-      requestedProvider: 'lmstudio',
+      requestedProvider: 'openai-codex-oauth',
       prompt: 'prompt',
       allowedMessageIds: ['known'],
       callProvider: async () => responseFor(validMessage({ id: 'invented' })),
@@ -240,6 +241,9 @@ test('provider가 반환한 잘못된 message id는 실행 단계에서 거부�
 });
 
 test('분석 캐시 식별자는 provider, model, prompt version을 포함한다', () => {
-  assert.equal(analysisIdentity('lmstudio', 'model-a').includes(AI_PROMPT_VERSION), true);
-  assert.notEqual(analysisIdentity('lmstudio', 'model-a'), analysisIdentity('lmstudio', 'model-b'));
+  assert.equal(analysisIdentity('openai-codex-oauth', 'model-a').includes(AI_PROMPT_VERSION), true);
+  assert.notEqual(
+    analysisIdentity('openai-codex-oauth', 'model-a'),
+    analysisIdentity('openai-codex-oauth', 'model-b'),
+  );
 });

@@ -11,8 +11,8 @@
       <div>
         <p class="eyebrow">Outlook Work OS</p>
         <h1>Mail Intelligence</h1>
-        <span class="version-badge">v1.2.0 · Precision Intelligence</span>
-        <p class="lede">메일을 과하게 쪼개지 않고, 지금의 상태·다음 행동 주체·프로젝트·기한을 정확하게 정리합니다.</p>
+        <span class="version-badge">v1.2.2 · Operational Classification</span>
+        <p class="lede">확실한 업무는 바로 배치하고, 애매한 메일은 조용히 숨기지 않고 검토함에 남깁니다.</p>
       </div>
       <nav class="nav" aria-label="분석 섹션">
         <a href="#messages">메일</a>
@@ -52,8 +52,8 @@
       </section>
 
       <section class="notice safety-notice" aria-label="안전 모드 안내">
-        <strong>v1.2.0 읽기 전용 Precision Intelligence</strong>
-        <span>분류를 억지로 늘리지 않습니다. 애매한 메일은 검토 필요로 남기고, 프로젝트와 업무를 자동 생성하지 않습니다. 메일 발송·원본 변경·외부 시스템 전송은 계속 차단됩니다.</span>
+        <strong>v1.2.2 읽기 전용 운영 안정화</strong>
+        <span>DO NOW·WAITING·REVIEW·ARCHIVE로 단순하게 배치합니다. 불확실한 메일과 신규 문서는 자동 보관하지 않습니다. 초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단됩니다.</span>
       </section>
 
       <section id="precisionIntelligence" class="precision-panel" aria-live="polite">
@@ -72,6 +72,12 @@
           <button class="metric completed" type="button" data-filter="completed"><span>완료</span><strong id="precisionCompletedCount">0</strong></button>
           <button class="metric reference" type="button" data-filter="reference"><span>참고</span><strong id="precisionReferenceCount">0</strong></button>
           <button class="metric review" type="button" data-filter="review_required"><span>검토 필요</span><strong id="reviewRequiredCount">0</strong></button>
+        </div>
+        <div class="operational-lanes" role="group" aria-label="운영 업무함 필터">
+          <button class="metric operational-do-now" type="button" data-filter="op:do_now"><span>DO NOW</span><strong id="doNowCount">0</strong></button>
+          <button class="metric operational-waiting" type="button" data-filter="op:waiting"><span>WAITING</span><strong id="operationalWaitingCount">0</strong></button>
+          <button class="metric operational-review" type="button" data-filter="op:review"><span>REVIEW</span><strong id="operationalReviewCount">0</strong></button>
+          <button class="metric operational-archive" type="button" data-filter="op:archive"><span>ARCHIVE</span><strong id="operationalArchiveCount">0</strong></button>
         </div>
         <div id="smartViews" class="smart-views" aria-label="저장된 지능형 탐색"></div>
         <details class="project-registry">
@@ -115,7 +121,7 @@
         <div class="notice">
           Outlook 로그인 방식에서는 Client Secret을 비워두세요. 개인 Outlook.com 계정은 App registration의 Supported account types가
           Personal Microsoft accounts를 허용해야 합니다. 현재 버전은 <strong>Mail.Read</strong>만 요청하며 메일 발송 권한은 요청하지 않습니다.
-          Access Token, Client Secret, Gemini API Key는 서버 메모리에서만 사용하며 설정 파일에는 저장하지 않습니다.
+          LLM OAuth 자격정보는 Mail Intelligence가 직접 저장하지 않고 공식 Codex/Grok CLI의 사용자 전용 credential cache가 관리합니다.
         </div>
         <form id="configForm" class="config-grid">
           <label>
@@ -147,37 +153,56 @@
             <input id="mailboxUser" name="mailboxUser" type="email" autocomplete="off" />
           </label>
           <label>
-            Google AI Studio API Key
-            <input id="geminiApiKey" name="geminiApiKey" type="password" autocomplete="off" />
-          </label>
-          <label>
-            Gemini Model
-            <input id="geminiModel" name="geminiModel" type="text" autocomplete="off" value="gemini-2.5-flash" />
-          </label>
-          <label>
             AI 프로바이더
             <select id="aiProvider" name="aiProvider">
               <option value="rules" selected>규칙 기반만 사용 (기본·메일 외부 전달 없음)</option>
-              <option value="f-aios-v3">F-AIOS-v3 (로컬 LM Studio)</option>
-              <option value="lmstudio">LM Studio (직접 연결)</option>
-              <option value="gemini">Google Gemini (API 키 필요)</option>
+              <option value="openai-codex-oauth">OpenAI · ChatGPT OAuth (공식 Codex CLI)</option>
+              <option value="xai-grok-oauth">xAI · Grok OAuth (공식 Grok CLI)</option>
             </select>
           </label>
+          <label>
+            OpenAI Codex 모델
+            <input id="openaiCodexModel" name="openaiCodexModel" type="text" autocomplete="off" value="luna" readonly aria-label="Luna OAuth preset" />
+          </label>
+          <label>
+            xAI Grok 모델
+            <input id="xaiGrokModel" name="xaiGrokModel" type="text" autocomplete="off" value="grok-4.6" />
+          </label>
           <label id="externalAiConsentField" class="external-ai-consent" hidden>
-            외부 AI 데이터 정책 동의
+            OAuth LLM 데이터 정책 동의
             <span class="checkbox-row">
               <input id="aiDataPolicyAccepted" name="aiDataPolicyAccepted" type="checkbox" />
-              Gemini 사용 시 선택한 메일의 제목·발신자·본문이 Google API로 전송됨을 이해하고 동의합니다.
+              선택한 메일의 제목·발신자·본문이 선택한 공식 OpenAI 또는 xAI 서비스로 전송됨을 이해하고 동의합니다.
             </span>
           </label>
-          <label>
-            F-AIOS-v3 서버 URL
-            <input id="faiosServerUrl" name="faiosServerUrl" type="text" autocomplete="off" value="http://localhost:3201" />
-          </label>
-          <label>
-            LM Studio 모델
-            <input id="lmstudioModel" name="lmstudioModel" type="text" autocomplete="off" value="qwen/qwen3.5-9b" />
-          </label>
+          <section class="oauth-provider-panel" aria-labelledby="oauthProviderTitle">
+            <div class="oauth-provider-head">
+              <div>
+                <strong id="oauthProviderTitle">LLM OAuth 연결 상태</strong>
+                <p id="oauthProviderSummary">공식 CLI 설치·로그인 상태를 확인합니다.</p>
+              </div>
+              <div class="oauth-provider-actions">
+                <button id="refreshOauthProviders" type="button">상태 새로고침</button>
+                <button id="testOauthProvider" type="button">선택 Provider 테스트</button>
+              </div>
+            </div>
+            <div id="oauthProviderCards" class="oauth-provider-cards"></div>
+            <p class="oauth-provider-command-label">Ubuntu에서 같은 서비스 사용자로 실행할 로그인 명령</p>
+            <code id="oauthLoginCommand" class="oauth-login-command">AI Provider를 선택하세요.</code>
+          </section>
+          <section class="assistant-personality-panel" aria-labelledby="assistantPersonalityTitle">
+            <div>
+              <strong id="assistantPersonalityTitle">초안 작성 성격</strong>
+              <p>역할·말투·도입부는 이 서버에만 저장되며, 초안은 자동 발송되지 않습니다.</p>
+            </div>
+            <label>역할<input id="assistantRole" type="text" maxlength="120" placeholder="예: 기술 엔지니어" /></label>
+            <label>말투<input id="assistantTone" type="text" maxlength="120" placeholder="예: 간결하고 전문적인 기업 메일" /></label>
+            <label>도입부<input id="assistantOpening" type="text" maxlength="120" placeholder="예: 안녕하세요, 기술지원팀입니다." /></label>
+            <div class="config-actions">
+              <button id="saveAssistantPersonality" type="button">초안 성격 저장</button>
+              <span id="assistantPersonalityStatus" class="form-status">로컬 설정</span>
+            </div>
+          </section>
           <label>
             업무 도메인 프로필
             <select id="domainProfile" name="domainProfile">

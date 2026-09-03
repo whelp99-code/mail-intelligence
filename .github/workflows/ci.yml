@@ -30,7 +30,7 @@ jobs:
       - name: Syntax check
         run: npm run check
 
-      - name: Verify v1.2.0 precision-intelligence safety contract
+      - name: Verify v1.2.2 OAuth-provider safety contract
         run: npm run verify:safety
 
       - name: Unit and integration tests

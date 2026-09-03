@@ -1,9 +1,9 @@
-# ChatGPT Work 전달 지시서 — Mail Intelligence v1.2.0
+# ChatGPT Work 전달 지시서 — Mail Intelligence v1.2.1
 
 - 프로젝트 ID: `mail-intelligence`
 - 프로젝트 경로: `/home/jm/orca/projects/mail-intelligence`
 - 기준 브랜치: `main`
-- 현재 제품 버전: `1.2.0`
+- 현재 제품 버전: `1.2.1`
 - 구현 릴리스 Commit: `7946344`
 - Worker name: `mailintelligence`
 - 운영 서버: Ubuntu `jm-acloud`
@@ -20,9 +20,9 @@ ChatGPT Work는 추측이나 이전 채팅 요약만으로 작업하지 말고, 
 ```text
 1. Chatgpt2codex-Ubuntu를 사용한다.
 2. projectId=mail-intelligence, preset=full-write, workerName=mailintelligence로 프로젝트를 선택한다.
-3. AGENTS.md, README.md, package.json, docs/planning/V1.2.0-PRECISION-CLASSIFICATION-PLAN.md를 읽는다.
+3. AGENTS.md, README.md, package.json, docs/planning/V1.2.0-PRECISION-CLASSIFICATION-PLAN.md, docs/planning/V1.2.1-OAUTH-LLM-PROVIDERS.md를 읽는다.
 4. git status, git log -1, git remote -v, systemd 서비스 상태를 확인한다.
-5. 변경 전 npm run verify:v1.2.0을 실행한다.
+5. 변경 전 npm run verify:v1.2.1을 실행한다.
 6. 실패가 있으면 신규 기능을 추가하지 말고 먼저 기준선을 복구한다.
 7. 작업 후 동일 검증, 실서비스 검증, git diff --check를 다시 통과시킨다.
 ```
@@ -303,7 +303,7 @@ bash scripts/activate-tailnet-proxy.sh
 배포 후 반드시 실행한다.
 
 ```bash
-npm run verify:v1.2.0
+npm run verify:v1.2.1
 MAIL_INTELLIGENCE_BASE_URL=http://127.0.0.1:3010 node scripts/verify-live-deployment.mjs
 node scripts/verify-live-restart.mjs
 npm run verify:tailnet
@@ -328,7 +328,7 @@ git rev-list --left-right --count origin/main...HEAD
 커밋 전:
 
 ```bash
-npm run verify:v1.2.0
+npm run verify:v1.2.1
 git diff --check
 git status --short
 ```
@@ -410,7 +410,7 @@ SQLite와 별도 JSON을 동시에 authoritative storage로 사용
 
 ```text
 [ ] 계획·요구사항과 구현 추적 가능
-[ ] npm run verify:v1.2.0 PASS
+[ ] npm run verify:v1.2.1 PASS
 [ ] 전체 node:test PASS
 [ ] precision evaluation PASS
 [ ] ESLint·HTMLHint·Stylelint PASS
@@ -449,3 +449,45 @@ ChatGPT Work는 작업 종료 시 다음 순서로 보고한다.
 ```
 
 보고에는 Access Key, Cookie, Token, Client Secret, API Key를 절대 포함하지 않는다.
+
+---
+
+## 14. v1.2.1 OAuth LLM Provider 추가 계약
+
+현재 지원 Provider는 다음 세 개뿐이다.
+
+```text
+rules
+openai-codex-oauth
+xai-grok-oauth
+```
+
+`f-aios-v3`, `lmstudio`, `gemini`를 다시 UI·설정·실행 경로에 넣지 않는다.
+
+인증 원칙:
+
+```text
+Codex CLI owns ChatGPT OAuth credentials
+Grok CLI owns xAI OAuth credentials
+Mail Intelligence stores no LLM OAuth token
+```
+
+확인 명령:
+
+```bash
+npm run oauth:status
+npm run oauth:instructions
+```
+
+운영 게이트는 공식 CLI가 OAuth 인증된 경우에만 다음으로 활성화한다.
+
+```bash
+npm run oauth:enable -- openai-codex-oauth
+npm run oauth:enable -- xai-grok-oauth
+```
+
+외부 AI 게이트가 켜져도 UI에서 해당 Provider를 선택하고 메일 데이터 외부 전송 정책에 동의하기 전에는 메일 본문을 전송하지 않는다.
+
+분석 실행은 반드시 빈 임시 디렉터리, 읽기 전용 또는 도구 비활성, 사용자·프로젝트 지침 무시, 무승인, 제한된 출력·시간, JSON Schema, 원문 Evidence 검증을 유지한다. 실패 시 다른 OAuth Provider가 아니라 Rules로만 내려간다.
+
+ChatGPT Work는 OAuth credential 파일을 직접 열거나 복사하거나 출력하지 않는다. 브라우저 Cookie·ChatGPT 웹 세션·Grok 웹 세션을 재사용하는 코드도 만들지 않는다.

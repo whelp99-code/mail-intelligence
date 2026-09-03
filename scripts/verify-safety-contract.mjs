@@ -20,11 +20,11 @@ async function fileExists(path) {
 
 const policy = getSafetyPolicy();
 assert.equal(policy.mode, 'read-only');
-assert.equal(policy.policyVersion, 'read-only-v1.2.0');
+assert.equal(policy.policyVersion, 'read-only-v1.2.2');
 assert.ok(Object.keys(policy.capabilities).length > 0, 'safety capabilities must be explicit');
 assert.ok(
   Object.values(policy.capabilities).every((value) => value === false),
-  'every v1.2.0 mutation capability must remain disabled',
+  'every v1.2.2 mutation capability must remain disabled',
 );
 
 const delegatedScopes = delegatedScopesForSafety().split(/\s+/).filter(Boolean);
@@ -42,6 +42,8 @@ const [
   serverSource,
   appSource,
   indexSource,
+  oauthProviderSource,
+  mainUnitSource,
   proxySource,
   proxyUnitSource,
   ciSource,
@@ -53,6 +55,8 @@ const [
   readFile('server.mjs', 'utf8'),
   readFile('src/app.js', 'utf8'),
   readFile('src/index.html', 'utf8'),
+  readFile('src/ai/oauth-cli-provider.js', 'utf8'),
+  readFile('deploy/systemd/mail-intelligence.service', 'utf8'),
   readFile('src/security/tcp-allowlist-proxy.js', 'utf8'),
   readFile('deploy/systemd/mail-intelligence-tailnet.service', 'utf8'),
   readFile('.github/workflows/ci.yml', 'utf8'),
@@ -63,8 +67,8 @@ const [
 ]);
 const packageJson = JSON.parse(packageSource);
 const configExample = JSON.parse(configExampleSource);
-assert.equal(packageJson.version, '1.2.0');
-assert.match(packageJson.scripts['verify:v1.2.0'], /verify:safety/);
+assert.equal(packageJson.version, '1.2.2');
+assert.match(packageJson.scripts['verify:v1.2.2'], /verify:safety/);
 assert.match(packageJson.scripts.check, /persistent-mail-memory\.js/);
 assert.match(packageJson.scripts.check, /precision-intelligence\.js/);
 assert.match(packageJson.scripts.check, /precision-classifier\.js/);
@@ -72,7 +76,10 @@ assert.match(packageJson.scripts.check, /intelligent-search\.js/);
 assert.match(packageJson.scripts.check, /evaluate-precision-classification\.mjs/);
 assert.match(packageJson.scripts.check, /tcp-allowlist-proxy\.js/);
 assert.match(packageJson.scripts.check, /verify-tailnet-exposure\.mjs/);
-assert.match(packageJson.scripts['verify:v1.2.0'], /evaluate:precision/);
+assert.match(packageJson.scripts.check, /oauth-cli-provider\.js/);
+assert.match(packageJson.scripts.check, /oauth-provider-admin\.mjs/);
+assert.match(packageJson.scripts['verify:v1.2.2'], /evaluate:precision/);
+assert.match(packageJson.scripts['verify:v1.2.2'], /verify:oauth/);
 assert.match(packageJson.scripts.check, /backup-restore\.js/);
 
 assert.equal(serverSource.includes('/sendMail'), false, 'Graph sendMail implementation must not exist');
@@ -92,9 +99,19 @@ assert.match(serverSource, /\/api\/intelligence\/search/);
 assert.match(serverSource, /\/api\/intelligence\/correct/);
 assert.match(serverSource, /\/api\/intelligence\/projects/);
 assert.match(serverSource, /PRECISION_CLASSIFICATION_VERSION/);
+assert.match(serverSource, /\/api\/ai\/oauth\/status/);
+assert.match(serverSource, /\/api\/ai\/oauth\/instructions/);
+assert.match(serverSource, /\/api\/ai\/oauth\/test/);
+assert.match(serverSource, /openai-codex-oauth/);
+assert.match(serverSource, /xai-grok-oauth/);
 assert.match(serverSource, /MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS/);
 assert.match(serverSource, /parseTailnetAllowedHosts/);
 assert.equal(configExample.aiProvider, 'rules');
+assert.equal(configExample.openaiCodexModel, '');
+assert.equal(configExample.xaiGrokModel, 'grok-4.6');
+for (const legacyKey of ['geminiModel', 'faiosServerUrl', 'lmstudioServerUrl', 'lmstudioModel']) {
+  assert.equal(Object.hasOwn(configExample, legacyKey), false, `legacy AI key must be absent: ${legacyKey}`);
+}
 for (const secretKey of ['accessToken', 'refreshToken', 'clientSecret', 'geminiApiKey', 'expiresAt']) {
   assert.equal(Object.hasOwn(configExample, secretKey), false, `secret key must not be present in config example: ${secretKey}`);
 }
@@ -108,13 +125,30 @@ assert.match(
   'authenticated deployments must send the additional local mutation-protection header',
 );
 assert.match(indexSource, /id="aiDataPolicyAccepted"/);
-assert.match(indexSource, /Google API로 전송/);
-assert.match(indexSource, /v1\.2\.0 · Precision Intelligence/);
+assert.match(indexSource, /공식 OpenAI 또는 xAI 서비스로 전송/);
+assert.match(indexSource, /v1\.2\.2 · Operational Classification/);
 assert.match(indexSource, /id="precisionIntelligence"/);
 assert.match(indexSource, /프로젝트는 자동 생성하지 않습니다/);
-assert.match(appSource, /aiDataPolicyAccepted:\s*aiProvider\.value === 'gemini'/);
+assert.match(appSource, /aiDataPolicyAccepted:\s*aiProvider\.value !== 'rules'/);
+assert.match(appSource, /\/api\/ai\/oauth\/status/);
+assert.match(appSource, /\/api\/ai\/oauth\/test/);
 assert.match(appSource, /\/api\/intelligence\/search/);
 assert.match(appSource, /\/api\/intelligence\/correct/);
+assert.doesNotMatch(indexSource, /F-AIOS|LM Studio|Gemini API Key/);
+
+assert.match(oauthProviderSource, /codex login --device-auth/);
+assert.match(oauthProviderSource, /grok login --device-auth/);
+assert.match(oauthProviderSource, /--ignore-user-config/);
+assert.match(oauthProviderSource, /--sandbox/);
+assert.match(oauthProviderSource, /read-only/);
+assert.match(oauthProviderSource, /GROK_DISALLOWED_TOOLS/);
+assert.match(oauthProviderSource, /delete result\.OPENAI_API_KEY/);
+assert.match(oauthProviderSource, /delete result\.XAI_API_KEY/);
+assert.doesNotMatch(oauthProviderSource, /readFile\([^)]*(?:auth|credential|token)/i);
+
+assert.match(mainUnitSource, /Environment=HOME=\/home\/jm/);
+assert.match(mainUnitSource, /\.codex/);
+assert.match(mainUnitSource, /\.grok/);
 
 assert.match(proxySource, /Proxy bind host must be one explicit non-loopback IPv4 address/);
 assert.match(proxySource, /Proxy target host must remain on IPv4 loopback/);
@@ -135,7 +169,7 @@ assert.equal(/^\s*push:/m.test(releaseSource), false, 'release packaging must no
 assert.match(releaseSource, /NODE_VERSION:\s*['"]22['"]/);
 assert.match(releaseSource, /migrations deploy \.github/);
 assert.match(releaseSource, /tar -xzf/);
-assert.match(releaseSource, /npm run verify:v1\.2\.0/);
+assert.match(releaseSource, /npm run verify:v1\.2\.2/);
 for (const pattern of ['mail-intelligence.sqlite', '*.sqlite-wal', '*.sqlite-shm', '/data/', '/backups/']) {
   assert.ok(gitignoreSource.includes(pattern), `runtime storage ignore rule missing: ${pattern}`);
 }
@@ -148,4 +182,4 @@ for (const duplicateRootFile of ['app.js', 'index.html', 'styles.css', 'architec
   assert.equal(await fileExists(duplicateRootFile), false, `${duplicateRootFile} must not duplicate src/ assets`);
 }
 
-console.log('[verify-safety-contract] PASS read-only-v1.2.0');
+console.log('[verify-safety-contract] PASS read-only-v1.2.2');

@@ -11,7 +11,7 @@ const healthResponse = await fetch(`${baseUrl}/api/health`, { cache: 'no-store' 
 const health = await healthResponse.json();
 assert.equal(healthResponse.status, 200);
 assert.equal(health.ok, true);
-assert.equal(health.version, '1.2.0');
+assert.equal(health.version, '1.2.2');
 
 const root = await fetch(`${baseUrl}/`, { headers: { Authorization: authorization } });
 assert.equal(root.status, 200);

@@ -1,5 +1,5 @@
 [Unit]
-Description=Mail Intelligence v1.2.0 tailnet-only TCP exposure
+Description=Mail Intelligence v1.2.2 tailnet-only TCP exposure
 Documentation=file:///home/jm/orca/projects/mail-intelligence/docs/runbooks/UBUNTU-DEPLOYMENT.md
 Wants=network-online.target mail-intelligence.service
 After=network-online.target mail-intelligence.service

@@ -1,4 +1,4 @@
-# Mail Intelligence v1.2.0 Ubuntu 배포·실사용 런북
+# Mail Intelligence v1.2.1 Ubuntu 배포·실사용 런북
 
 ## 배포 기준
 
@@ -26,7 +26,7 @@ bash scripts/activate-tailnet-proxy.sh
 
 1. 데이터·백업 디렉터리를 0700으로 생성한다.
 2. 접근키와 `data/runtime.env`를 0600으로 생성한다.
-3. `npm ci`와 `npm run verify:v1.2.0`을 통과시킨다.
+3. `npm ci`와 `npm run verify:v1.2.2`을 통과시킨다.
 4. 사용자 systemd unit을 링크하고 부팅 자동 시작을 활성화한다.
 5. `/api/health`가 성공할 때까지 확인한다.
 6. Tailnet 프록시는 정확한 Tailscale IPv4 하나에만 바인딩한다.
@@ -80,6 +80,45 @@ Basic 인증:
 ```bash
 cat /home/jm/orca/projects/mail-intelligence/data/.mail-intelligence-access-key
 ```
+
+## OAuth LLM Provider 운영
+
+v1.2.1은 LM Studio·F-AIOS·Gemini 설정을 사용하지 않는다. 공식 CLI OAuth만 허용한다.
+
+```bash
+# 설치·인증 상태
+npm run oauth:status
+
+# 로그인 안내
+npm run oauth:instructions
+
+# OpenAI ChatGPT OAuth
+codex login --device-auth
+
+# xAI Grok OAuth
+grok login --device-auth
+```
+
+OAuth credential은 각 공식 CLI의 사용자 전용 cache에 저장되며 Mail Intelligence SQLite나 설정 파일로 복사하지 않는다.
+
+운영 서비스에서 외부 AI 게이트를 명시적으로 여는 절차:
+
+```bash
+npm run oauth:enable -- openai-codex-oauth
+# 또는
+npm run oauth:enable -- xai-grok-oauth
+```
+
+이 명령은 CLI 설치와 OAuth 인증을 먼저 검증하고 `MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=1`만 활성화한다. 실제 메일 전송에는 UI의 Provider 선택과 데이터 정책 동의가 추가로 필요하다. 메일 발송·읽음 변경·Data Plane 쓰기는 계속 비활성이다.
+
+실메일이 아닌 합성 연결 테스트:
+
+```bash
+MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=1 \
+  node scripts/oauth-provider-admin.mjs test openai-codex-oauth gpt-5.6
+```
+
+실제 OAuth CLI 네트워크 호출은 운영 변경창 또는 사용자의 명시적 네트워크 승인 후에만 실행한다.
 
 ## Outlook 실사용 연결
 

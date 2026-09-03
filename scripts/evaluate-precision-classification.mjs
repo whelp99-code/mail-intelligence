@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { classifyMessage } from '../src/domain/precision-classifier.js';
+import { classifyMessage, PRECISION_CLASSIFICATION_VERSION } from '../src/domain/precision-classifier.js';
 
 const fixtureUrl = new URL('../test/fixtures/precision-evaluation.json', import.meta.url);
 const fixtures = JSON.parse(await readFile(fixtureUrl, 'utf8'));
@@ -49,7 +49,8 @@ const fields = Object.fromEntries([...fieldTotals].map(([field, total]) => {
 const totalAssertions = [...fieldTotals.values()].reduce((sum, value) => sum + value, 0);
 const passedAssertions = [...fieldPasses.values()].reduce((sum, value) => sum + value, 0);
 const summary = {
-  evaluation: 'precision-classification-v1.2.0',
+  evaluation: 'precision-classification-fixture-v1',
+  classifierVersion: PRECISION_CLASSIFICATION_VERSION,
   fixtures: fixtures.length,
   assertions: totalAssertions,
   passed: passedAssertions,

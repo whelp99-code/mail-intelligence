@@ -290,3 +290,74 @@ test('VACUUM INTO backup is independently readable and integrity-checked', async
     backup.close();
   }
 });
+
+
+test('message reads preserve folder direction and lifecycle metadata', async (t) => {
+  const { store } = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'jm@example.com', address: 'jm@example.com' });
+  const sent = store.ensureFolder({
+    mailboxId: mailbox.id,
+    graphId: 'sent-folder-id',
+    wellKnownName: 'sentitems',
+    displayName: '사용자 발신 보관함',
+  });
+  const deleted = store.ensureFolder({
+    mailboxId: mailbox.id,
+    graphId: 'deleted-folder-id',
+    wellKnownName: 'deleteditems',
+    displayName: '사용자 삭제 보관함',
+  });
+  const junk = store.ensureFolder({
+    mailboxId: mailbox.id,
+    graphId: 'junk-folder-id',
+    wellKnownName: 'junkemail',
+    displayName: '사용자 정크 보관함',
+  });
+  store.upsertNormalizedMessage({
+    mailboxId: mailbox.id,
+    folderId: sent.id,
+    message: normalizeGraphMessage(graphMessage({
+      id: 'sent-message-1',
+      parentFolderId: 'sent-folder-id',
+      subject: '견적 요청',
+      bodyPreview: '견적서를 보내주세요.',
+      body: { contentType: 'text', content: '견적서를 보내주세요.' },
+    })),
+  });
+  store.upsertNormalizedMessage({
+    mailboxId: mailbox.id,
+    folderId: deleted.id,
+    message: normalizeGraphMessage(graphMessage({
+      id: 'deleted-message-1',
+      parentFolderId: 'deleted-folder-id',
+      subject: '삭제된 요청',
+      bodyPreview: '내일까지 보내주세요.',
+      body: { contentType: 'text', content: '내일까지 보내주세요.' },
+    })),
+  });
+  store.upsertNormalizedMessage({
+    mailboxId: mailbox.id,
+    folderId: junk.id,
+    message: normalizeGraphMessage(graphMessage({
+      id: 'junk-message-1',
+      parentFolderId: 'junk-folder-id',
+      subject: '정크 요청',
+      bodyPreview: '긴급 회신 부탁드립니다.',
+      body: { contentType: 'text', content: '긴급 회신 부탁드립니다.' },
+    })),
+  });
+
+  const direct = store.getMessage(mailbox.id, 'sent-message-1');
+  assert.equal(direct.folderName, '사용자 발신 보관함');
+  assert.equal(direct.isOutgoing, true);
+  assert.equal(direct.isDraftFolder, false);
+  assert.equal(store.getMessage(mailbox.id, 'deleted-message-1').isDeletedFolder, true);
+  assert.equal(store.getMessage(mailbox.id, 'junk-message-1').isJunkFolder, true);
+
+  const recent = store.getRecentMessages(mailbox.id, { limit: 10 });
+  assert.equal(recent.find((item) => item.id === 'sent-message-1')?.isOutgoing, true);
+  assert.equal(
+    store.getMessagePage(mailbox.id, { limit: 10 }).find((item) => item.id === 'sent-message-1')?.folderName,
+    '사용자 발신 보관함',
+  );
+});

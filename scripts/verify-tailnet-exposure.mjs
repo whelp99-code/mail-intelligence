@@ -39,7 +39,7 @@ const baseUrl = `http://${bindHost}:${bindPort}`;
 const health = await jsonResponse(baseUrl, '/api/health');
 assert.equal(health.response.status, 200);
 assert.equal(health.body.ok, true);
-assert.equal(health.body.version, '1.2.0');
+assert.equal(health.body.version, '1.2.2');
 assert.equal(health.body.listenHost, '127.0.0.1');
 assert.equal(health.body.safety?.mode, 'read-only');
 assert.equal(health.body.externalActionsAllowed, false);
@@ -59,7 +59,7 @@ const authenticatedRoot = await fetch(`${baseUrl}/`, {
 });
 assert.equal(authenticatedRoot.status, 200);
 const html = await authenticatedRoot.text();
-assert.match(html, /v1\.2\.0 · Precision Intelligence/);
+assert.match(html, /v1\.2\.2 · Operational Classification/);
 const cookie = (authenticatedRoot.headers.get('set-cookie') || '').split(';')[0];
 assert.match(cookie, /^mi_session=/);
 

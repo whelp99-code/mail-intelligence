@@ -57,9 +57,11 @@ export class PrecisionIntelligenceService {
       : messageOrId;
     if (!message?.id) throw new Error('Precision classification requires a stored message.');
     const projects = this.store.listProjects(mailbox.id);
+    const mailboxAddresses = this.store.getMailboxSenderAliases(mailbox.id);
     const automatic = classifyMessage(message, {
       projects,
       mailboxAddress: mailbox.address || mailboxUser,
+      mailboxAddresses,
       now: options.now || this.now(),
       source: options.source || 'rules',
       provider: options.provider || 'rules',
@@ -125,11 +127,16 @@ export class PrecisionIntelligenceService {
       if (messages.length < remaining) break;
     }
 
+    const walCheckpoint = typeof this.store.checkpointWal === 'function'
+      ? this.store.checkpointWal('TRUNCATE')
+      : null;
+
     return {
       processed,
       changed,
       reviewRequired,
       truncated: processed >= safeMax,
+      walCheckpoint,
     };
   }
 

@@ -1,4 +1,4 @@
-export const AI_PROMPT_VERSION = 'mail-intelligence-email-analysis-v1.0.1';
+export const AI_PROMPT_VERSION = 'mail-intelligence-v1.2.2-oauth-prompt-1';
 
 // Compatibility name used by the server and persisted analysis records.
 // Keep it tied to the prompt contract so cache entries are invalidated when
@@ -182,10 +182,8 @@ export function analysisIdentity(provider, model) {
 export function providerModel(provider, config = {}) {
   const selected = String(provider || 'rules').trim().toLowerCase();
   if (selected === 'rules') return 'rules';
-  if (selected === 'gemini') return text(config.geminiModel, 200) || 'gemini-2.5-flash';
-  if (selected === 'lmstudio' || selected === 'f-aios-v3') {
-    return text(config.lmstudioModel, 200) || 'qwen/qwen3.5-9b';
-  }
+  if (selected === 'openai-codex-oauth') return text(config.openaiCodexModel, 200) || '';
+  if (selected === 'xai-grok-oauth') return text(config.xaiGrokModel, 200) || 'grok-4.6';
   return 'unknown';
 }
 
@@ -247,6 +245,29 @@ export function failedAiRun(error, {
   };
 }
 
+export function policyBlockedAiRun(error, {
+  provider = 'unknown',
+  model = 'unknown',
+} = {}) {
+  const code = text(error?.code, 160) || 'EXTERNAL_AI_DISABLED';
+  return {
+    enabled: false,
+    status: 'policy_blocked',
+    provider: text(provider, 200) || 'unknown',
+    requestedProvider: text(provider, 200) || 'unknown',
+    model: text(model, 300) || 'unknown',
+    pipelineVersion: AI_PIPELINE_VERSION,
+    code,
+    error: null,
+    message: '외부 AI 분석이 운영 정책으로 비활성화되어 Rules 결과를 사용했습니다.',
+    userAction: '실제 모델 분석이 필요하면 운영자 승인과 데이터 정책 동의를 확인하세요.',
+    attempts: [],
+    fallbackFrom: null,
+    fallback: 'rules',
+    rulesUsed: true,
+  };
+}
+
 export async function executeAiProvider({
   requestedProvider,
   prompt,
@@ -257,35 +278,17 @@ export async function executeAiProvider({
   if (typeof callProvider !== 'function') throw new Error('callProvider is required.');
   if (typeof getModelName !== 'function') throw new Error('getModelName is required.');
   const requested = String(requestedProvider || '').trim();
-  if (!['f-aios-v3', 'lmstudio', 'gemini'].includes(requested)) {
+  if (!['openai-codex-oauth', 'xai-grok-oauth'].includes(requested)) {
     throw new Error(`Unsupported AI provider: ${requested || '(empty)'}.`);
   }
 
-  let actualProvider = requested;
-  let fallbackFrom = null;
-  let raw;
-  try {
-    raw = await callProvider(requested, prompt);
-  } catch (error) {
-    if (requested !== 'f-aios-v3') throw error;
-    actualProvider = 'lmstudio';
-    fallbackFrom = requested;
-    try {
-      raw = await callProvider(actualProvider, prompt);
-    } catch (fallbackError) {
-      throw new Error(
-        `AI analysis failed for ${requested}: ${error instanceof Error ? error.message : String(error)}. ` +
-        `LM Studio fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
-      );
-    }
-  }
-
+  const raw = await callProvider(requested, prompt);
   const payload = parseAndValidateAiResponse(raw, allowedMessageIds);
   return {
     payload,
     requestedProvider: requested,
-    actualProvider,
-    fallbackFrom,
-    model: getModelName(actualProvider),
+    actualProvider: requested,
+    fallbackFrom: null,
+    model: getModelName(requested),
   };
 }

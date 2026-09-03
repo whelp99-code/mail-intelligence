@@ -35,7 +35,7 @@ jobs:
 
       - name: Run release gates
         run: |
-          npm run verify:v1.2.0
+          npm run verify:v1.2.2
 
       - name: Create verified artifact
         run: |
@@ -43,13 +43,13 @@ jobs:
           COMMIT_SHA="${{ github.sha }}"
           ARTIFACT_NAME="${APP_NAME}-${COMMIT_SHA:0:7}"
           mkdir -p dist
-          cp -r server.mjs src scripts test docs migrations deploy .github AGENTS.md README.md package.json package-lock.json dist/
+          cp -r server.mjs src scripts schemas test docs migrations deploy .github AGENTS.md README.md package.json package-lock.json dist/
           cp .gitignore .eslintrc.json .stylelintrc.json .htmlhintrc dist/
           cp .outlook-config.json.example dist/
           cat > dist/VERSION.json <<JSON
           {
             "name": "${APP_NAME}",
-            "version": "1.2.0",
+            "version": "1.2.2",
             "commit": "${COMMIT_SHA}",
             "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "releaseNote": ${{ toJSON(inputs.release_note) }},
@@ -66,7 +66,7 @@ jobs:
           (
             cd "$VERIFY_DIR"
             npm ci
-            npm run verify:v1.2.0
+            npm run verify:v1.2.2
           )
           rm -rf "$VERIFY_DIR"
 

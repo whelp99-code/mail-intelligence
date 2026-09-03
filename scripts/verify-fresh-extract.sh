@@ -21,5 +21,5 @@ git diff --cached --quiet || {
 git archive HEAD | tar -x -C "$VERIFY_DIR"
 cd "$VERIFY_DIR"
 npm ci --ignore-scripts --no-fund
-npm run verify:v1.2.0
+npm run verify:v1.2.2
 printf 'fresh-extract=PASS commit=%s\n' "$(git --git-dir="$ROOT/.git" rev-parse HEAD)"

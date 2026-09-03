@@ -1,0 +1,414 @@
+{
+  "version": "independent-ground-truth-v1",
+  "benchmarkId": "aside-round3-fixed-50",
+  "provenance": {
+    "source": "Aside independent QA Round 3 frozen benchmark",
+    "sourceArtifact": "mail-intelligence-v1.2.1-independent-qa-round-3-report.md",
+    "frozenLabels": true,
+    "emailContentIncluded": false,
+    "policy": "Labels are reused unchanged; message hashes and expected labels only."
+  },
+  "labels": [
+    {
+      "hash": "ac1a5ef3ce74",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "2775bea55ca1",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "803bd1ae772a",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "230e337bc197",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "7641666ccecf",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "9b1fe1ae8a91",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "c9e51bf10a51",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "6de5021b5781",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "81d710d75ed1",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "698f296689f3",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "f45c33efbf74",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "316cc6c4d94d",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "5c0944468460",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "16d43cf83d6d",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "ba2c7f4fe5e1",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "84d947364571",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "79816295ba08",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "2c2175c18cc7",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "52fb09f372c8",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "high",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "00d4793b4343",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "7e8ace136900",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "high",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "375b6fc0be1d",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "26ebcff0f70d",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "06015a7aafe0",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "high",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "b38d296156d9",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "c6e7658d4178",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "1046a18511c9",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "fd93494af208",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "4ec67ab746e9",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "f874c2157f1d",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "429a39237e0c",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "6635fef32167",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "7423cac7bf95",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "high",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "f3c71e0cb666",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "high",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "70862ff92470",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "c8b19e7c2acd",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "c987a93d38ec",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "d2fce5157008",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "7c89622c3373",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "6606847922ec",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "1205b45c5932",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "02b620a4b229",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "684658df5fd1",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "5e56b8720138",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "25caf4cbcf7a",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "7d84e8bc54c0",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "1786692dd7b4",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "bf1dc6939879",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    },
+    {
+      "hash": "a9f4fb733721",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "a6217ade4532",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": false
+    }
+  ],
+  "evaluationNow": "2026-08-31T03:00:00.000Z"
+}

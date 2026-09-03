@@ -1,0 +1,419 @@
+{
+  "version": "independent-ground-truth-v1",
+  "benchmarkId": "qa-fix6-blind-17d3efcdb1a2",
+  "evaluationNow": "2026-08-31T11:34:30.312Z",
+  "provenance": {
+    "source": "Aside independent QA qa-fix5 blind holdout",
+    "sourceArtifact": "mail-intelligence-v1.2.1-independent-qa-fix5-report.md",
+    "frozenLabels": true,
+    "emailContentIncluded": false,
+    "reviewerNotesIncluded": false,
+    "sourceLabelSha256": "7faa64bb16007dacb2c30b5391c91ef310560c68c8ed2b04be632fb95a6b5360",
+    "policy": "Frozen labels are reused unchanged as a known regression benchmark; hashes and expected labels only."
+  },
+  "labels": [
+    {
+      "hash": "ef33a10e8b13",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "e7fec984e778",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "4099dd3ee068",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "f2245753248e",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "a5de87c435c3",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "04b29b4ce0b1",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "high",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "1d36669bd520",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "8ca52299072a",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": true
+    },
+    {
+      "hash": "532561405806",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "5f4267a2a9eb",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "bec8ab2caaa0",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "cb9cc93f1823",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "0e4dcbdc81e9",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": true
+    },
+    {
+      "hash": "7acd6d4062a5",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "721b8f20c41b",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "0a6d2da7f8be",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "18dee897858a",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "dad3013717bc",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "af7c315fda6b",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "390b54639797",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "17177894c773",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "79739e676c03",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "a9012bd15fcf",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "18559b311713",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": true
+    },
+    {
+      "hash": "50b199aeb0dd",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "2727fdaa5467",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "c78455f75dfb",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "f71cb690c9a5",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "c6b3c85a7410",
+      "workState": "waiting",
+      "nextActor": "external_party",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "50d6ea4ae3f7",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "bc801d4feb3c",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "1a56a4a1ae92",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "e2575e08b6e4",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "1565c2e6db9a",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": true
+    },
+    {
+      "hash": "dd658691b1df",
+      "workState": "review_required",
+      "nextActor": "unknown",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "84e3ce4ed96a",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "547d72248c6d",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "a79a8dffdb89",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "7a8a73e9e075",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "f195f09c02c7",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "3c90b2b47a79",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "9129c66cbe53",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "2d1b0759ccca",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "4b5078025118",
+      "workState": "action_required",
+      "nextActor": "me",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "65a249fb5a1b",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "e47c3681ed5a",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": true
+    },
+    {
+      "hash": "0ea49ab36ad4",
+      "workState": "completed",
+      "nextActor": "none",
+      "priority": "normal",
+      "reference": false,
+      "important": true
+    },
+    {
+      "hash": "31ab1c78292d",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": true
+    },
+    {
+      "hash": "aa2252d86e09",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    },
+    {
+      "hash": "22345cf9d5c8",
+      "workState": "reference",
+      "nextActor": "none",
+      "priority": "low",
+      "reference": true,
+      "important": false
+    }
+  ],
+  "frozenAt": "2026-08-31T23:34:55.714Z",
+  "reviewer": "aside-independent-qafix6",
+  "sourceLabelSha256": "743dc9c7d90a82beab3cefc82a60e3367ef0701d0e5ee4b9567d0c38c03738f4"
+}

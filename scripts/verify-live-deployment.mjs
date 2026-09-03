@@ -22,7 +22,9 @@ async function jsonResponse(path, options = {}) {
 const health = await jsonResponse('/api/health');
 assert.equal(health.response.status, 200);
 assert.equal(health.body.ok, true);
-assert.equal(health.body.version, '1.2.0');
+assert.equal(health.body.version, '1.2.2');
+assert.equal(health.body.precisionClassificationVersion, 'precision-classification-v1.2.2-fix9');
+assert.equal(health.body.intelligentSearchVersion, 'intelligent-search-v1.2.2');
 assert.equal(health.body.listenHost, '127.0.0.1');
 assert.equal(health.body.safety?.mode, 'read-only');
 assert.equal(health.body.externalActionsAllowed, false);
@@ -44,7 +46,7 @@ const authenticatedRoot = await fetch(`${baseUrl}/`, {
 });
 assert.equal(authenticatedRoot.status, 200);
 const html = await authenticatedRoot.text();
-assert.match(html, /v1\.2\.0 · Precision Intelligence/);
+assert.match(html, /v1\.2\.2 · Operational Classification/);
 assert.match(html, /프로젝트는 자동 생성하지 않습니다/);
 const cookie = (authenticatedRoot.headers.get('set-cookie') || '').split(';')[0];
 assert.match(cookie, /^mi_session=/);
@@ -78,16 +80,31 @@ assert.equal(config.response.status, 200);
 const configSave = await jsonResponse('/api/outlook/config', {
   method: 'POST',
   headers: mutationHeaders,
-  body: JSON.stringify({ aiProvider: 'rules', persist: false }),
+  body: JSON.stringify({
+    aiProvider: config.body.aiProvider || 'rules',
+    openaiCodexModel: config.body.openaiCodexModel || 'luna',
+    xaiGrokModel: config.body.xaiGrokModel || 'grok-4.6',
+    aiDataPolicyAccepted: config.body.aiProvider !== 'rules' && config.body.aiOptedIn === true,
+    persist: false,
+  }),
 });
 assert.equal(configSave.response.status, 200, JSON.stringify(configSave.body));
-assert.equal(configSave.body.aiProvider, 'rules');
+assert.equal(configSave.body.aiProvider, config.body.aiProvider || 'rules');
 
 const storage = await jsonResponse('/api/storage/status', { headers: readHeaders });
 assert.equal(storage.response.status, 200);
 assert.equal(storage.body.authoritativeStore, 'sqlite');
 assert.equal(storage.body.schemaVersion, 4);
 assert.equal(storage.body.ready, true);
+
+const oauthProviders = await jsonResponse('/api/ai/oauth/status', { headers: readHeaders });
+assert.equal(oauthProviders.response.status, 200, JSON.stringify(oauthProviders.body));
+assert.equal(oauthProviders.body.providerVersion, 'oauth-cli-provider-v1.2.2');
+assert.ok(Array.isArray(oauthProviders.body.providers));
+assert.ok(oauthProviders.body.providers.some((provider) => provider.provider === 'openai-codex-oauth'));
+assert.ok(oauthProviders.body.providers.some((provider) => provider.provider === 'xai-grok-oauth'));
+assert.equal(JSON.stringify(oauthProviders.body).includes('access_token'), false);
+assert.equal(JSON.stringify(oauthProviders.body).includes('refresh_token'), false);
 
 const classificationRun = await jsonResponse('/api/intelligence/classify', {
   method: 'POST',
@@ -154,6 +171,8 @@ console.log(JSON.stringify({
   deployment: 'PASS',
   baseUrl,
   version: health.body.version,
+  precisionClassificationVersion: health.body.precisionClassificationVersion,
+  intelligentSearchVersion: health.body.intelligentSearchVersion,
   service: health.body.service,
   listenHost: health.body.listenHost,
   safetyMode: health.body.safety.mode,
@@ -178,6 +197,14 @@ console.log(JSON.stringify({
     smartViews: smartViews.body.views.length,
     intelligentSearchResults: search.body.results.length,
   },
+  oauthProviders: oauthProviders.body.providers.map((provider) => ({
+    provider: provider.provider,
+    installed: provider.installed,
+    authenticated: provider.authenticated,
+    authMode: provider.authMode,
+    version: provider.version,
+  })),
+  externalAiEnabled: oauthProviders.body.externalAiEnabled,
   outlookConfigured: Boolean(outlookStatus.body.connected),
   offlineAnalyzeMessages: analyze.body.messages.length,
   offlineSyncMessages: sync.body.messages.length,

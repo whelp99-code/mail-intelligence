@@ -2,16 +2,47 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const port = 34_000 + (process.pid % 1_000);
-const baseUrl = `http://127.0.0.1:${port}`;
+let port;
+let baseUrl;
 const accessKey = 'integration-access-key-0123456789abcdef';
 let server;
 let output = '';
 let dataDir;
+
+async function availablePort() {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.unref();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const selectedPort = typeof address === 'object' && address ? address.port : 0;
+      probe.close((error) => {
+        if (error) reject(error);
+        else resolve(selectedPort);
+      });
+    });
+  });
+}
+
+async function stopServer() {
+  if (!server || server.exitCode != null || server.signalCode != null) return;
+  const exited = new Promise((resolve) => server.once('exit', resolve));
+  server.kill('SIGTERM');
+  const graceful = await Promise.race([
+    exited.then(() => true),
+    delay(2_000).then(() => false),
+  ]);
+  if (!graceful && server.exitCode == null && server.signalCode == null) {
+    server.kill('SIGKILL');
+    await Promise.race([exited, delay(1_000)]);
+  }
+}
 
 async function waitForHealth() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -45,6 +76,8 @@ async function authenticatedCookie() {
 }
 
 test.before(async () => {
+  port = await availablePort();
+  baseUrl = `http://127.0.0.1:${port}`;
   dataDir = await mkdtemp(join(tmpdir(), 'mail-intelligence-test-'));
   server = spawn(process.execPath, ['server.mjs'], {
     cwd: process.cwd(),
@@ -67,8 +100,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  if (!server?.killed) server.kill('SIGTERM');
-  await delay(100);
+  await stopServer();
   if (dataDir) await rm(dataDir, { recursive: true, force: true });
 });
 
@@ -147,7 +179,7 @@ test('세션과 mutation header가 있어도 외부 행동 Kill Switch가 우선
   }
 });
 
-test('명시적 허용 없이 원격 AI 서비스 URL을 저장할 수 없다', async () => {
+test('레거시 로컬 AI provider 설정은 명시적으로 거부한다', async () => {
   const cookie = await authenticatedCookie();
   const response = await fetch(`${baseUrl}/api/outlook/config`, {
     method: 'POST',
@@ -157,7 +189,7 @@ test('명시적 허용 없이 원격 AI 서비스 URL을 저장할 수 없다', 
       'X-Mail-Intelligence-Request': '1'
     },
     body: JSON.stringify({
-      aiProvider: 'f-aios-v3',
+      aiProvider: 'rules',
       faiosServerUrl: 'http://example.com:3201',
       domainProfile: 'generic',
       persist: false
@@ -165,16 +197,15 @@ test('명시적 허용 없이 원격 AI 서비스 URL을 저장할 수 없다', 
   });
   const body = await json(response);
 
-  assert.equal(response.status, 403);
-  assert.equal(body.code, 'REMOTE_AI_SERVICE_DISABLED');
+  assert.equal(response.status, 400);
+  assert.equal(body.code, 'LEGACY_AI_PROVIDER_UNSUPPORTED');
 });
 
 test('민감 설정은 공개 설정 JSON에 평문으로 저장하지 않는다', async () => {
   const cookie = await authenticatedCookie();
   const sentinels = {
     accessToken: 'plain-access-token-sentinel',
-    clientSecret: 'plain-client-secret-sentinel',
-    geminiApiKey: 'plain-gemini-key-sentinel'
+    clientSecret: 'plain-client-secret-sentinel'
   };
   const response = await fetch(`${baseUrl}/api/outlook/config`, {
     method: 'POST',
@@ -187,7 +218,7 @@ test('민감 설정은 공개 설정 JSON에 평문으로 저장하지 않는다
       ...sentinels,
       tenantId: 'tenant-test',
       clientId: 'client-test',
-      aiProvider: 'f-aios-v3',
+      aiProvider: 'rules',
       domainProfile: 'generic',
       persist: true
     })

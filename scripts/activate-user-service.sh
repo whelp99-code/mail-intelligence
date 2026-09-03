@@ -7,6 +7,7 @@ DATA_DIR="$ROOT/data"
 BACKUP_DIR="$DATA_DIR/backups"
 ACCESS_KEY_FILE="$DATA_DIR/.mail-intelligence-access-key"
 RUNTIME_ENV="$DATA_DIR/runtime.env"
+PROXY_ENV="$DATA_DIR/tailnet-proxy.env"
 SERVICE_NAME="mail-intelligence.service"
 HEALTH_URL="http://127.0.0.1:3010/api/health"
 USER_RUNTIME_DIR="/run/user/$(id -u)"
@@ -27,6 +28,18 @@ if [[ ! "$ACCESS_KEY" =~ ^[A-Za-z0-9_-]{40,}$ ]]; then
   exit 1
 fi
 
+ALLOWED_PROXY_HOSTS=""
+if [[ -s "$PROXY_ENV" ]]; then
+  ALLOWED_PROXY_HOSTS="$(awk -F= '$1 == "MAIL_INTELLIGENCE_PROXY_BIND" { print $2; exit }' "$PROXY_ENV" | tr -d '[:space:]')"
+  if [[ -n "$ALLOWED_PROXY_HOSTS" ]]; then
+    MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS="$ALLOWED_PROXY_HOSTS" node --input-type=module - <<'NODE'
+import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
+const hosts = parseTailnetAllowedHosts(process.env.MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS || '');
+if (hosts.length !== 1) throw new Error('Exactly one persisted tailnet proxy host is required.');
+NODE
+  fi
+fi
+
 umask 077
 cat > "$RUNTIME_ENV.tmp" <<EOF
 NODE_ENV=production
@@ -40,6 +53,7 @@ MAIL_INTELLIGENCE_ALLOW_SEND=0
 MAIL_INTELLIGENCE_ALLOW_MAIL_MUTATIONS=0
 MAIL_INTELLIGENCE_ALLOW_DATA_PLANE=0
 MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=0
+MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS=$ALLOWED_PROXY_HOSTS
 EOF
 chmod 0600 "$RUNTIME_ENV.tmp"
 mv "$RUNTIME_ENV.tmp" "$RUNTIME_ENV"

@@ -11,10 +11,10 @@ import {
   UnsafeListenHostError
 } from '../src/safety.js';
 
-test('v1.2.0 safety policy is strictly read-only', () => {
+test('v1.2.2 safety policy is strictly read-only', () => {
   const policy = getSafetyPolicy();
   assert.equal(policy.mode, 'read-only');
-  assert.equal(policy.policyVersion, 'read-only-v1.2.0');
+  assert.equal(policy.policyVersion, 'read-only-v1.2.2');
   for (const [capability, enabled] of Object.entries(policy.capabilities)) {
     assert.equal(enabled, false, `${capability} must be disabled`);
   }

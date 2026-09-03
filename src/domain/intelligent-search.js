@@ -5,13 +5,13 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.0';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
 
 const STATE_PHRASES = [
   { value: 'action_required', pattern: /(?:내가|우리가|우리\s*쪽이)\s*(?:해야|처리|답장|회신|보내)|해야\s*할\s*(?:일|메일)|액션\s*필요|action\s*required|to\s*do/i },
-  { value: 'waiting', pattern: /(?:회신|답변|승인|자료|고객|상대방|외부|내부)\s*대기|기다리(?:는|고)|waiting|awaiting|pending/i },
+  { value: 'waiting', pattern: /(?:회신|답변|승인|자료|고객|상대방|외부|내부)\s*대기|대기\s*(?:중(?:인)?\s*)?(?:라이선스|라이센스|회신|답변|고객|외부)|기다리(?:는|고)|waiting|awaiting|pending/i },
   { value: 'decision_required', pattern: /결정\s*필요|승인\s*필요|판단\s*필요|결재\s*필요|decision\s*required|approval\s*required/i },
   { value: 'completed', pattern: /완료(?:된|한)?|종료(?:된|한)?|처리\s*완료|completed|done|closed/i },
   { value: 'reference', pattern: /참고(?:용)?|조치\s*불필요|회신\s*불필요|reference|no\s*action/i },
@@ -45,6 +45,15 @@ const SIGNAL_PHRASES = [
   { value: 'incident_security', pattern: /장애|보안|해킹|침해|악성|랜섬웨어|incident|outage|security|breach|malware/i },
 ];
 
+const PRESERVED_DOMAIN_TOKEN_PATTERN = /견적|발주|계약|세금계산서|주문서|라이선스|라이센스|장애|보안|해킹|침해|랜섬웨어|quotation|quote|contract|purchase|order|invoice|incident|outage|security|breach|malware/i;
+const INCIDENT_LEXICAL_EXPANSIONS = Object.freeze({
+  장애: ['장애', '오류', '중단', '접속불가', 'outage', 'incident'],
+  보안: ['보안', 'security', 'vpn', '침해', '해킹'],
+  security: ['security', '보안', 'vpn', 'breach', 'malware'],
+  incident: ['incident', '장애', '오류', 'outage'],
+  outage: ['outage', '장애', '중단', '접속불가'],
+});
+
 const DUE_PHRASES = [
   { value: 'overdue', pattern: /기한\s*(?:지난|초과)|마감\s*(?:지난|초과)|연체|overdue|past\s*due/i },
   { value: 'today', pattern: /오늘(?:까지|\s*마감)?|금일(?:까지|\s*마감)?|due\s*today/i },
@@ -64,6 +73,39 @@ function unique(values) {
 
 function consumePattern(text, pattern) {
   return text.replace(pattern, ' ');
+}
+
+function semanticIntentFor(query = '') {
+  const normalized = normalizeSpace(query).toLowerCase();
+  const completed = /완료|종료|해결|completed|closed|resolved/.test(normalized);
+  const patch = /패치|patch|kernel/.test(normalized);
+  const ticket = /티켓|ticket|case/.test(normalized);
+  const sangfor = /sangfor|상포/.test(normalized);
+  const support = /지원|문의|support|ticket|case/.test(normalized);
+  const waiting = /대기|기다리|waiting|awaiting|pending/.test(normalized);
+  const license = /라이선스|라이센스|license|licence/.test(normalized);
+  const reply = /회신|답변|응답|reply|response/.test(normalized);
+  const review = /검토|review/.test(normalized);
+  const taxInvoice = /세금계산서|tax\s*invoice/.test(normalized);
+  const deactivation = /비활성화|해지|중지|deactivat|inactive|suspend/.test(normalized);
+  const confluence = /confluence/.test(normalized);
+  const service = /confluence|서비스|계정|구독|subscription|workspace|account|service/.test(normalized);
+  const sharedAsset = /공유\s*(?:폴더|파일)|shared\s*(?:folder|file)/.test(normalized);
+  const verification = /이메일\s*인증|인증|email\s*verification|verify/.test(normalized);
+  const iag = /\biag\b/.test(normalized);
+  if (completed && sangfor && support) return 'completed_sangfor_support';
+  if (completed && patch && ticket) return 'completed_support_ticket';
+  if (waiting && license && reply) return 'waiting_license_reply';
+  if (review && taxInvoice) return 'tax_invoice_review';
+  if (confluence && deactivation) return 'confluence_deactivation';
+  if (service && deactivation) return 'service_deactivation';
+  if (sharedAsset && verification) return 'shared_access_verification';
+  if (sangfor && iag) return 'sangfor_iag';
+
+  const hci = /(?:^|\s|[[(])hci(?:$|\s|[)\]])/i.test(normalized);
+  const incident = /장애|오류|중단|접속\s*불가|동작\s*하지|issue|problem|incident|outage|failed|expired/.test(normalized);
+  if (hci && license && incident) return 'hci_license_incident';
+  return '';
 }
 
 function parseProjectExpression(query) {
@@ -114,6 +156,7 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     throw new Error(`Intelligent search query must be ${MAX_INTELLIGENT_QUERY_LENGTH} characters or fewer.`);
   }
 
+  const semanticIntent = semanticIntentFor(query);
   let residual = query;
   const states = [];
   const actors = [];
@@ -122,8 +165,10 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const dueFilters = [];
   const recognized = [];
 
+  const compoundCompletionSearch = /(?:계약|검수|발주|문서)완료/u.test(query);
   for (const item of STATE_PHRASES) {
     if (!item.pattern.test(query)) continue;
+    if (item.value === 'completed' && compoundCompletionSearch) continue;
     states.push(item.value);
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'workState', value: item.value });
@@ -140,8 +185,13 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'priority', value: item.values.join('|') });
   }
+  const lexicalIncidentOnly = /^(?:장애|보안|security|incident|outage)$/i.test(query);
   for (const item of SIGNAL_PHRASES) {
     if (!item.pattern.test(query)) continue;
+    if (item.value === 'incident_security' && lexicalIncidentOnly) {
+      recognized.push({ type: 'lexicalSignal', value: item.value });
+      continue;
+    }
     signals.push(item.value);
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'signal', value: item.value });
@@ -159,10 +209,53 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     recognized.push({ type: 'project', value: project.value });
   }
 
-  const normalizedStates = unique(states).filter((item) => WORK_STATES.includes(item));
-  const normalizedActors = unique(actors).filter((item) => NEXT_ACTORS.includes(item));
+  let normalizedStates = unique(states).filter((item) => WORK_STATES.includes(item));
+  let normalizedActors = unique(actors).filter((item) => NEXT_ACTORS.includes(item));
   const normalizedPriorities = unique(priorities).filter((item) => PRIORITIES.includes(item));
-  const normalizedSignals = unique(signals).filter((item) => SUPPORTING_SIGNALS.includes(item));
+  let normalizedSignals = unique(signals).filter((item) => SUPPORTING_SIGNALS.includes(item));
+  if (semanticIntent === 'completed_support_ticket') {
+    normalizedStates = ['completed'];
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'hci_license_incident') {
+    normalizedSignals = normalizedSignals.filter((item) => item !== 'incident_security');
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'completed_sangfor_support') {
+    normalizedStates = ['completed'];
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'waiting_license_reply') {
+    normalizedStates = ['waiting'];
+    normalizedActors = ['external_party'];
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'tax_invoice_review') {
+    normalizedStates = ['review_required'];
+    normalizedSignals = unique([...normalizedSignals, 'quotation_contract']);
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'service_deactivation' || semanticIntent === 'confluence_deactivation') {
+    normalizedStates = ['action_required'];
+    normalizedActors = ['me'];
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'shared_access_verification') {
+    normalizedStates = ['action_required'];
+    normalizedActors = ['me'];
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
+  if (semanticIntent === 'sangfor_iag') {
+    residual = '';
+    recognized.push({ type: 'semanticIntent', value: semanticIntent });
+  }
   const normalizedDue = unique(dueFilters);
   const dueFilter = normalizedDue[0] || '';
   const dueRange = dueRangeFor(dueFilter, now);
@@ -170,10 +263,24 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     '메일', '찾아', '보여', '알려', '목록', '관련', '것', '건', '중',
     '에서', '대한', '할', '해야', '처리할', 'the', 'mail', 'email', 'show', 'find',
   ]);
-  const residualText = normalizeSpace(residual)
+  const originalTokens = query.match(/[\p{L}\p{N}_-]+/gu) || [];
+  const preservedDomainTokens = originalTokens
+    .filter((token) => token.length >= 2 && PRESERVED_DOMAIN_TOKEN_PATTERN.test(token));
+  const residualTokens = normalizeSpace(residual)
     .split(/\s+/)
-    .filter((token) => token && !residualStopWords.has(token.toLowerCase()))
-    .join(' ');
+    .filter((token) => token
+      && token.length >= 2
+      && !residualStopWords.has(token.toLowerCase())
+      && !preservedDomainTokens.some((domainToken) => domainToken !== token && domainToken.includes(token)));
+  const incidentExpansion = lexicalIncidentOnly
+    ? INCIDENT_LEXICAL_EXPANSIONS[query.toLowerCase()] || [query]
+    : [];
+  const lexicalTokens = semanticIntent ? [] : unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
+  const residualText = lexicalTokens.join(' ');
+  const residualOperator = lexicalIncidentOnly
+    || (lexicalTokens.length > 1 && lexicalTokens.every((token) => PRESERVED_DOMAIN_TOKEN_PATTERN.test(token)))
+    ? 'OR'
+    : 'AND';
 
   return {
     version: INTELLIGENT_SEARCH_VERSION,
@@ -187,8 +294,12 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
       dueRange,
       project: project?.value || '',
       reviewOnly: normalizedStates.includes('review_required'),
+      lexicalIncidentSearch: lexicalIncidentOnly,
+      lexicalIncidentKind: lexicalIncidentOnly ? query.toLowerCase() : '',
+      semanticIntent,
     },
     residualText,
+    residualOperator,
     recognized,
     hasStructuredFilters: Boolean(
       normalizedStates.length
@@ -196,7 +307,8 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
       || normalizedPriorities.length
       || normalizedSignals.length
       || dueFilter
-      || project?.value,
+      || project?.value
+      || semanticIntent,
     ),
   };
 }

@@ -10,14 +10,24 @@ import {
   buildAnalysisCacheKey,
   extractJsonObject,
   failedAiRun,
+  policyBlockedAiRun,
   parseAiAnalysis,
   providerModel
 } from './src/ai-contract.js';
 import { withAiResilience } from './src/ai/resilience.js';
+import {
+  OAUTH_CLI_PROVIDER_VERSION,
+  oauthCliProviderStatus,
+  oauthProviderLoginInstructions,
+  runOAuthCliProvider,
+  shouldRecordOAuthProviderFailure,
+} from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
+import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
+import { MAIL_ASSISTANT_TOOLS_VERSION } from './src/domain/mail-assistant-tools.js';
 import {
   assertMutationAllowed,
   delegatedScopesForSafety,
@@ -62,8 +72,8 @@ const safetyPolicy = getSafetyPolicy(process.env);
 const delegatedScopes = delegatedScopesForSafety(safetyPolicy);
 const configuredAccessKey = String(process.env.MAIL_INTELLIGENCE_ACCESS_KEY || '').trim();
 const accessKeyRequired = configuredAccessKey.length > 0;
-const AI_OPT_IN_VERSION = 'ai-opt-in-v1.0.1';
-const AI_PROMPT_VERSION = 'mail-intelligence-v1.0.1-prompt-2';
+const AI_OPT_IN_VERSION = 'ai-oauth-opt-in-v1.2.2';
+const AI_PROMPT_VERSION = 'mail-intelligence-v1.2.2-oauth-prompt-1';
 const MAX_JSON_BODY_BYTES = 256 * 1024;
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -86,15 +96,11 @@ const DEFAULT_RUNTIME_CONFIG = Object.freeze({
   clientSecret: '',
   mailboxUser: '',
   loginTenant: 'common',
-  geminiApiKey: '',
-  geminiModel: 'gemini-2.5-flash',
   refreshToken: '',
   expiresAt: 0,
-  // F-AIOS-v3 Integration
-  aiProvider: 'rules',  // 'rules' | 'f-aios-v3' | 'gemini' | 'lmstudio'
-  faiosServerUrl: 'http://localhost:3201',
-  lmstudioServerUrl: 'http://127.0.0.1:1234',
-  lmstudioModel: 'qwen/qwen3.5-9b',
+  aiProvider: 'rules',
+  openaiCodexModel: 'luna',
+  xaiGrokModel: 'grok-4.6',
   domainProfile: 'generic',
   domainProfiles: '',
   aiOptInVersion: ''
@@ -104,11 +110,9 @@ const PERSISTED_CONFIG_KEYS = new Set([
   'clientId',
   'mailboxUser',
   'loginTenant',
-  'geminiModel',
   'aiProvider',
-  'faiosServerUrl',
-  'lmstudioServerUrl',
-  'lmstudioModel',
+  'openaiCodexModel',
+  'xaiGrokModel',
   'domainProfile',
   'domainProfiles',
   'aiOptInVersion'
@@ -174,7 +178,15 @@ async function ensurePrivateDirectory(directoryPath) {
   }
 }
 
-const SECRET_CONFIG_KEYS = new Set(['accessToken', 'refreshToken', 'clientSecret', 'geminiApiKey', 'expiresAt']);
+const SECRET_CONFIG_KEYS = new Set(['accessToken', 'refreshToken', 'clientSecret', 'expiresAt']);
+const LEGACY_SECRET_CONFIG_KEYS = new Set(['geminiApiKey']);
+const ALL_SECRET_CONFIG_KEYS = new Set([...SECRET_CONFIG_KEYS, ...LEGACY_SECRET_CONFIG_KEYS]);
+const LEGACY_AI_CONFIG_KEYS = new Set([
+  'geminiModel',
+  'faiosServerUrl',
+  'lmstudioServerUrl',
+  'lmstudioModel',
+]);
 
 function shouldPersistSecrets() {
   return accessKeyRequired && String(process.env.MAIL_INTELLIGENCE_PERSIST_SECRETS || '1') !== '0';
@@ -384,22 +396,30 @@ async function loadPersistedConfig() {
     }
     const publicInput = { ...parsed };
     const plaintextSecrets = {};
-    for (const key of SECRET_CONFIG_KEYS) {
+    for (const key of ALL_SECRET_CONFIG_KEYS) {
       if (Object.hasOwn(parsed, key)) {
-        plaintextSecrets[key] = parsed[key];
+        if (SECRET_CONFIG_KEYS.has(key)) plaintextSecrets[key] = parsed[key];
         delete publicInput[key];
         if (parsed[key]) legacySecretsFound = true;
       }
     }
+    for (const key of LEGACY_AI_CONFIG_KEYS) {
+      if (Object.hasOwn(publicInput, key)) {
+        delete publicInput[key];
+        legacyAiDefault = true;
+      }
+    }
 
+    const legacyProvider = ['f-aios-v3', 'lmstudio', 'gemini'].includes(String(publicInput.aiProvider || ''));
+    if (legacyProvider) {
+      publicInput.aiProvider = 'rules';
+      publicInput.aiOptInVersion = '';
+    }
     const loaded = validatedPublicConfig(publicInput, runtimeConfig);
-    const unapprovedExternalProvider = loaded.aiProvider === 'gemini'
+    const unapprovedExternalProvider = loaded.aiProvider !== 'rules'
       && loaded.aiOptInVersion !== AI_OPT_IN_VERSION;
-    legacyAiDefault = (record.legacy
-      && loaded.aiProvider !== 'rules'
-      && loaded.aiOptInVersion !== AI_OPT_IN_VERSION)
-      || unapprovedExternalProvider;
-    if (legacyAiDefault) {
+    legacyAiDefault = record.legacy || legacyProvider || unapprovedExternalProvider;
+    if (unapprovedExternalProvider) {
       loaded.aiProvider = 'rules';
       loaded.aiOptInVersion = '';
     }
@@ -413,7 +433,7 @@ async function loadPersistedConfig() {
     if (record.legacy || legacySecretsFound || legacyAiDefault) {
       await savePersistedConfig(runtimeConfig);
       if (record.legacy) await retireLegacyRuntimeFile(record.sourcePath, 'configuration');
-      console.warn('[security] Migrated legacy configuration to the v1.1.0 read-only baseline.');
+      console.warn('[security] Migrated legacy configuration to the v1.2.2 operational-classification baseline.');
     }
   }
 
@@ -778,26 +798,6 @@ function escapeHtmlServer(value) {
     .replace(/'/g, '&#039;');
 }
 
-function validateLocalProviderUrl(value) {
-  let parsed;
-  try {
-    parsed = new URL(String(value || ''));
-  } catch {
-    throw new HttpError(400, 'AI_PROVIDER_URL_INVALID', 'AI provider URL must be a valid local HTTP URL.');
-  }
-  const allowedHost = parsed.hostname === '127.0.0.1'
-    || parsed.hostname === 'localhost'
-    || parsed.hostname === '[::1]'
-    || parsed.hostname === '::1';
-  if (!allowedHost && accessKeyRequired && String(process.env.MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI || '') !== '1') {
-    throw new HttpError(403, 'REMOTE_AI_SERVICE_DISABLED', 'Remote AI service URLs are disabled by policy.');
-  }
-  if (parsed.protocol !== 'http:' || !allowedHost || parsed.username || parsed.password) {
-    throw new HttpError(400, 'AI_PROVIDER_URL_NOT_LOCAL', 'AI provider URL must use HTTP on localhost or loopback.');
-  }
-  return parsed.origin;
-}
-
 function hasControlCharacters(value) {
   return [...String(value ?? '')].some((character) => {
     const codePoint = character.codePointAt(0);
@@ -853,8 +853,160 @@ function validateDomainProfiles(value) {
   return [...new Set(profiles.map((item) => item.toLowerCase()))].join(',');
 }
 
+function validatedModelIdentifier(value, field, fallback = '') {
+  const model = validatedText(value, field, 120) || fallback;
+  if (!model) return '';
+  if (!/^[A-Za-z0-9._:/-]+$/.test(model)) {
+    throw new HttpError(400, 'AI_MODEL_INVALID', `${field} contains unsupported characters.`);
+  }
+  return model;
+}
+
+function oauthCliConfiguredPath(provider) {
+  return provider === 'openai-codex-oauth'
+    ? String(process.env.MAIL_INTELLIGENCE_CODEX_BIN || '').trim()
+    : String(process.env.MAIL_INTELLIGENCE_GROK_BIN || '').trim();
+}
+
+async function oauthProviderStatus(provider) {
+  return await oauthCliProviderStatus(provider, {
+    configuredPath: oauthCliConfiguredPath(provider),
+    cwd: appRoot,
+  });
+}
+
+function safeProviderFailure(error) {
+  const raw = `${error?.code || ''} ${error instanceof Error ? error.message : ''}`.toLowerCase();
+  if (/external_ai_disabled|external_ai_opt_in_required/.test(raw)) {
+    return {
+      safeErrorCode: 'EXTERNAL_AI_POLICY_BLOCKED',
+      message: '외부 AI 분석이 현재 운영 정책으로 비활성화되어 Rules 결과를 사용합니다.',
+      userAction: '실제 모델 분석이 필요할 때만 운영자 승인과 데이터 정책 동의를 활성화하세요.',
+      retryable: false,
+    };
+  }
+  if (/402|balance exhausted|usage balance|insufficient (?:credit|fund)/i.test(raw)) {
+    return {
+      safeErrorCode: 'BILLING_BALANCE_EXHAUSTED',
+      message: '공급자 사용 잔액이 소진되어 실제 모델 호출을 완료하지 못했습니다.',
+      userAction: '공급자 결제·사용 잔액을 확인한 후 다시 테스트하세요.',
+      retryable: false,
+    };
+  }
+  if (/not authenticated|login required|credential|401|403/i.test(raw)) {
+    return {
+      safeErrorCode: 'OAUTH_RELOGIN_REQUIRED',
+      message: 'OAuth 로그인이 만료되었거나 사용할 수 없습니다.',
+      userAction: '공식 CLI에서 다시 로그인한 후 상태를 새로고침하세요.',
+      retryable: false,
+    };
+  }
+  if (/timeout|timed out|408/.test(raw)) {
+    return {
+      safeErrorCode: 'PROVIDER_TIMEOUT',
+      message: '모델 응답 시간이 초과되었습니다.',
+      userAction: '잠시 후 다시 테스트하세요. 반복되면 공급자 상태를 확인하세요.',
+      retryable: true,
+    };
+  }
+  if (/429|rate limit|too many requests/.test(raw)) {
+    return {
+      safeErrorCode: 'PROVIDER_RATE_LIMITED',
+      message: '공급자 호출 한도에 도달했습니다.',
+      userAction: '잠시 기다린 후 다시 테스트하세요.',
+      retryable: true,
+    };
+  }
+  if (/tool_use_rejected|unsafe tool|tool event/.test(raw)) {
+    return {
+      safeErrorCode: 'PROVIDER_UNSAFE_TOOL_EVENT',
+      message: '모델이 허용되지 않은 도구 실행을 시도해 결과를 차단했습니다.',
+      userAction: 'Rules 결과를 사용하고 운영 로그를 검토하세요.',
+      retryable: false,
+    };
+  }
+  if (/json|schema|invalid response|empty final/.test(raw)) {
+    return {
+      safeErrorCode: 'PROVIDER_INVALID_RESPONSE',
+      message: '모델 응답이 Mail Intelligence 검증 계약을 충족하지 못했습니다.',
+      userAction: 'Rules 결과를 사용하고 다시 테스트하세요.',
+      retryable: true,
+    };
+  }
+  if (/\b5\d\d\b|temporar|unavailable/.test(raw)) {
+    return {
+      safeErrorCode: 'PROVIDER_TEMPORARILY_UNAVAILABLE',
+      message: '공급자 서비스가 일시적으로 응답하지 않습니다.',
+      userAction: '잠시 후 다시 테스트하세요.',
+      retryable: true,
+    };
+  }
+  return {
+    safeErrorCode: 'PROVIDER_CALL_FAILED',
+    message: '실제 모델 호출을 완료하지 못했습니다.',
+    userAction: 'OAuth 상태와 공급자 서비스를 확인한 후 다시 테스트하세요.',
+    retryable: true,
+  };
+}
+
+function recordProviderRuntimeEvent(eventType, provider, payload) {
+  return mailMemory?.store?.audit(eventType, {
+    entityType: 'oauth_provider',
+    entityId: provider,
+    payload,
+  }) || null;
+}
+
+function latestProviderRuntimeEvent(eventType, provider) {
+  return mailMemory?.store?.latestAuditEvent(eventType, {
+    entityType: 'oauth_provider',
+    entityId: provider,
+  })?.payload || null;
+}
+
+async function oauthProviderStatuses() {
+  const statuses = await Promise.all([
+    oauthProviderStatus('openai-codex-oauth'),
+    oauthProviderStatus('xai-grok-oauth'),
+  ]);
+  return statuses.map((status) => {
+    const lastSyntheticTest = latestProviderRuntimeEvent('oauth.provider.synthetic_test', status.provider) || {
+      status: 'never', testedAt: null, latencyMs: null, safeErrorCode: '', userAction: '',
+    };
+    const lastRealMailAnalysis = latestProviderRuntimeEvent('oauth.provider.real_mail_analysis', status.provider) || {
+      status: 'never', analyzedAt: null, messageCount: 0, safeErrorCode: '', userAction: '',
+    };
+    const operationalStatus = !status.installed
+      ? 'cli_missing'
+      : !status.authenticated
+        ? 'oauth_login_required'
+        : lastSyntheticTest.status === 'passed'
+          ? 'available'
+          : lastSyntheticTest.status === 'failed'
+            ? 'unavailable'
+            : 'untested';
+    return {
+      ...status,
+      cliInstalled: Boolean(status.installed),
+      oauthAuthenticated: Boolean(status.authenticated),
+      operationalStatus,
+      lastSyntheticTest,
+      lastRealMailAnalysis,
+    };
+  });
+}
+
 function validatedPublicConfig(input, base = runtimeConfig, { recordAiOptIn = false } = {}) {
   const next = { ...base };
+  for (const key of LEGACY_AI_CONFIG_KEYS) {
+    if (Object.hasOwn(input, key)) {
+      throw new HttpError(
+        400,
+        'LEGACY_AI_PROVIDER_UNSUPPORTED',
+        `${key} is no longer supported; use an official OAuth CLI provider.`,
+      );
+    }
+  }
   if (typeof input.tenantId === 'string') next.tenantId = validateTenantIdentifier(input.tenantId);
   if (typeof input.clientId === 'string') next.clientId = validateClientIdentifier(input.clientId);
   if (typeof input.mailboxUser === 'string') next.mailboxUser = validateMailboxUser(input.mailboxUser);
@@ -867,25 +1019,29 @@ function validatedPublicConfig(input, base = runtimeConfig, { recordAiOptIn = fa
   }
   if (typeof input.aiProvider === 'string') {
     const aiProvider = validatedText(input.aiProvider, 'aiProvider', 32);
-    if (!['rules', 'f-aios-v3', 'lmstudio', 'gemini'].includes(aiProvider)) {
-      throw new HttpError(400, 'AI_PROVIDER_INVALID', 'AI provider must be rules, f-aios-v3, lmstudio, or gemini.');
+    if (!['rules', 'openai-codex-oauth', 'xai-grok-oauth'].includes(aiProvider)) {
+      throw new HttpError(400, 'AI_PROVIDER_INVALID', 'AI provider must be rules, openai-codex-oauth, or xai-grok-oauth.');
     }
     next.aiProvider = aiProvider;
     if (recordAiOptIn) {
-      if (aiProvider === 'gemini'
+      if (aiProvider !== 'rules'
         && input.aiDataPolicyAccepted !== true
         && input.aiOptInVersion !== AI_OPT_IN_VERSION) {
         throw new HttpError(
           400,
           'EXTERNAL_AI_OPT_IN_REQUIRED',
-          'External AI provider use is disabled until the mail data policy is explicitly accepted.'
+          'OAuth LLM use is disabled until the mail data policy is explicitly accepted.'
         );
       }
       next.aiOptInVersion = aiProvider === 'rules' ? '' : AI_OPT_IN_VERSION;
     }
   }
-  if (typeof input.geminiModel === 'string') next.geminiModel = validatedText(input.geminiModel, 'geminiModel', 200);
-  if (typeof input.lmstudioModel === 'string') next.lmstudioModel = validatedText(input.lmstudioModel, 'lmstudioModel', 200);
+  if (typeof input.openaiCodexModel === 'string') {
+    next.openaiCodexModel = validatedModelIdentifier(input.openaiCodexModel, 'openaiCodexModel', 'luna');
+  }
+  if (typeof input.xaiGrokModel === 'string') {
+    next.xaiGrokModel = validatedModelIdentifier(input.xaiGrokModel, 'xaiGrokModel', 'grok-4.6');
+  }
   if (typeof input.domainProfile === 'string') {
     const profile = validatedText(input.domainProfile, 'domainProfile', 50).toLowerCase();
     if (profile && !/^[a-z0-9._-]+$/.test(profile)) {
@@ -896,14 +1052,6 @@ function validatedPublicConfig(input, base = runtimeConfig, { recordAiOptIn = fa
   if (typeof input.domainProfiles === 'string') next.domainProfiles = validateDomainProfiles(input.domainProfiles);
   if (!recordAiOptIn && typeof input.aiOptInVersion === 'string') {
     next.aiOptInVersion = input.aiOptInVersion === AI_OPT_IN_VERSION ? AI_OPT_IN_VERSION : '';
-  }
-  if (typeof input.faiosServerUrl === 'string') {
-    const localUrl = validatedText(input.faiosServerUrl, 'faiosServerUrl', 500);
-    next.faiosServerUrl = localUrl ? validateLocalProviderUrl(localUrl) : DEFAULT_RUNTIME_CONFIG.faiosServerUrl;
-  }
-  if (typeof input.lmstudioServerUrl === 'string') {
-    const localUrl = validatedText(input.lmstudioServerUrl, 'lmstudioServerUrl', 500);
-    next.lmstudioServerUrl = localUrl ? validateLocalProviderUrl(localUrl) : DEFAULT_RUNTIME_CONFIG.lmstudioServerUrl;
   }
   return next;
 }
@@ -977,11 +1125,10 @@ function configStatus() {
     loginTenant: runtimeConfig.loginTenant || 'common',
     tenantId: getConfigValue('tenantId', 'MICROSOFT_TENANT_ID') || '',
     clientId: getConfigValue('clientId', 'MICROSOFT_CLIENT_ID') || '',
-    geminiModel: runtimeConfig.geminiModel || 'gemini-2.5-flash',
     aiProvider: runtimeConfig.aiProvider || 'rules',
-    faiosServerUrl: runtimeConfig.faiosServerUrl || DEFAULT_RUNTIME_CONFIG.faiosServerUrl,
-    lmstudioServerUrl: runtimeConfig.lmstudioServerUrl || DEFAULT_RUNTIME_CONFIG.lmstudioServerUrl,
-    lmstudioModel: runtimeConfig.lmstudioModel || DEFAULT_RUNTIME_CONFIG.lmstudioModel,
+    openaiCodexModel: runtimeConfig.openaiCodexModel || DEFAULT_RUNTIME_CONFIG.openaiCodexModel,
+    xaiGrokModel: runtimeConfig.xaiGrokModel || DEFAULT_RUNTIME_CONFIG.xaiGrokModel,
+    oauthCliProviderVersion: OAUTH_CLI_PROVIDER_VERSION,
     domainProfile: runtimeConfig.domainProfile || 'generic',
     domainProfiles: runtimeConfig.domainProfiles || '',
     aiOptedIn: runtimeConfig.aiProvider !== 'rules' && runtimeConfig.aiOptInVersion === AI_OPT_IN_VERSION,
@@ -989,6 +1136,8 @@ function configStatus() {
     aiPolicyVersion: AI_PROMPT_VERSION,
     precisionClassificationVersion: PRECISION_CLASSIFICATION_VERSION,
     intelligentSearchVersion: INTELLIGENT_SEARCH_VERSION,
+    operationalClassificationVersion: OPERATIONAL_CLASSIFICATION_VERSION,
+    mailAssistantToolsVersion: MAIL_ASSISTANT_TOOLS_VERSION,
     listenHost: host,
     graphConsent: delegatedScopes.split(/\s+/),
     safety: publicSafetyStatus(safetyPolicy),
@@ -1001,8 +1150,7 @@ function configStatus() {
     hasAccessToken: hasToken,
     hasTenantId: Boolean(getConfigValue('tenantId', 'MICROSOFT_TENANT_ID')),
     hasClientId: Boolean(getConfigValue('clientId', 'MICROSOFT_CLIENT_ID')),
-    hasClientSecret: Boolean(getConfigValue('clientSecret', 'MICROSOFT_CLIENT_SECRET')),
-    hasGeminiApiKey: Boolean(getConfigValue('geminiApiKey', 'GEMINI_API_KEY'))
+    hasClientSecret: Boolean(getConfigValue('clientSecret', 'MICROSOFT_CLIENT_SECRET'))
   };
 }
 
@@ -1018,6 +1166,10 @@ function publicHealthStatus() {
     authMode: status.authMode,
     aiProvider: status.aiProvider,
     aiPipelineVersion: status.aiPipelineVersion,
+    precisionClassificationVersion: status.precisionClassificationVersion,
+    intelligentSearchVersion: status.intelligentSearchVersion,
+    operationalClassificationVersion: status.operationalClassificationVersion,
+    mailAssistantToolsVersion: status.mailAssistantToolsVersion,
     listenHost: status.listenHost,
     graphConsent: status.graphConsent,
     safety: status.safety,
@@ -1055,6 +1207,8 @@ function attachPrecisionIntelligence(data) {
     precision: {
       version: PRECISION_CLASSIFICATION_VERSION,
       searchVersion: INTELLIGENT_SEARCH_VERSION,
+      operationalVersion: OPERATIONAL_CLASSIFICATION_VERSION,
+      assistantToolsVersion: MAIL_ASSISTANT_TOOLS_VERSION,
       run,
       summary: memory.precisionSummary(mailboxUser, { classifyPending: false }),
     },
@@ -1375,81 +1529,72 @@ function normalizeLegacyProviderResponse(raw) {
 }
 
 async function executeAiRoute(selectedProvider, prompt) {
+  assertCapability(safetyPolicy, 'externalAi');
+  if (runtimeConfig.aiOptInVersion !== AI_OPT_IN_VERSION) {
+    throw new HttpError(403, 'EXTERNAL_AI_OPT_IN_REQUIRED', 'OAuth LLM data-policy acceptance is required.');
+  }
   const attempts = [];
-  const run = async (provider) => {
-    const model = providerModel(provider, runtimeConfig);
-    const text = await withAiResilience(provider, async ({ attempt }) => {
+  const model = providerModel(selectedProvider, runtimeConfig);
+  try {
+    const status = await oauthProviderStatus(selectedProvider);
+    if (!status.installed) {
+      const error = new Error(status.error || 'OAuth provider CLI is not installed.');
+      error.code = 'OAUTH_PROVIDER_NOT_INSTALLED';
+      throw error;
+    }
+    if (!status.authenticated) {
+      const error = new Error(status.error || 'OAuth provider login is required.');
+      error.code = 'OAUTH_PROVIDER_NOT_AUTHENTICATED';
+      throw error;
+    }
+    const execution = await withAiResilience(selectedProvider, async ({ attempt }) => {
       try {
-        const output = provider === 'f-aios-v3'
-          ? await callFaiosServer(prompt)
-          : provider === 'gemini'
-            ? await callGeminiApi(prompt)
-            : await callLmStudio(prompt);
-        attempts.push({ provider, model, attempt, status: 'succeeded' });
-        return output;
+        const result = await runOAuthCliProvider(selectedProvider, prompt, {
+          model,
+          configuredPath: oauthCliConfiguredPath(selectedProvider),
+          schemaPath: join(appRoot, 'schemas', 'mail-analysis.schema.json'),
+        });
+        attempts.push({ provider: selectedProvider, model, attempt, status: 'succeeded', authMode: status.authMode });
+        return result;
       } catch (error) {
+        const safe = safeProviderFailure(error);
         attempts.push({
-          provider,
+          provider: selectedProvider,
           model,
           attempt,
           status: 'failed',
-          code: error?.code || 'AI_PROVIDER_FAILED',
-          error: error instanceof Error ? error.message : 'AI provider failed.'
+          code: safe.safeErrorCode,
+          error: safe.message,
+          userAction: safe.userAction,
         });
+        error.safeProviderFailure = safe;
         throw error;
       }
     }, {
-      retries: provider === 'f-aios-v3' ? 1 : 0,
+      retries: 0,
       retryDelayMs: 0,
       failureThreshold: 3,
-      cooldownMs: 60_000
+      cooldownMs: 60_000,
     });
-    return { text, provider, model };
-  };
-
-  try {
-    const result = await run(selectedProvider);
     return {
-      ...result,
+      text: execution.text,
+      provider: selectedProvider,
+      model: execution.model || model,
       attempts,
       requestedProvider: selectedProvider,
       fallbackFrom: null,
-      fallback: null
+      fallback: null,
     };
-  } catch (primaryError) {
-    if (selectedProvider !== 'f-aios-v3') {
-      primaryError.attempts = attempts;
-      primaryError.aiRun = failedAiRun(primaryError, {
-        provider: selectedProvider,
-        model: providerModel(selectedProvider, runtimeConfig),
-        attempts
-      });
-      throw primaryError;
-    }
-    try {
-      const fallback = await run('lmstudio');
-      return {
-        ...fallback,
-        attempts,
-        requestedProvider: selectedProvider,
-        fallbackFrom: selectedProvider,
-        fallback: {
-          from: selectedProvider,
-          to: 'lmstudio',
-          reason: primaryError instanceof Error ? primaryError.message : String(primaryError)
-        }
-      };
-    } catch (fallbackError) {
-      const combined = new Error(`AI analysis failed for ${selectedProvider} and fallback lmstudio.`);
-      combined.code = 'AI_ALL_PROVIDERS_FAILED';
-      combined.attempts = attempts;
-      combined.aiRun = failedAiRun(combined, {
-        provider: selectedProvider,
-        model: providerModel(selectedProvider, runtimeConfig),
-        attempts
-      });
-      throw combined;
-    }
+  } catch (error) {
+    const safe = error?.safeProviderFailure || safeProviderFailure(error);
+    error.attempts = attempts;
+    error.aiRun = failedAiRun(new Error(safe.message), {
+      provider: selectedProvider,
+      model,
+      attempts,
+    });
+    error.safeProviderFailure = safe;
+    throw error;
   }
 }
 
@@ -1559,7 +1704,24 @@ async function enrichWithAI(messages, result) {
   }
 
   const prompt = buildAnalysisPrompt(feedbackExamples, messagesForAi);
-  const execution = await executeAiRoute(selectedProvider, prompt);
+  const analysisStartedAt = Date.now();
+  let execution;
+  try {
+    execution = await executeAiRoute(selectedProvider, prompt);
+  } catch (error) {
+    const safe = error?.safeProviderFailure || safeProviderFailure(error);
+    if (shouldRecordOAuthProviderFailure(error)) {
+      recordProviderRuntimeEvent('oauth.provider.real_mail_analysis', selectedProvider, {
+        status: 'failed',
+        analyzedAt: new Date().toISOString(),
+        latencyMs: Date.now() - analysisStartedAt,
+        messageCount: messagesForAi.length,
+        model: selectedModel,
+        ...safe,
+      });
+    }
+    throw error;
+  }
   let ai;
   try {
     ai = parseAiAnalysis(normalizeLegacyProviderResponse(execution.text), {
@@ -1570,14 +1732,32 @@ async function enrichWithAI(messages, result) {
       ]))
     });
   } catch (error) {
+    const safe = safeProviderFailure(error);
+    recordProviderRuntimeEvent('oauth.provider.real_mail_analysis', selectedProvider, {
+      status: 'failed',
+      analyzedAt: new Date().toISOString(),
+      latencyMs: Date.now() - analysisStartedAt,
+      messageCount: messagesForAi.length,
+      model: execution.model || selectedModel,
+      ...safe,
+    });
     error.attempts = execution.attempts;
-    error.aiRun = failedAiRun(error, {
+    error.aiRun = failedAiRun(new Error(safe.message), {
       provider: execution.provider,
       model: execution.model,
       attempts: execution.attempts
     });
     throw error;
   }
+  recordProviderRuntimeEvent('oauth.provider.real_mail_analysis', selectedProvider, {
+    status: 'passed',
+    analyzedAt: new Date().toISOString(),
+    latencyMs: Date.now() - analysisStartedAt,
+    messageCount: messagesForAi.length,
+    model: execution.model || selectedModel,
+    safeErrorCode: '',
+    userAction: '',
+  });
   const byId = new Map((ai.messages || []).map((item) => [item.id, item]));
   const aiMessageIds = new Set(messagesForAi.map((message) => message.id));
   const enhancedInsights = result.messageInsights.map((insight) => {
@@ -1683,6 +1863,138 @@ async function enrichWithAI(messages, result) {
   };
 }
 
+function precisionCandidateFromAiInsight(insight = {}) {
+  const status = String(insight.status || '').trim().toLowerCase();
+  const workState = {
+    urgent: 'action_required',
+    active: 'action_required',
+    waiting: 'waiting',
+    done: 'completed',
+    reference: 'reference',
+    hold: 'review_required',
+  }[status] || 'review_required';
+  const nextActor = workState === 'action_required'
+    ? 'me'
+    : workState === 'waiting'
+      ? 'external_party'
+      : ['completed', 'reference'].includes(workState)
+        ? 'none'
+        : 'unknown';
+  const priority = status === 'urgent'
+    ? 'high'
+    : workState === 'reference'
+      ? 'low'
+      : 'normal';
+  return {
+    workState,
+    nextActor,
+    priority,
+    confidence: Number.isFinite(Number(insight.confidence))
+      ? Math.max(0, Math.min(1, Number(insight.confidence)))
+      : 0,
+    summary: String(insight.summary || '').slice(0, 600),
+    evidenceItems: Array.isArray(insight.evidenceItems)
+      ? insight.evidenceItems.slice(0, 8)
+      : [],
+    aiRationale: String(insight.aiRationale || '').slice(0, 1000),
+  };
+}
+
+async function selectivelyAdjudicateMessage(messageId) {
+  const memory = requireMailMemory();
+  const mailboxUser = currentMailboxUser();
+  const candidate = memory.adjudicationCandidate(mailboxUser, messageId);
+  if (!candidate.eligible) {
+    return {
+      status: 'not_required',
+      rulesUsed: true,
+      persisted: false,
+      requiresHumanApproval: false,
+      rules: candidate.rules,
+      safety: candidate.safety,
+    };
+  }
+
+  if (String(process.env.MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI || '') !== '1') {
+    return {
+      status: 'policy_blocked',
+      code: 'EXTERNAL_AI_DISABLED',
+      fallback: 'rules_review',
+      rulesUsed: true,
+      persisted: false,
+      requiresHumanApproval: true,
+      rules: candidate.rules,
+      safety: candidate.safety,
+    };
+  }
+
+  if (runtimeConfig.aiProvider !== 'openai-codex-oauth') {
+    return {
+      status: 'provider_not_selected',
+      code: 'LUNA_NOT_SELECTED',
+      fallback: 'rules_review',
+      rulesUsed: true,
+      persisted: false,
+      requiresHumanApproval: true,
+      rules: candidate.rules,
+      safety: candidate.safety,
+    };
+  }
+
+  const sanitized = {
+    id: candidate.message.id,
+    subject: candidate.message.subject,
+    body: candidate.message.currentContent,
+    bodyPreview: candidate.message.currentContent,
+    receivedAt: candidate.message.receivedAt,
+    folderName: candidate.message.folder,
+    attachments: candidate.message.attachments,
+  };
+  try {
+    const prompt = buildAnalysisPrompt([], [sanitized]);
+    const execution = await executeAiRoute('openai-codex-oauth', prompt);
+    const parsed = parseAiAnalysis(normalizeLegacyProviderResponse(execution.text), {
+      expectedMessageIds: [sanitized.id],
+      sourceTextById: {
+        [sanitized.id]: `${sanitized.subject || ''}\n${sanitized.body || ''}`,
+      },
+    });
+    const insight = parsed.messages?.find((item) => item.id === sanitized.id)
+      || parsed.messages?.[0]
+      || null;
+    if (!insight) throw new Error('Selective Luna adjudication returned no candidate.');
+    const luna = precisionCandidateFromAiInsight(insight);
+    const agrees = luna.workState === candidate.rules.workState
+      && luna.nextActor === candidate.rules.nextActor;
+    return {
+      status: agrees ? 'agreed' : 'disagreed',
+      provider: 'openai-codex-oauth',
+      model: execution.model || 'luna',
+      fallback: agrees ? null : 'rules_review',
+      rulesUsed: true,
+      persisted: false,
+      requiresHumanApproval: true,
+      rules: candidate.rules,
+      luna,
+      safety: candidate.safety,
+    };
+  } catch (error) {
+    const safe = error?.safeProviderFailure || safeProviderFailure(error);
+    return {
+      status: 'failed',
+      code: safe.safeErrorCode,
+      message: safe.message,
+      userAction: safe.userAction,
+      fallback: 'rules_review',
+      rulesUsed: true,
+      persisted: false,
+      requiresHumanApproval: true,
+      rules: candidate.rules,
+      safety: candidate.safety,
+    };
+  }
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
   try {
@@ -1697,6 +2009,68 @@ async function handleApi(req, res) {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       issueLocalSession(req, res);
       return;
+    }
+
+    if (url.pathname === '/api/ai/oauth/status') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const providers = await oauthProviderStatuses();
+      return json(res, 200, {
+        providerVersion: OAUTH_CLI_PROVIDER_VERSION,
+        externalAiEnabled: String(process.env.MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI || '') === '1',
+        selectedProvider: runtimeConfig.aiProvider,
+        dataPolicyAccepted: runtimeConfig.aiOptInVersion === AI_OPT_IN_VERSION,
+        providers,
+      });
+    }
+
+    if (url.pathname === '/api/ai/oauth/instructions') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const provider = validatedText(url.searchParams.get('provider') || '', 'provider', 32);
+      try {
+        return json(res, 200, oauthProviderLoginInstructions(provider));
+      } catch (error) {
+        throw new HttpError(400, 'AI_PROVIDER_INVALID', error instanceof Error ? error.message : 'OAuth provider is invalid.');
+      }
+    }
+
+    if (url.pathname === '/api/ai/oauth/test') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const provider = validatedText(body.provider || runtimeConfig.aiProvider, 'provider', 32);
+      if (!['openai-codex-oauth', 'xai-grok-oauth'].includes(provider)) {
+        throw new HttpError(400, 'AI_PROVIDER_INVALID', 'OAuth provider must be openai-codex-oauth or xai-grok-oauth.');
+      }
+      const model = provider === 'openai-codex-oauth'
+        ? validatedModelIdentifier(body.model || runtimeConfig.openaiCodexModel, 'openaiCodexModel', 'luna')
+        : validatedModelIdentifier(body.model || runtimeConfig.xaiGrokModel, 'xaiGrokModel', 'grok-4.6');
+      const startedAt = Date.now();
+      try {
+        const result = await testOAuthProvider(provider, model);
+        const state = {
+          status: 'passed',
+          testedAt: new Date().toISOString(),
+          latencyMs: Date.now() - startedAt,
+          model: result.model || model,
+          safeErrorCode: '',
+          userAction: '',
+        };
+        recordProviderRuntimeEvent('oauth.provider.synthetic_test', provider, state);
+        return json(res, 200, { ...result, ...state });
+      } catch (error) {
+        const safe = safeProviderFailure(error);
+        const state = {
+          status: 'failed',
+          testedAt: new Date().toISOString(),
+          latencyMs: Date.now() - startedAt,
+          model,
+          ...safe,
+        };
+        recordProviderRuntimeEvent('oauth.provider.synthetic_test', provider, state);
+        return json(res, 424, { ok: false, provider, ...state });
+      }
     }
 
     if (url.pathname === '/api/outlook/oauth/start') {
@@ -1796,8 +2170,191 @@ async function handleApi(req, res) {
       return json(res, 200, {
         version: PRECISION_CLASSIFICATION_VERSION,
         searchVersion: INTELLIGENT_SEARCH_VERSION,
+        operationalVersion: OPERATIONAL_CLASSIFICATION_VERSION,
+        assistantToolsVersion: MAIL_ASSISTANT_TOOLS_VERSION,
         ...requireMailMemory().precisionSummary(currentMailboxUser()),
       });
+    }
+
+    if (url.pathname === '/api/intelligence/operational-summary') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      return json(res, 200, {
+        version: OPERATIONAL_CLASSIFICATION_VERSION,
+        ...requireMailMemory().operationalSummary(currentMailboxUser()),
+      });
+    }
+
+    if (url.pathname === '/api/intelligence/message-summary') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        return json(res, 200, requireMailMemory().messageSummary(currentMailboxUser(), messageId));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/thread-summary') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
+      const limit = Number(url.searchParams.get('limit') || 100);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+        throw new HttpError(400, 'THREAD_LIMIT_INVALID', 'limit must be an integer between 1 and 500.');
+      }
+      try {
+        return json(res, 200, requireMailMemory().threadSummary(currentMailboxUser(), messageId, { limit }));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/meeting-candidate') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
+      const timeZone = validatedText(url.searchParams.get('timeZone') || 'Asia/Seoul', 'timeZone', 80);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        return json(res, 200, requireMailMemory().meetingCandidate(currentMailboxUser(), messageId, { timeZone }));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/attachments') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        return json(res, 200, requireMailMemory().messageAttachments(currentMailboxUser(), messageId));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/personality') {
+      if (req.method === 'GET') {
+        requireSessionCookie(req);
+        return json(res, 200, {
+          version: MAIL_ASSISTANT_TOOLS_VERSION,
+          personality: requireMailMemory().assistantPersonality(currentMailboxUser()),
+        });
+      }
+      if (req.method === 'POST') {
+        requireStateChange(req);
+        const body = await readJsonBody(req);
+        return json(res, 200, {
+          version: MAIL_ASSISTANT_TOOLS_VERSION,
+          personality: requireMailMemory().saveAssistantPersonality(currentMailboxUser(), {
+            role: validatedText(body.role || '', 'role', 120),
+            tone: validatedText(body.tone || '', 'tone', 120),
+            opening: validatedText(body.opening || '', 'opening', 120),
+          }),
+        });
+      }
+      throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+    }
+
+    if (url.pathname === '/api/intelligence/draft') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const messageId = validatedText(body.messageId || '', 'messageId', 500);
+      const mode = validatedText(body.mode || 'rapid_reply', 'mode', 40);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      if (!['rapid_reply', 'improve', 'meeting_confirmation'].includes(mode)) {
+        throw new HttpError(400, 'DRAFT_MODE_INVALID', 'mode must be rapid_reply, improve, or meeting_confirmation.');
+      }
+      try {
+        return json(res, 200, requireMailMemory().generateAssistantDraft(currentMailboxUser(), messageId, {
+          mode,
+          draftText: validatedText(body.draftText || '', 'draftText', 12_000),
+          timeZone: validatedText(body.timeZone || 'Asia/Seoul', 'timeZone', 80),
+        }));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/confirm') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const messageId = validatedText(body.messageId || '', 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        return json(res, 200, requireMailMemory().confirmPrecisionClassification(currentMailboxUser(), messageId, {
+          note: validatedText(body.note || '', 'note', 500),
+        }));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/attachment-summary') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const messageId = validatedText(body.messageId || '', 'messageId', 500);
+      const attachmentId = validatedText(body.attachmentId || '', 'attachmentId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      if (!attachmentId) throw new HttpError(400, 'ATTACHMENT_ID_REQUIRED', 'attachmentId is required.');
+      try {
+        return json(res, 200, requireMailMemory().attachmentSummary(
+          currentMailboxUser(),
+          messageId,
+          attachmentId,
+          { extractedText: validatedText(body.extractedText || '', 'extractedText', 200_000) },
+        ));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        if (/attachment metadata/i.test(error?.message || '')) {
+          throw new HttpError(404, 'ATTACHMENT_NOT_FOUND', 'Stored attachment metadata was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/intelligence/adjudicate') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const messageId = validatedText(body.messageId || '', 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        return json(res, 200, await selectivelyAdjudicateMessage(messageId));
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
     }
 
     if (url.pathname === '/api/intelligence/smart-views') {
@@ -2029,16 +2586,22 @@ async function handleApi(req, res) {
         result = await enrichWithAI(data.messages, baseResult);
         result = applyFeedbackToResult(result, data.messages, feedback, { allowLearnedOverride: false });
       } catch (error) {
-        const ai = error?.aiRun || failedAiRun(error, {
-          provider: runtimeConfig.aiProvider,
-          model: providerModel(runtimeConfig.aiProvider, runtimeConfig),
-          attempts: error?.attempts || []
-        });
+        const policyBlocked = ['EXTERNAL_AI_DISABLED', 'EXTERNAL_AI_OPT_IN_REQUIRED'].includes(String(error?.code || ''));
+        const ai = policyBlocked
+          ? policyBlockedAiRun(error, {
+            provider: runtimeConfig.aiProvider,
+            model: providerModel(runtimeConfig.aiProvider, runtimeConfig),
+          })
+          : error?.aiRun || failedAiRun(error, {
+            provider: runtimeConfig.aiProvider,
+            model: providerModel(runtimeConfig.aiProvider, runtimeConfig),
+            attempts: error?.attempts || []
+          });
         result = {
           ...baseResult,
           messageInsights: baseResult.messageInsights.map((insight) => ({
             ...insight,
-            analysisState: 'degraded',
+            analysisState: policyBlocked ? 'policy_blocked' : 'degraded',
             aiEnhanced: false
           })),
           ai
@@ -2300,110 +2863,37 @@ ${JSON.stringify(messagesForAi.map((message) => ({
   })), null, 2)}`;
 }
 
-async function callFaiosServer(prompt) {
-  const serverUrl = validateLocalProviderUrl(runtimeConfig.faiosServerUrl || 'http://127.0.0.1:3201');
-  const response = await fetchWithTimeout(`${serverUrl}/api/workflow/execute`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      workflow: 'email-analysis',
-      input: {
-        prompt,
-        model: runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b',
-        temperature: 0.2,
-        max_tokens: 4096
-      }
-    })
-  }, 30_000);
-
-  if (!response.ok) {
-    try {
-      await response.body?.cancel();
-    } catch {
-      // The upstream body may already be closed.
-    }
-    const error = new Error(`F-AIOS-v3 server error: ${response.status}`);
-    error.code = 'FAIOS_HTTP_ERROR';
-    error.statusCode = response.status;
-    error.upstreamStatus = response.status;
-    throw error;
-  }
-
-  const payload = await readUpstreamJson(response, 'FAIOS_JSON_INVALID', 'F-AIOS-v3 request');
-  const output = typeof payload.output === 'string'
-    ? payload.output
-    : payload.output?.response || payload.response || '';
-  if (!String(output).trim()) {
-    const error = new Error('F-AIOS-v3 returned an empty analysis response.');
-    error.code = 'FAIOS_EMPTY_RESPONSE';
-    throw error;
-  }
-  return String(output);
-}
-
-async function callGeminiApi(prompt) {
+async function testOAuthProvider(provider, model) {
   assertCapability(safetyPolicy, 'externalAi');
-  const apiKey = getConfigValue('geminiApiKey', 'GEMINI_API_KEY');
-  if (!apiKey) {
-    const error = new Error('Gemini API key not configured.');
-    error.code = 'GEMINI_NOT_CONFIGURED';
-    throw error;
+  if (runtimeConfig.aiOptInVersion !== AI_OPT_IN_VERSION) {
+    throw new HttpError(403, 'EXTERNAL_AI_OPT_IN_REQUIRED', 'OAuth LLM data-policy acceptance is required.');
   }
-
-  const model = runtimeConfig.geminiModel || 'gemini-2.5-flash';
-
-  const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 4096 }
-    })
-  }, 45_000);
-
-  if (!response.ok) {
-    await throwUpstreamHttpError(response, 'GEMINI_HTTP_ERROR', 'Gemini request');
-  }
-
-  const payload = await readUpstreamJson(response, 'GEMINI_JSON_INVALID', 'Gemini request');
-  const output = payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n') || '';
-  if (!String(output).trim()) {
-    const error = new Error('Gemini returned an empty analysis response.');
-    error.code = 'GEMINI_EMPTY_RESPONSE';
-    throw error;
-  }
-  return String(output);
-}
-
-async function callLmStudio(prompt) {
-  const model = runtimeConfig.lmstudioModel || 'qwen/qwen3.5-9b';
-  const serverUrl = validateLocalProviderUrl(runtimeConfig.lmstudioServerUrl || 'http://127.0.0.1:1234');
-
-  const response = await fetchWithTimeout(`${serverUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 4096,
-      response_format: { type: 'json_object' }
-    })
-  }, 30_000);
-
-  if (!response.ok) {
-    await throwUpstreamHttpError(response, 'LMSTUDIO_HTTP_ERROR', 'LM Studio request');
-  }
-
-  const payload = await readUpstreamJson(response, 'LMSTUDIO_JSON_INVALID', 'LM Studio request');
-  const output = payload.choices?.[0]?.message?.content || '';
-  if (!String(output).trim()) {
-    const error = new Error('LM Studio returned an empty analysis response.');
-    error.code = 'LMSTUDIO_EMPTY_RESPONSE';
-    throw error;
-  }
-  return String(output);
+  const source = 'OAuth provider connection test. No real email content is included.';
+  const prompt = `${buildAnalysisPrompt([], [{
+    id: 'oauth-test-message',
+    subject: 'OAuth provider connection test',
+    from: 'system@localhost',
+    receivedAt: new Date(0).toISOString(),
+    body: source,
+    bodyPreview: source,
+  }])}
+This is a synthetic connectivity test. Return status reference, no nextActions, and quote the exact source sentence as evidence.`;
+  const result = await runOAuthCliProvider(provider, prompt, {
+    model,
+    configuredPath: oauthCliConfiguredPath(provider),
+    schemaPath: join(appRoot, 'schemas', 'mail-analysis.schema.json'),
+    timeoutMs: 120_000,
+  });
+  const parsed = parseAiAnalysis(result.text, {
+    expectedMessageIds: ['oauth-test-message'],
+    sourceTextById: { 'oauth-test-message': `OAuth provider connection test
+${source}` },
+  });
+  return {
+    ok: true,
+    provider,
+    model: result.model,
+    messageCount: parsed.messages.length,
+    evidenceVerified: parsed.messages.every((item) => item.evidenceVerified === true),
+  };
 }

@@ -1,5 +1,5 @@
 [Unit]
-Description=Mail Intelligence v1.2.0 read-only precision intelligence
+Description=Mail Intelligence v1.2.2 read-only OAuth LLM providers
 Documentation=file:///home/jm/orca/projects/mail-intelligence/docs/runbooks/UBUNTU-DEPLOYMENT.md
 Wants=network-online.target
 After=network-online.target
@@ -10,6 +10,8 @@ StartLimitBurst=5
 Type=simple
 WorkingDirectory=/home/jm/orca/projects/mail-intelligence
 EnvironmentFile=/home/jm/orca/projects/mail-intelligence/data/runtime.env
+Environment=HOME=/home/jm
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/jm/.local/bin:/home/jm/.grok/bin
 ExecStart=/usr/bin/node /home/jm/orca/projects/mail-intelligence/server.mjs
 Restart=on-failure
 RestartSec=5
@@ -24,7 +26,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/jm/orca/projects/mail-intelligence/data
+ReadWritePaths=/home/jm/orca/projects/mail-intelligence/data -/home/jm/.codex -/home/jm/.grok
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]

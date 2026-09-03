@@ -5,8 +5,10 @@ function text(value, max = 1_000_000) {
 function htmlToText(value = '') {
   return String(value || '')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|tr|h[1-6]|table|blockquote)>/gi, '\n')
-    .replace(/<(p|div|li|tr|h[1-6]|table|blockquote)[^>]*>/gi, '\n')
+    .replace(/<blockquote[^>]*>/gi, '\n---------- Original Message ----------\n')
+    .replace(/<\/blockquote>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6]|table)>/gi, '\n')
+    .replace(/<(p|div|li|tr|h[1-6]|table)[^>]*>/gi, '\n')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')

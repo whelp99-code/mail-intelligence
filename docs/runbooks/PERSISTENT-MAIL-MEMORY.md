@@ -21,7 +21,7 @@
 cd /home/jm/orca/projects/mail-intelligence
 node --version
 npm ci
-npm run verify:v1.2.0
+npm run verify:v1.2.2
 ```
 
 Node.js는 22 이상이어야 한다.

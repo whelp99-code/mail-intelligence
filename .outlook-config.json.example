@@ -3,10 +3,9 @@
   "clientId": "",
   "mailboxUser": "",
   "loginTenant": "common",
-  "geminiModel": "gemini-2.5-flash",
   "aiProvider": "rules",
-  "faiosServerUrl": "http://localhost:3201",
-  "lmstudioModel": "qwen/qwen3.5-9b",
+  "openaiCodexModel": "",
+  "xaiGrokModel": "grok-4.6",
   "domainProfiles": "",
   "aiOptInVersion": ""
 }

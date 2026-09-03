@@ -16,24 +16,32 @@ Mail Intelligence는 **Outlook 전체 메일을 지속적으로 분석해 프로
 
 ## 현재 버전
 
-**Version: 1.2.0 — Precision Classification & Intelligent Exploration**
+**Version: 1.2.2 — Operational Classification Stabilization**
 
-v1.2.0은 v1.1.0의 **authoritative SQLite** Persistent Mail Memory와 읽기 전용 안전 기준 위에서, 분류 종류를 무작정 늘리는 대신 **세분화가 아니라 정밀화**를 적용한 버전입니다.
+v1.2.2는 v1.2.1의 **authoritative SQLite**, 정밀 분류, 지능형 탐색, 공식 CLI OAuth Provider와 읽기 전용 안전 기준을 유지하면서, 의미 사건·상태 머신과 `DO_NOW / WAITING / REVIEW / ARCHIVE` 운영 Lane을 추가한 버전입니다. 확실한 업무는 빠르게 배치하고, 불확실하거나 충돌하는 메일은 Silent Action Miss 방지 Gate를 통해 자동 보관하지 않습니다.
 
-메일마다 다음 여섯 항목만 현재 판단으로 확정합니다.
+MailMaestro 메일에서 확인된 Improve, Thread Summary, Rapid Reply, Auto Label, Meeting Intent, AI Personality, Email/Attachment Summary는 발송·캘린더·CRM 쓰기 없이 로컬 요약·초안·검토 기능으로만 반영합니다. 공개 API, Gmail 지원, 가격 숫자는 근거가 없으므로 제품 기능으로 주장하지 않습니다.
+
+기존 핵심 원칙인 **세분화가 아니라 정밀화**는 그대로 유지합니다.
 
 ```text
-현재 업무 상태 1개
-다음 행동 주체 1개
-주 프로젝트 최대 1개 또는 미분류
-우선순위와 기한
-원문 근거
-필드별 신뢰도
+Rules
+OpenAI · ChatGPT OAuth — official Codex CLI
+xAI · Grok OAuth — official Grok CLI
 ```
 
-애매하거나 서로 충돌하는 메일은 억지로 확정하지 않고 `REVIEW_REQUIRED`, `UNKNOWN`, `UNASSIGNED` 상태로 보류합니다. 프로젝트와 업무는 자동 생성하지 않습니다.
+Mail Intelligence는 OAuth Access Token이나 Refresh Token을 읽거나 복사해 자체 DB에 저장하지 않습니다. 각 공식 CLI가 사용자 전용 credential cache를 소유하고 갱신하며, Mail Intelligence는 로그인 상태와 분석 결과만 제한된 subprocess 계약으로 사용합니다.
 
-| 기능 | v1.2.0 상태 |
+메일 데이터가 외부 LLM으로 전송되려면 다음 두 조건이 모두 필요합니다.
+
+```text
+운영자의 MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=1 승인
++ UI의 명시적 메일 데이터 정책 동의
+```
+
+분석은 빈 임시 디렉터리, 도구 비활성, 읽기 전용 sandbox, 무승인 모드, 시간·출력 크기 제한, JSON Schema 및 원문 근거 검증으로 수행됩니다. Provider 실패는 숨기지 않으며 다른 Provider로 조용히 폴백하지 않고 Rules 판단으로만 내려갑니다.
+
+| 기능 | v1.2.2 상태 |
 |---|---|
 | Outlook 폴더 탐색 | 지원 |
 | Graph 페이지네이션 | 지원 |
@@ -45,14 +53,25 @@ v1.2.0은 v1.1.0의 **authoritative SQLite** Persistent Mail Memory와 읽기 �
 | SQLite 영속 저장 | authoritative |
 | FTS5 전체 메일 검색 | 지원 |
 | 사용자 분류 보정 | SQLite에 영속 저장 |
-| AI 분석 캐시 | Provider·모델·Prompt 버전별 영속 저장 |
+| AI 분석 캐시 | OAuth Provider·모델·Prompt 버전별 영속 저장 |
 | 정밀 업무 상태 | 6개 상호배타 상태 지원 |
+| 운영 업무 Lane | `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE` |
+| Silent Action Miss 방지 | 위험·충돌·낮은 신뢰도 메일의 자동 Archive 차단 |
 | 다음 행동 주체 | 내 차례·내부 팀·외부·공동·없음·불명 |
 | 프로젝트 연결 | 사용자가 등록한 프로젝트만 확정 연결 |
 | 프로젝트 후보 | 후보로만 보관, 자동 생성 없음 |
 | 지능형 탐색 | 자연어 업무 질의 + 구조화 필터 + FTS 근거 검색 |
 | 정밀 분류 보정 | 자동 판단보다 우선하며 변경 이력 보존 |
+| Thread·메일 요약 | currentContent 기반 한 줄·상세 요약 |
+| 회신·Improve 초안 | 복사 전용, 자동 발송 없음 |
+| Meeting Intent | 후보 시간·확인 초안, Calendar 쓰기 없음 |
+| AI Personality | 로컬 bounded 설정, 초안에만 적용 |
+| Attachment Summary | PDF/DOCX/TXT의 승인된 추출 텍스트 또는 metadata-only |
 | Garbage 방지 | 낮은 신뢰도 보류·중복 프로젝트 차단·변경 시에만 이벤트 기록 |
+| OpenAI OAuth | 공식 Codex CLI의 ChatGPT OAuth credential cache 사용 |
+| xAI OAuth | 공식 Grok CLI의 OAuth credential cache 사용; CLI 설치·로그인은 별도 필요 |
+| OAuth 토큰 자체 저장 | 하지 않음 |
+| Provider 간 자동 폴백 | 하지 않음; Rules만 안전 폴백 |
 | 작업 이력·Dead Letter | 지원 |
 | 검증 백업·오프라인 복원 | 지원 |
 | 메일 발송·원본 변경 | 비활성화 |
@@ -141,7 +160,7 @@ POST /api/intelligence/correct
 openid profile offline_access User.Read Mail.Read
 ```
 
-`Mail.Send`와 `Mail.ReadWrite`는 요청하지 않습니다. 환경변수로 쓰기 기능을 요청해도 v1.2.0 안전 정책이 기본적으로 차단합니다.
+`Mail.Send`와 `Mail.ReadWrite`는 요청하지 않습니다. 환경변수로 쓰기 기능을 요청해도 v1.2.2 안전 정책이 기본적으로 차단합니다.
 
 ### 로컬 전용 서버
 
@@ -186,7 +205,6 @@ printf 'http://%s:3010\n' "$(tailscale ip -4 | head -n1)"
 - Outlook Access Token
 - OAuth Refresh Token
 - Microsoft Client Secret
-- Gemini API Key
 
 접근키 기반 운영에서는 AES-256-GCM 암호화 파일을 사용할 수 있습니다. 공개 설정과 메일 DB는 별도로 관리합니다.
 
@@ -198,12 +216,12 @@ printf 'http://%s:3010\n' "$(tailscale ip -4 | head -n1)"
 - Node.js 22 이상
 - npm
 - 선택 사항: Microsoft Entra App Registration
-- 선택 사항: F-AIOS-v3 또는 LM Studio
+- 선택 사항: OpenAI Codex CLI 또는 xAI Grok CLI
 
 ```bash
 cd /home/jm/orca/projects/mail-intelligence
 npm ci
-npm run verify:v1.2.0
+npm run verify:v1.2.2
 npm start
 ```
 
@@ -371,13 +389,40 @@ http://127.0.0.1:3010/auth/callback
 지원 Provider:
 
 ```text
-rules      기본값, 외부 모델 호출 없음
-f-aios-v3  명시적 옵트인, loopback URL만 허용
-lmstudio   명시적 옵트인, loopback URL만 허용
-gemini     명시적 데이터 정책 동의와 API Key 필요
+rules                 기본값, 외부 모델 호출 없음
+openai-codex-oauth    공식 Codex CLI + ChatGPT OAuth
+xai-grok-oauth        공식 Grok CLI + xAI OAuth
 ```
 
-AI 응답은 JSON 스키마, Message ID, 상태, 신뢰도, 액션 수, 원문 근거를 검증한 뒤에만 저장됩니다. 메일 원문에 없는 근거와 허용되지 않은 도구 실행 액션은 거부됩니다.
+OAuth 로그인:
+
+```bash
+codex login --device-auth
+grok login --device-auth
+npm run oauth:status
+```
+
+운영 서비스에서 OAuth LLM 게이트를 명시적으로 여는 명령:
+
+```bash
+npm run oauth:enable -- openai-codex-oauth
+# 또는
+npm run oauth:enable -- xai-grok-oauth
+```
+
+이 명령은 해당 CLI가 설치되고 OAuth 인증된 경우에만 `MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=1`을 설정합니다. UI의 Provider 선택과 메일 데이터 정책 동의는 여전히 별도로 필요합니다. 메일 발송·읽음 변경·Data Plane 쓰기 권한은 열리지 않습니다.
+
+AI 응답은 JSON Schema, Message ID, 상태, 신뢰도, 액션 수, 원문 근거를 검증한 뒤에만 저장됩니다. Codex는 빈 임시 디렉터리·read-only sandbox·도구 이벤트 거부로, Grok은 빈 임시 디렉터리·모든 작업 도구 금지·단일 turn으로 실행됩니다. 메일 원문에 없는 근거와 허용되지 않은 도구 실행 액션은 거부됩니다.
+
+OAuth 운영 API:
+
+```text
+GET  /api/ai/oauth/status
+GET  /api/ai/oauth/instructions?provider=...
+POST /api/ai/oauth/test
+```
+
+`/api/ai/oauth/test`는 실제 메일이 아닌 고정 합성 문장만 사용합니다.
 
 ## 주요 API
 
@@ -426,7 +471,7 @@ AI 응답은 JSON 스키마, Message ID, 상태, 신뢰도, 액션 수, 원문 �
 전체 엔지니어링 게이트:
 
 ```bash
-npm run verify:v1.2.0
+npm run verify:v1.2.2
 ```
 
 포함 항목:
@@ -503,7 +548,9 @@ mail-intelligence/
 |---|---|
 | `1.0.1` | 안전성과 분석 정합성 복구 — 완료 |
 | `1.1.0` | SQLite 기반 전체 메일 Persistent Memory — 완료 |
-| `1.2.0` | 최소 충분 정밀 분류·명시적 프로젝트 연결·지능형 탐색 — 현재 |
+| `1.2.0` | 최소 충분 정밀 분류·명시적 프로젝트 연결·지능형 탐색 |
+| `1.2.1` | 공식 Codex/Grok CLI OAuth Provider·credential isolation·합성 연결 테스트 |
+| `1.2.2` | 의미 사건·운영 Lane·Archive Guard·메일 보조 도구 — 현재 |
 | `1.3.0` | 실제 사용자 보정·결과 데이터 기반 지속 학습과 영향 범위 재평가 |
 | `1.4.0` | 오늘의 업무함·프로젝트 인텔리전스·근거 기반 질의응답 |
 | `1.5.0` | 외부 시스템 읽기 연결·운영 준비 |
@@ -511,7 +558,7 @@ mail-intelligence/
 
 ## 현재 운영 판정
 
-v1.2.0은 엔지니어링 검증 대상이며, 실제 Outlook read-only production pilot은 별도입니다. 정밀 분류는 프로젝트·업무를 자동 생성하지 않으며, 실제 보정 데이터가 충분히 축적되기 전에는 “지속 학습 완료”로 표현하지 않습니다.
+v1.2.2는 엔지니어링 검증 대상이며, 최종 Production GO는 신규 독립 Blind·검색 relevance·Correction 지속성·31회 안정성 검증과 별도입니다. 정밀 분류는 프로젝트·업무를 자동 생성하지 않으며, 실제 보정 데이터가 충분히 축적되기 전에는 “지속 학습 완료”로 표현하지 않습니다.
 
 다음 항목은 실제 증거가 확보되기 전까지 완료로 간주하지 않습니다.
 
@@ -519,8 +566,26 @@ v1.2.0은 엔지니어링 검증 대상이며, 실제 Outlook read-only producti
 - 실제 회사 Outlook의 전체 폴더·대용량 페이지 수집
 - 실환경 Delta 변경·삭제·이동
 - Microsoft throttling과 토큰 만료
-- 실제 F-AIOS·LM Studio·Gemini
+- 실제 xAI Grok CLI 설치·OAuth 로그인
+- 실제 Codex/Grok OAuth 메일 분석 품질·비용·지연 평가
 - 장시간 운영·용량 추세·백업 보존 정책
 - 실제 사용자 평가 데이터셋
 
 이 파일럿 전에도 메일 발송이나 다른 업무 시스템 쓰기 기능은 활성화하지 않습니다.
+
+## v1.2.2 사건·운영 Lane 기반 분류
+
+현재 운영 분류기는 `precision-classification-v1.2.2-fix9`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다.
+
+조건부 문의 Footer, 법적 Disclaimer, 마케팅 수신거부, tracking asset은 상태·Priority Evidence에서 제외한다. 외부 행동과 외부 AI는 운영 안전선에서 기본 비활성화 상태를 유지한다.
+
+검증:
+
+```bash
+npm run verify:v1.2.2
+npm run verify:qa:known-acceptance
+npm run verify:qa:operational
+npm run verify:qa:search
+```
+
+최종 Production GO는 `docs/qa/ASIDE-V1.2.2-FINAL-INDEPENDENT-RELEASE-QA-INSTRUCTIONS.md`에 따라 Aside가 신규 Blind를 독립 라벨링·동결·채점한 뒤 결정합니다.
