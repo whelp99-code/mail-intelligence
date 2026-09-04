@@ -59,6 +59,8 @@ data/qa/v1.2.2-independent/
 ```text
 AGENTS.md
 README.md
+docs/releases/v1.2.2-OAUTH-LOCALHOST-REDIRECT-FIX.md
+docs/releases/v1.2.2-LAYOUT-DESIGN-STABILIZATION.md
 docs/planning/V1.2.2-OPERATIONAL-CLASSIFICATION-STABILIZATION.md
 docs/qa/ASIDE-V1.2.1-QA-FIX8-FINAL-EXECUTION-INSTRUCTION.md
 이 지시서 전체
@@ -183,6 +185,7 @@ precisionClassificationVersion=precision-classification-v1.2.2-fix9
 operationalClassificationVersion=operational-classification-v1.2.2
 intelligentSearchVersion=intelligent-search-v1.2.2
 mailAssistantToolsVersion=mail-assistant-tools-v1.2.2
+outlookOAuthRedirectUri=http://localhost:3010/auth/callback
 ```
 
 서비스·노출 필수 조건:
@@ -199,7 +202,143 @@ Public listener 없음
 Tailscale Funnel 없음
 ```
 
-버전이 다르거나 공개 노출이 있으면 `BLOCKED` 또는 안전선 `NO-GO`로 종료한다. Aside가 서비스를 다른 소스로 재배포하지 않는다.
+버전이 다르거나 공개 노출이 있으면 `BLOCKED` 또는 안전선 `NO-GO`로 종료한다. `outlookOAuthRedirectUri`가 정확히 `http://localhost:3010/auth/callback`이 아니어도 `BLOCKED`로 종료한다. Aside가 서비스를 다른 소스로 재배포하지 않는다.
+
+Blind 표본을 열기 전에 Microsoft authorization URL도 독립 확인한다. 로그인 화면을 실제로 완료하거나 외부 메일을 변경하지 말고, 인증된 로컬 세션으로 `/api/outlook/oauth/start`를 호출해 반환된 authorization URL만 파싱한다.
+
+```text
+redirect_uri=http://localhost:3010/auth/callback
+scope includes Mail.Read
+scope excludes Mail.Send
+scope excludes Mail.ReadWrite
+redirect_uri contains no 127.0.0.1
+redirect_uri contains no Tailnet IP
+```
+
+GET과 UI가 사용하는 POST 시작 경로가 모두 같은 Redirect URI를 생성해야 한다. Azure App Registration의 등록값을 QA 중 수정하지 않는다. 기존 Microsoft 오류 팝업은 재사용하지 않고 새 OAuth 요청으로 검증한다.
+
+## 5A. 레이아웃·디자인 독립 Gate
+
+Blind 표본을 열기 전에 실제 브라우저에서 UI를 검증한다. 개발자 측 정적 테스트만으로 PASS를 선언하지 않는다.
+
+기준 뷰포트:
+
+```text
+Desktop: 1512 x 872 CSS px
+Responsive: 1180px 이하의 대표 뷰포트 1개 이상
+```
+
+### 5A.1 데스크톱 핵심 업무 Grid
+
+다음 다섯 요소의 실제 bounding box를 기록한다.
+
+```text
+mail-list-panel
+col-resizer #1
+detail-panel
+col-resizer #2
+action-column
+```
+
+합격 기준:
+
+```text
+목록·상세·Action의 상단 Y 좌표 차이 <= 2px
+리사이저 2개의 상단 Y 좌표가 패널 행과 일치
+리사이저 2개의 높이가 mail-shell 높이와 실질적으로 일치
+Action column이 다음 Grid 행으로 밀리지 않음
+computed grid-template-columns가 5개 track을 가짐
+두 리사이저 track은 각각 약 6px
+```
+
+P0 위반이 하나라도 있으면 디자인 Gate는 `FAIL`이며 Release는 `NO-GO`다.
+
+### 5A.2 첫 화면 우선순위
+
+DOM 및 실제 화면에서 다음 순서를 확인한다.
+
+```text
+topbar
+read-only safety notice
+mail-shell
+precision intelligence
+persistent memory
+connection/settings
+```
+
+합격 기준:
+
+```text
+mail-shell 상단이 초기 viewport 안에 존재
+초기 viewport에서 목록·상세·Action의 상단과 유의미한 콘텐츠 영역이 보임
+사용자가 메일 업무 영역을 보기 위해 필수로 먼저 설정/KPI 전체를 스크롤할 필요가 없음
+```
+
+### 5A.3 설정 패널
+
+외부 `연결·분석 설정`은 기본 접힘이어야 한다. 확장 후 다음을 확인한다.
+
+```text
+Outlook 인증: 기본 열림
+고급 Outlook 인증: 기본 접힘
+AI Provider: 기본 접힘
+초안 작성 성격: 기본 접힘
+```
+
+설정 본문은 `max-height`와 내부 scroll을 가져야 한다. 설정을 열었다는 이유로 핵심 업무 화면이 무제한으로 아래로 밀리면 FAIL이다.
+
+### 5A.4 연결 상태 일관성
+
+상단 `connectionStatus`와 설정 summary `configStatus`의 표시 문구를 다음 단계마다 비교한다.
+
+```text
+초기 상태 조회
+설정 저장 중
+OAuth 시작 및 Microsoft 승인 대기
+callback 성공
+callback 실패 또는 token exchange 실패
+설정 초기화
+```
+
+두 위치는 항상 동일한 상태 source에서 같은 의미를 표시해야 한다. 과거 성공 문구와 현재 실패·진행 문구가 동시에 남으면 FAIL이다. Callback 검증을 위해 외부 메일 쓰기를 수행하지 않는다.
+
+### 5A.5 상단 밀도
+
+1512 × 872에서 검색·메일 수·Outlook 가져오기 조작이 우선 한 줄에 배치되는지 확인한다. 긴 Delta 상태 문구는 상단 높이를 과도하게 늘리지 않아야 하며, 생략된 전체 문구는 tooltip 또는 접근 가능한 상세로 확인 가능해야 한다.
+
+### 5A.6 반응형
+
+1180px 이하에서는 다음을 확인한다.
+
+```text
+computed display of both .col-resizer = none
+메일 목록 -> 상세 -> Action 순서로 한 열 배치
+리사이저 때문에 생성된 6px 빈 Grid 행 없음
+설정 내부 Grid 한 열
+상단 조작부 정상 줄바꿈
+```
+
+### 5A.7 증적
+
+최종 보고서에 개인정보가 보이지 않는 화면 캡처 또는 bounding-box JSON을 포함한다.
+
+권장 증적:
+
+```text
+Desktop 초기 화면
+Desktop 설정 확장 화면
+Responsive 화면
+각 핵심 요소 x/y/width/height
+computed grid-template-columns
+각 config section open 상태
+```
+
+참조 구현·수용 문서:
+
+```text
+docs/releases/v1.2.2-LAYOUT-DESIGN-STABILIZATION.md
+test/layout-contract.test.js
+```
 
 ## 6. 절대 안전선
 
@@ -898,6 +1037,7 @@ Blind 채점 후 Ground Truth 수정
 ```text
 고정 Commit과 origin/main 일치
 Live v1.2.2 전체 버전 일치
+레이아웃·디자인 독립 Gate PASS
 전체 자동 Engineering Gate PASS
 DB integrity·version purity PASS
 Known hard regression PASS
@@ -944,6 +1084,12 @@ Important Action Miss >3%
 Archive Guard Violation >0
 Evidence <100%
 검색 Direct <90%
+데스크톱 3패널 동행 배치 실패
+Action column 또는 리사이저가 다음 Grid 행으로 이동
+첫 viewport에서 핵심 mail-shell을 사용할 수 없음
+설정 패널 무제한 수직 확장
+연결 상태 source 불일치
+1180px 이하 리사이저 잔존 또는 6px 빈 행 생성
 현재/과거 본문 오염
 첨부 내용 환각
 첨부 요약이 상태를 자동 확정
@@ -977,30 +1123,31 @@ Aside가 소스 수정·재배포해야만 진행 가능한 상태
 1. 최종 판정
 2. 대상 Commit·origin/main·Source Snapshot
 3. Live Version Matrix
-4. 안전선·Graph Scope·외부 행동 Count
-5. 서비스·네트워크 기준선
-6. DB integrity·version purity
-7. 전체 자동 Engineering Gate
-8. Ground Truth conflict/policy audit
-9. 알려진 회귀
-10. Main Blind manifest·Prediction 비노출·Label 동결
-11. Canonical 6-state 점수
-12. 운영 위험 지표
-13. Main mismatch 전체 표
-14. Incident/Security 신규 Blind
-15. Evidence 전수검사
-16. 검색 30개 독립 평가
-17. MailMaestro 근거 기능 수용 결과
-18. Attachment Summary 환각 방지 결과
-19. Correction 지속성
-20. Provider OFF·선택적 Luna
-21. Outlook Delta 2회
-22. 백업·격리 복원
-23. 재시작 지속성
-24. 독립 31회 안정성
-25. Source·Manifest·Label 불변성
-26. 남은 문제와 최소 수정안
-27. GO / CONDITIONAL GO / NO-GO / BLOCKED 근거
+4. 레이아웃·디자인 독립 Gate와 증적
+5. 안전선·Graph Scope·외부 행동 Count
+6. 서비스·네트워크 기준선
+7. DB integrity·version purity
+8. 전체 자동 Engineering Gate
+9. Ground Truth conflict/policy audit
+10. 알려진 회귀
+11. Main Blind manifest·Prediction 비노출·Label 동결
+12. Canonical 6-state 점수
+13. 운영 위험 지표
+14. Main mismatch 전체 표
+15. Incident/Security 신규 Blind
+16. Evidence 전수검사
+17. 검색 30개 독립 평가
+18. MailMaestro 근거 기능 수용 결과
+19. Attachment Summary 환각 방지 결과
+20. Correction 지속성
+21. Provider OFF·선택적 Luna
+22. Outlook Delta 2회
+23. 백업·격리 복원
+24. 재시작 지속성
+25. 독립 31회 안정성
+26. Source·Manifest·Label 불변성
+27. 남은 문제와 최소 수정안
+28. GO / CONDITIONAL GO / NO-GO / BLOCKED 근거
 ```
 
 최종 보고서에는 메일 전문, 첨부 전문, 계정 정보, Token, Secret, Key, Cookie를 포함하지 않는다. 개인정보는 hash 또는 비식별 축약으로만 남긴다.

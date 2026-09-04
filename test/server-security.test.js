@@ -70,6 +70,7 @@ test('v1.2.2 server security boundary', async (t) => {
   const health = await waitForHealth(baseUrl, child, logs);
   assert.equal(health.ok, true);
   assert.equal(health.version, '1.2.2');
+  assert.equal(health.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
   assert.equal(health.storage.authoritativeStore, 'sqlite');
   assert.equal(health.storage.schemaVersion, 4);
   assert.equal(health.externalActionsAllowed, false);
@@ -134,16 +135,37 @@ test('v1.2.2 server security boundary', async (t) => {
     assert.equal(body.secretsPersisted, false);
   });
 
-  await t.test('OAuth authorization requests only read mail in v1.2.2', async () => {
+  await t.test('OAuth authorization uses the registered localhost callback and only reads mail', async () => {
     const response = await fetch(`${baseUrl}/api/outlook/oauth/start?clientId=test-client&tenantId=common`, {
       headers: { Cookie: cookie },
       redirect: 'manual',
     });
     assert.equal(response.status, 302);
     const location = response.headers.get('location') || '';
-    const scope = new URL(location).searchParams.get('scope') || '';
+    const authorize = new URL(location);
+    const scope = authorize.searchParams.get('scope') || '';
+    const callback = authorize.searchParams.get('redirect_uri') || '';
+    assert.equal(callback, 'http://localhost:3010/auth/callback');
+    assert.equal(callback.includes('127.0.0.1'), false);
     assert.match(scope, /Mail\.Read/);
     assert.equal(scope.includes('Mail.Send'), false);
+
+    const postResponse = await fetch(`${baseUrl}/api/outlook/oauth/start`, {
+      method: 'POST',
+      headers: {
+        Cookie: cookie,
+        Origin: baseUrl,
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': session.csrfToken,
+        'X-Mail-Intelligence-Request': '1',
+      },
+      body: JSON.stringify({ clientId: 'test-client', tenantId: 'common' }),
+    });
+    assert.equal(postResponse.status, 200);
+    const postAuthorize = new URL((await postResponse.json()).authorizeUrl);
+    assert.equal(postAuthorize.searchParams.get('redirect_uri'), 'http://localhost:3010/auth/callback');
+    assert.match(postAuthorize.searchParams.get('scope') || '', /Mail\.Read/);
+    assert.equal((postAuthorize.searchParams.get('scope') || '').includes('Mail.Send'), false);
   });
 
   await t.test('invalid top query is rejected before any Graph call', async () => {

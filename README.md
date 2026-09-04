@@ -196,7 +196,7 @@ npm run verify:tailnet
 printf 'http://%s:3010\n' "$(tailscale ip -4 | head -n1)"
 ```
 
-이 경로는 Tailnet 내부 전용이며 Tailscale Funnel, 공인 IP NAT, `0.0.0.0` 바인딩을 사용하지 않습니다. 최초 Microsoft OAuth 연결은 기존 SSH 터널과 `http://127.0.0.1:3010/auth/callback`을 사용합니다.
+이 경로는 Tailnet 내부 전용이며 Tailscale Funnel, 공인 IP NAT, `0.0.0.0` 바인딩을 사용하지 않습니다. Backend는 계속 `127.0.0.1:3010`에만 바인딩하지만, 최초 Microsoft OAuth 연결은 SSH 터널을 연 뒤 브라우저에서 `http://localhost:3010`으로 접속합니다. Microsoft Entra에 전달하는 Redirect URI는 요청 Host나 Tailnet 주소에서 만들지 않고 항상 `http://localhost:3010/auth/callback`으로 고정합니다.
 
 ### Secret 처리
 
@@ -375,12 +375,15 @@ node scripts/mail-memory-admin.mjs restore /absolute/path/backup.sqlite --confir
 2. Redirect URI를 등록합니다.
 
 ```text
-http://127.0.0.1:3010/auth/callback
+http://localhost:3010/auth/callback
 ```
 
 3. Delegated permission에 `User.Read`, `Mail.Read`만 허용합니다.
-4. UI에서 Client ID와 Tenant를 설정합니다.
-5. `Outlook으로 로그인`을 눌러 읽기 권한만 승인합니다.
+4. SSH 터널을 연 뒤 브라우저에서 `http://localhost:3010`으로 접속합니다.
+5. UI에서 Client ID와 Tenant를 설정합니다.
+6. `Outlook으로 로그인`을 눌러 읽기 권한만 승인합니다.
+
+Backend의 실제 Listen 주소가 `127.0.0.1:3010`이어도 OAuth authorization과 authorization-code 교환에는 위 `localhost` URI를 동일하게 사용합니다. Azure에 `https://127.0.0.1`이나 Tailnet IP를 추가할 필요가 없습니다.
 
 실제 Microsoft OAuth 연결과 실제 회사 Outlook 메일함 검증은 별도의 통제된 read-only pilot에서 수행해야 합니다. 자동 테스트는 실제 운영 메일을 사용하지 않습니다.
 

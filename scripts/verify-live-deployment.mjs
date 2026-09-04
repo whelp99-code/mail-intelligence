@@ -25,6 +25,7 @@ assert.equal(health.body.ok, true);
 assert.equal(health.body.version, '1.2.2');
 assert.equal(health.body.precisionClassificationVersion, 'precision-classification-v1.2.2-fix9');
 assert.equal(health.body.intelligentSearchVersion, 'intelligent-search-v1.2.2');
+assert.equal(health.body.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
 assert.equal(health.body.listenHost, '127.0.0.1');
 assert.equal(health.body.safety?.mode, 'read-only');
 assert.equal(health.body.externalActionsAllowed, false);
@@ -48,6 +49,19 @@ assert.equal(authenticatedRoot.status, 200);
 const html = await authenticatedRoot.text();
 assert.match(html, /v1\.2\.2 · Operational Classification/);
 assert.match(html, /프로젝트는 자동 생성하지 않습니다/);
+assert.match(html, /http:\/\/localhost:3010\/auth\/callback/);
+const mailWorkspaceIndex = html.indexOf('id="mailShell"');
+const precisionIndex = html.indexOf('id="precisionIntelligence"');
+const memoryIndex = html.indexOf('id="persistentMemory"');
+const settingsIndex = html.indexOf('id="configForm"');
+assert.ok(mailWorkspaceIndex > 0);
+assert.ok(mailWorkspaceIndex < precisionIndex);
+assert.ok(precisionIndex < memoryIndex);
+assert.ok(memoryIndex < settingsIndex);
+assert.equal((html.match(/class="col-resizer"/g) || []).length, 2);
+assert.equal((html.match(/role="separator"/g) || []).length, 2);
+assert.match(html, /연결·분석 설정/);
+assert.match(html, /class="config-section config-section-outlook" open/);
 const cookie = (authenticatedRoot.headers.get('set-cookie') || '').split(';')[0];
 assert.match(cookie, /^mi_session=/);
 
@@ -77,6 +91,26 @@ assert.equal(outlookStatus.body.storage?.authoritativeStore, 'sqlite');
 
 const config = await jsonResponse('/api/outlook/config', { headers: readHeaders });
 assert.equal(config.response.status, 200);
+const oauthStart = await jsonResponse('/api/outlook/oauth/start', {
+  method: 'POST',
+  headers: mutationHeaders,
+  body: JSON.stringify({
+    clientId: config.body.clientId || 'redirect-contract-client',
+    tenantId: config.body.loginTenant || 'common',
+    mailboxUser: config.body.mailboxUser || '',
+  }),
+});
+assert.equal(oauthStart.response.status, 200, JSON.stringify(oauthStart.body));
+const authorizeUrl = new URL(oauthStart.body.authorizeUrl);
+const authorizationRedirectUri = authorizeUrl.searchParams.get('redirect_uri') || '';
+const authorizationScopes = (authorizeUrl.searchParams.get('scope') || '').split(/\s+/).filter(Boolean);
+assert.equal(authorizeUrl.protocol, 'https:');
+assert.equal(authorizeUrl.hostname, 'login.microsoftonline.com');
+assert.equal(authorizationRedirectUri, 'http://localhost:3010/auth/callback');
+assert.equal(authorizationRedirectUri.includes('127.0.0.1'), false);
+assert.ok(authorizationScopes.includes('Mail.Read'));
+assert.equal(authorizationScopes.includes('Mail.Send'), false);
+assert.equal(authorizationScopes.includes('Mail.ReadWrite'), false);
 const configSave = await jsonResponse('/api/outlook/config', {
   method: 'POST',
   headers: mutationHeaders,
@@ -173,6 +207,10 @@ console.log(JSON.stringify({
   version: health.body.version,
   precisionClassificationVersion: health.body.precisionClassificationVersion,
   intelligentSearchVersion: health.body.intelligentSearchVersion,
+  outlookOAuthRedirectUri: health.body.outlookOAuthRedirectUri,
+  authorizationRedirectUri,
+  authorizationScopes,
+  layoutContract: 'mail-workspace-first-five-track-v1',
   service: health.body.service,
   listenHost: health.body.listenHost,
   safetyMode: health.body.safety.mode,

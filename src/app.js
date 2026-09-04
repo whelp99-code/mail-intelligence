@@ -98,6 +98,52 @@ let selectedMessageId = '';
 let precisionProjects = [];
 let precisionSmartViews = [];
 
+let latestOutlookStatus = {};
+
+function updateOutlookConnectionStatus(status = {}, options = {}) {
+  latestOutlookStatus = { ...latestOutlookStatus, ...status };
+  const phase = options.phase || 'ready';
+  const message = String(options.message || '').trim();
+  const safetyLabel = latestOutlookStatus.safety?.mode === 'read-only'
+    ? '읽기 전용'
+    : latestOutlookStatus.safety?.mode || '정책 확인 필요';
+  let text;
+  let state;
+
+  if (phase === 'oauth-pending') {
+    text = 'Outlook 로그인 진행 중 · Microsoft 창에서 Mail.Read 승인 대기';
+    state = 'pending';
+  } else if (phase === 'saving') {
+    text = `Outlook 설정 저장 중 · ${safetyLabel}`;
+    state = 'pending';
+  } else if (phase === 'error') {
+    text = `Outlook 연결 오류${message ? ` · ${message}` : ''}`;
+    state = 'error';
+  } else if (latestOutlookStatus.connected) {
+    const mode = latestOutlookStatus.authMode || latestOutlookStatus.mode || 'delegated';
+    text = `Outlook 연결됨 (${mode} · ${safetyLabel})`;
+    state = 'connected';
+  } else if (latestOutlookStatus.mode === 'offline-cache') {
+    text = `Outlook 미연결 · SQLite 메일 DB ${safetyLabel}`;
+    state = 'offline';
+  } else {
+    text = `Outlook 미연결 · ${safetyLabel}`;
+    state = 'disconnected';
+  }
+
+  for (const node of [connectionStatus, configStatus]) {
+    node.textContent = text;
+    node.title = text;
+    node.dataset.connectionState = state;
+  }
+}
+
+function updateFetchStatus(message) {
+  const text = String(message || '').trim();
+  fetchStatus.textContent = text;
+  fetchStatus.title = text;
+}
+
 function syncExternalAiConsent() {
   const requiresConsent = aiProvider.value !== 'rules';
   externalAiConsentField.hidden = !requiresConsent;
@@ -1454,11 +1500,8 @@ async function loadStatus() {
   try {
     const response = await apiFetch('/api/outlook/config');
     const status = await response.json();
-    const safetyLabel = status.safety?.mode === 'read-only' ? '읽기 전용' : status.safety?.mode || '정책 확인 필요';
-    connectionStatus.textContent = status.connected
-      ? `Outlook 연결 준비됨 (${status.authMode} · ${safetyLabel})`
-      : `Outlook 인증값 필요 · ${safetyLabel}`;
-    configStatus.textContent = status.connected ? `설정됨: ${status.authMode} · ${safetyLabel}` : `미설정 · ${safetyLabel}`;
+    if (!response.ok) throw new Error(status.message || 'Outlook 상태 확인 실패');
+    updateOutlookConnectionStatus(status);
     loginTenant.value = status.loginTenant || 'common';
     tenantId.value = status.tenantId || '';
     clientId.value = status.clientId || '';
@@ -1471,26 +1514,28 @@ async function loadStatus() {
     accessToken.placeholder = status.hasAccessToken ? '현재 서버 메모리의 토큰 사용 중' : '';
     clientSecret.placeholder = status.hasClientSecret ? '현재 서버 메모리의 Client Secret 사용 중' : '';
     await loadOauthProviderStatus();
-  } catch {
-    connectionStatus.textContent = 'Outlook 상태 확인 실패';
-    configStatus.textContent = '확인 실패';
+  } catch (error) {
+    updateOutlookConnectionStatus({}, {
+      phase: 'error',
+      message: error instanceof Error ? error.message : '상태 확인 실패',
+    });
   }
 }
 
 async function saveConfig(event) {
   event.preventDefault();
   if (aiProvider.value !== 'rules' && !aiDataPolicyAccepted.checked) {
-    configStatus.textContent = 'OAuth LLM으로 메일 데이터를 전송하려면 외부 AI 데이터 정책에 먼저 동의하세요.';
+    updateFetchStatus('OAuth LLM으로 메일 데이터를 전송하려면 외부 AI 데이터 정책에 먼저 동의하세요.');
     aiDataPolicyAccepted.focus();
     return;
   }
-  configStatus.textContent = '저장 중';
+  updateOutlookConnectionStatus({}, { phase: 'saving' });
   try {
     const response = await apiFetch('/api/outlook/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        accessToken: accessToken.value,
+        accessToken: [REDACTED],
         tenantId: tenantId.value,
         clientId: clientId.value,
         clientSecret: clientSecret.value,
@@ -1505,11 +1550,7 @@ async function saveConfig(event) {
     });
     const status = await response.json();
     if (!response.ok) throw new Error(status.message || '저장 실패');
-    const safetyLabel = status.safety?.mode === 'read-only' ? '읽기 전용' : status.safety?.mode || '정책 확인 필요';
-    connectionStatus.textContent = status.connected
-      ? `Outlook 연결 준비됨 (${status.authMode} · ${safetyLabel})`
-      : `Outlook 인증값 필요 · ${safetyLabel}`;
-    configStatus.textContent = status.connected ? `설정됨: ${status.authMode} · ${safetyLabel}` : `미설정 · ${safetyLabel}`;
+    updateOutlookConnectionStatus(status);
     accessToken.value = '';
     clientSecret.value = '';
     aiDataPolicyAccepted.checked = status.aiProvider !== 'rules' && status.aiOptedIn === true;
@@ -1517,20 +1558,26 @@ async function saveConfig(event) {
     await loadOauthProviderStatus();
     await loadOutlookMessages();
   } catch (error) {
-    configStatus.textContent = error instanceof Error ? error.message : '설정 저장 실패';
+    updateOutlookConnectionStatus({}, {
+      phase: 'error',
+      message: error instanceof Error ? error.message : '설정 저장 실패',
+    });
   }
 }
 
 async function startOutlookLogin() {
   const selectedClientId = clientId.value.trim();
   if (!selectedClientId) {
-    configStatus.textContent = 'Client ID를 먼저 입력하세요.';
+    updateOutlookConnectionStatus({}, { phase: 'error', message: 'Client ID를 먼저 입력하세요.' });
     clientId.focus();
     return;
   }
   const popup = window.open('', 'outlookLogin', 'width=720,height=760');
   if (!popup) {
-    configStatus.textContent = '로그인 팝업이 차단되었습니다. 브라우저에서 팝업을 허용하세요.';
+    updateOutlookConnectionStatus({}, {
+      phase: 'error',
+      message: '로그인 팝업이 차단되었습니다. 브라우저에서 팝업을 허용하세요.',
+    });
     return;
   }
   try {
@@ -1551,16 +1598,56 @@ async function startOutlookLogin() {
       throw new Error('허용되지 않은 OAuth 주소가 반환되었습니다.');
     }
     popup.location.href = authorize.href;
-    configStatus.textContent = 'Microsoft 로그인 창에서 읽기 권한을 승인하세요.';
+    updateOutlookConnectionStatus({}, { phase: 'oauth-pending' });
+
+    let finished = false;
+    let monitor = 0;
+    let timeout = 0;
+    const finish = async (phase, message = '') => {
+      if (finished) return;
+      finished = true;
+      window.clearInterval(monitor);
+      window.clearTimeout(timeout);
+      if (phase === 'error') {
+        updateOutlookConnectionStatus({}, { phase, message });
+      } else {
+        await loadStatus();
+      }
+    };
+
+    monitor = window.setInterval(() => {
+      if (popup.closed) {
+        void finish('closed');
+        return;
+      }
+      try {
+        const callbackUrl = new URL(popup.location.href);
+        if (callbackUrl.hostname !== 'localhost' || callbackUrl.port !== '3010' || callbackUrl.pathname !== '/auth/callback') return;
+        const callbackText = popup.document.body?.textContent?.trim() || '';
+        if (/Outlook login complete/i.test(callbackText)) {
+          void finish('success');
+        } else if (/Outlook login failed/i.test(callbackText)) {
+          void finish('error', callbackText.replace(/\s+/g, ' ').slice(0, 180));
+        }
+      } catch {
+        // Microsoft login is cross-origin until it returns to the localhost callback.
+      }
+    }, 600);
+    timeout = window.setTimeout(() => {
+      void finish('error', 'Microsoft 로그인 시간이 만료되었습니다. 새 로그인 창에서 다시 시도하세요.');
+    }, 10 * 60 * 1000);
   } catch (error) {
     popup.close();
-    configStatus.textContent = error instanceof Error ? error.message : '로컬 보안 세션 생성 실패';
+    updateOutlookConnectionStatus({}, {
+      phase: 'error',
+      message: error instanceof Error ? error.message : '로컬 보안 세션 생성 실패',
+    });
   }
 }
 
 async function loadOutlookMessages() {
   loadOutlook.disabled = true;
-  fetchStatus.textContent = 'Outlook Delta 동기화 후 SQLite 메일을 분석하는 중입니다.';
+  updateFetchStatus('Outlook Delta 동기화 후 SQLite 메일을 분석하는 중입니다.');
   try {
     const response = await apiFetch(`/api/outlook/analyze?top=${encodeURIComponent(mailLimit.value)}`);
     const payload = await response.json();
@@ -1586,21 +1673,23 @@ async function loadOutlookMessages() {
           : ai?.status === 'not-run'
             ? 'AI 미실행 · 규칙 기반'
             : '규칙 기반';
-    fetchStatus.textContent = payload.connected
+    updateFetchStatus(payload.connected
       ? `${syncLabel} 분석 완료 · ${aiLabel} · ${new Date(payload.analyzedAt).toLocaleString('ko-KR')}`
-      : `${syncLabel} 분석 완료 · ${aiLabel} · ${payload.message}`;
-    connectionStatus.textContent = payload.connected
-      ? `Outlook 연결됨 (${payload.mode} · 읽기 전용)`
-      : payload.mode === 'offline-cache'
-        ? 'Outlook 미연결 · SQLite 메일 DB 읽기 전용'
-        : 'Outlook 인증값 필요 · 읽기 전용';
+      : `${syncLabel} 분석 완료 · ${aiLabel} · ${payload.message}`);
+    updateOutlookConnectionStatus({
+      connected: payload.connected,
+      mode: payload.mode,
+      authMode: payload.mode,
+      safety: { mode: 'read-only' },
+    });
     render(payload.result, payload.messages);
     if (payload.precision?.summary) renderPrecisionOverview(payload.precision.summary);
     await loadPrecisionProjects();
     await loadMemoryStatus();
   } catch (error) {
-    fetchStatus.textContent = error instanceof Error ? error.message : 'Outlook을 가져오지 못했습니다.';
-    connectionStatus.textContent = 'Outlook 연결 실패';
+    const message = error instanceof Error ? error.message : 'Outlook을 가져오지 못했습니다.';
+    updateFetchStatus(message);
+    updateOutlookConnectionStatus({}, { phase: 'error', message });
   } finally {
     loadOutlook.disabled = false;
   }
@@ -1632,10 +1721,14 @@ clearConfig.addEventListener('click', async () => {
   syncExternalAiConsent();
   try {
     await apiFetch('/api/outlook/config', { method: 'DELETE' });
-    configStatus.textContent = '저장값 초기화';
-    connectionStatus.textContent = 'Outlook 인증값 필요 · 읽기 전용';
+    latestOutlookStatus = {};
+    updateOutlookConnectionStatus({ connected: false, safety: { mode: 'read-only' } });
+    updateFetchStatus('Outlook 저장값을 초기화했습니다.');
   } catch (error) {
-    configStatus.textContent = error instanceof Error ? error.message : '설정 초기화 실패';
+    updateOutlookConnectionStatus({}, {
+      phase: 'error',
+      message: error instanceof Error ? error.message : '설정 초기화 실패',
+    });
   }
 });
 aiProvider.addEventListener('change', syncExternalAiConsent);
@@ -1653,6 +1746,12 @@ mailSearch.addEventListener('input', () => {
   renderFilteredView();
 });
 
+const fetchStatusObserver = new MutationObserver(() => {
+  fetchStatus.title = fetchStatus.textContent?.trim() || '';
+});
+fetchStatusObserver.observe(fetchStatus, { childList: true, characterData: true, subtree: true });
+updateFetchStatus(fetchStatus.textContent);
+
 syncExternalAiConsent();
 loadStatus();
 loadMemoryStatus();
@@ -1664,37 +1763,56 @@ loadAssistantPersonality();
 (function initColumnResize() {
   const shell = document.getElementById('mailShell');
   if (!shell) return;
-  const resizers = shell.querySelectorAll('.col-resizer');
-  const columns = () => [...shell.children].filter(el =>
-    el.classList.contains('mail-list-panel') ||
-    el.classList.contains('detail-panel') ||
-    el.classList.contains('action-column')
-  );
+
+  const resizers = [...shell.querySelectorAll('.col-resizer')];
+  const panels = [
+    shell.querySelector('.mail-list-panel'),
+    shell.querySelector('.detail-panel'),
+    shell.querySelector('.action-column'),
+  ];
+  const widthVariables = ['--mail-list-width', '--mail-detail-width', '--mail-action-width'];
+  const minimumWidths = [240, 320, 280];
+  const desktopQuery = window.matchMedia('(min-width: 1181px)');
+
+  if (panels.some((panel) => !panel) || resizers.length !== 2) return;
+
+  function measuredWidths() {
+    return panels.map((panel) => panel.getBoundingClientRect().width);
+  }
+
+  function setPanelWidth(index, width) {
+    shell.style.setProperty(widthVariables[index], `${Math.round(width)}px`);
+  }
+
+  function resizeAdjacentPanels(index, delta, startWidths) {
+    const total = startWidths[index] + startWidths[index + 1];
+    const left = Math.min(
+      total - minimumWidths[index + 1],
+      Math.max(minimumWidths[index], startWidths[index] + delta),
+    );
+    setPanelWidth(index, left);
+    setPanelWidth(index + 1, total - left);
+  }
+
+  function resetPanelWidths() {
+    widthVariables.forEach((variable) => shell.style.removeProperty(variable));
+  }
 
   resizers.forEach((resizer) => {
-    let startX, startWidths, colIndex;
+    const columnIndex = Number.parseInt(resizer.dataset.col || '', 10);
+    if (!Number.isInteger(columnIndex) || columnIndex < 0 || columnIndex > 1) return;
 
-    resizer.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      colIndex = parseInt(resizer.dataset.col, 10);
-      startX = e.clientX;
-      startWidths = columns().map(col => col.getBoundingClientRect().width);
+    resizer.addEventListener('mousedown', (event) => {
+      if (!desktopQuery.matches || event.button !== 0) return;
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidths = measuredWidths();
       resizer.classList.add('active');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
 
-      const onMouseMove = (e) => {
-        const dx = e.clientX - startX;
-        const cols = columns();
-        if (cols[colIndex] && cols[colIndex + 1]) {
-          const newWidth1 = Math.max(200, startWidths[colIndex] + dx);
-          const newWidth2 = Math.max(200, startWidths[colIndex + 1] - dx);
-          cols[colIndex].style.flex = `0 0 ${newWidth1}px`;
-          cols[colIndex + 1].style.flex = `0 0 ${newWidth2}px`;
-          shell.style.gridTemplateColumns = [...cols].map(c =>
-            c.style.flex || `0 0 ${c.getBoundingClientRect().width}px`
-          ).join(' ');
-        }
+      const onMouseMove = (moveEvent) => {
+        resizeAdjacentPanels(columnIndex, moveEvent.clientX - startX, startWidths);
       };
 
       const onMouseUp = () => {
@@ -1709,10 +1827,17 @@ loadAssistantPersonality();
       document.addEventListener('mouseup', onMouseUp);
     });
 
-    resizer.addEventListener('dblclick', () => {
-      const cols = columns();
-      shell.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
-      cols.forEach(col => col.style.flex = '');
+    resizer.addEventListener('keydown', (event) => {
+      if (!desktopQuery.matches || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      const startWidths = measuredWidths();
+      resizeAdjacentPanels(columnIndex, event.key === 'ArrowRight' ? 24 : -24, startWidths);
     });
+
+    resizer.addEventListener('dblclick', resetPanelWidths);
+  });
+
+  desktopQuery.addEventListener('change', (event) => {
+    if (!event.matches) resetPanelWidths();
   });
 })();

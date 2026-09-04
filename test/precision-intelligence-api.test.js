@@ -151,6 +151,7 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix9');
   assert.equal(health.operationalClassificationVersion, 'operational-classification-v1.2.2');
   assert.equal(health.mailAssistantToolsVersion, 'mail-assistant-tools-v1.2.2');
+  assert.equal(health.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
 
   let result = await api(baseUrl, '/api/intelligence/summary');
   assert.equal(result.response.status, 401);

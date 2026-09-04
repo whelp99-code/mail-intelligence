@@ -128,15 +128,16 @@ MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=1 \
 4. Redirect URI가 아래 주소와 일치하는지 확인한다.
 
 ```text
-http://127.0.0.1:3010/auth/callback
+http://localhost:3010/auth/callback
 ```
 
-5. Delegated permission은 `User.Read`, `Mail.Read`만 허용한다.
-6. `Outlook으로 로그인`을 누르고 동의한다.
-7. `Delta 동기화`를 실행한다.
-8. 메일 수·폴더 수·작업 상태·경고 수를 확인한다.
+5. SSH 터널을 연 뒤 브라우저에서 `http://localhost:3010`으로 접속한다.
+6. Delegated permission은 `User.Read`, `Mail.Read`만 허용한다.
+7. `Outlook으로 로그인`을 누르고 동의한다.
+8. `Delta 동기화`를 실행한다.
+9. 메일 수·폴더 수·작업 상태·경고 수를 확인한다.
 
-최초 OAuth 연결은 SSH 터널과 loopback Redirect URI를 사용한다. Tailnet IP의 일반 HTTP 주소를 Microsoft Entra Redirect URI로 등록하지 않는다. OAuth 연결 후 일상 조회와 정밀 탐색은 Tailnet 주소에서 수행할 수 있다.
+최초 OAuth 연결은 SSH 터널과 위 `localhost` Redirect URI를 사용한다. Backend는 `127.0.0.1:3010`에 계속 바인딩하지만, authorization 요청과 code exchange의 `redirect_uri`는 Host 헤더와 무관하게 `http://localhost:3010/auth/callback`으로 고정된다. Tailnet IP, `127.0.0.1`, 공인 주소 또는 HTTPS 주소를 추가 등록하지 않는다. OAuth 연결 후 일상 조회와 정밀 탐색은 Tailnet 주소에서 수행할 수 있다.
 
 OAuth Token과 Refresh Token은 접근키가 설정된 경우 로컬 키로 암호화되어 `data/`에 저장된다. 공개 설정 파일에는 평문 Secret을 쓰지 않는다.
 

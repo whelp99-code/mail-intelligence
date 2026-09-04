@@ -40,6 +40,7 @@ const health = await jsonResponse(baseUrl, '/api/health');
 assert.equal(health.response.status, 200);
 assert.equal(health.body.ok, true);
 assert.equal(health.body.version, '1.2.2');
+assert.equal(health.body.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
 assert.equal(health.body.listenHost, '127.0.0.1');
 assert.equal(health.body.safety?.mode, 'read-only');
 assert.equal(health.body.externalActionsAllowed, false);
@@ -60,6 +61,7 @@ const authenticatedRoot = await fetch(`${baseUrl}/`, {
 assert.equal(authenticatedRoot.status, 200);
 const html = await authenticatedRoot.text();
 assert.match(html, /v1\.2\.2 · Operational Classification/);
+assert.match(html, /http:\/\/localhost:3010\/auth\/callback/);
 const cookie = (authenticatedRoot.headers.get('set-cookie') || '').split(';')[0];
 assert.match(cookie, /^mi_session=/);
 
@@ -104,6 +106,7 @@ console.log(JSON.stringify({
   transport: 'tailscale-wireguard-http',
   sourceAllowlist: proxyEnv.MAIL_INTELLIGENCE_PROXY_ALLOWED_CIDRS,
   backendListenHost: health.body.listenHost,
+  outlookOAuthRedirectUri: health.body.outlookOAuthRedirectUri,
   authenticationRequired: true,
   safetyMode: health.body.safety.mode,
   precisionSummaryAvailable: true,

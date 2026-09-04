@@ -56,6 +56,44 @@
         <span>DO NOW·WAITING·REVIEW·ARCHIVE로 단순하게 배치합니다. 불확실한 메일과 신규 문서는 자동 보관하지 않습니다. 초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단됩니다.</span>
       </section>
 
+      <section class="mail-shell" id="mailShell">
+        <aside id="messages" class="mail-list-panel">
+          <div class="panel-head compact">
+            <h3>메일 목록</h3>
+            <span id="messageCount">0건</span>
+          </div>
+          <div id="messageList" class="message-list"></div>
+        </aside>
+        <div class="col-resizer" data-col="0" role="separator" aria-label="메일 목록과 상세 너비 조절" aria-orientation="vertical" tabindex="0"></div>
+        <article id="messageDetail" class="detail-panel">
+          <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
+        </article>
+        <div class="col-resizer" data-col="1" role="separator" aria-label="메일 상세와 액션 너비 조절" aria-orientation="vertical" tabindex="0"></div>
+        <aside class="action-column">
+          <section id="actions" class="panel">
+            <div class="panel-head compact">
+              <h3>다음 액션</h3>
+              <span id="actionCount">0건</span>
+            </div>
+            <div id="actionList" class="stack"></div>
+          </section>
+          <section id="calendar" class="panel">
+            <div class="panel-head compact">
+              <h3>일정</h3>
+              <span id="calendarCount">0건</span>
+            </div>
+            <div id="calendarList" class="stack"></div>
+          </section>
+          <section id="reminders" class="panel">
+            <div class="panel-head compact">
+              <h3>알림 후보</h3>
+              <span id="reminderCount">0건</span>
+            </div>
+            <div id="reminderList" class="stack"></div>
+          </section>
+        </aside>
+      </section>
+
       <section id="precisionIntelligence" class="precision-panel" aria-live="polite">
         <div class="precision-head">
           <div>
@@ -115,146 +153,133 @@
 
       <details class="config-panel">
         <summary>
-          <span>Outlook 연결 설정</span>
+          <span>연결·분석 설정</span>
           <strong id="configStatus">미설정</strong>
         </summary>
         <div class="notice">
           Outlook 로그인 방식에서는 Client Secret을 비워두세요. 개인 Outlook.com 계정은 App registration의 Supported account types가
           Personal Microsoft accounts를 허용해야 합니다. 현재 버전은 <strong>Mail.Read</strong>만 요청하며 메일 발송 권한은 요청하지 않습니다.
+          Azure Redirect URI는 <code>http://localhost:3010/auth/callback</code>으로 등록하고, SSH 터널 접속도 브라우저에서 <code>http://localhost:3010</code>을 사용하세요.
           LLM OAuth 자격정보는 Mail Intelligence가 직접 저장하지 않고 공식 Codex/Grok CLI의 사용자 전용 credential cache가 관리합니다.
         </div>
         <form id="configForm" class="config-grid">
-          <label>
-            Login Tenant
-            <select id="loginTenant" name="loginTenant">
-              <option value="common" selected>회사/개인 계정 모두</option>
-              <option value="organizations">회사 계정만</option>
-              <option value="consumers">Outlook.com 개인 계정만</option>
-            </select>
-          </label>
-          <label>
-            Access Token
-            <input id="accessToken" name="accessToken" type="password" autocomplete="off" />
-          </label>
-          <label>
-            Tenant ID
-            <input id="tenantId" name="tenantId" type="text" autocomplete="off" />
-          </label>
-          <label>
-            Application Client ID
-            <input id="clientId" name="clientId" type="text" autocomplete="off" />
-          </label>
-          <label>
-            Client Secret, 앱 권한 방식 전용
-            <input id="clientSecret" name="clientSecret" type="password" autocomplete="off" />
-          </label>
-          <label>
-            Mailbox User
-            <input id="mailboxUser" name="mailboxUser" type="email" autocomplete="off" />
-          </label>
-          <label>
-            AI 프로바이더
-            <select id="aiProvider" name="aiProvider">
-              <option value="rules" selected>규칙 기반만 사용 (기본·메일 외부 전달 없음)</option>
-              <option value="openai-codex-oauth">OpenAI · ChatGPT OAuth (공식 Codex CLI)</option>
-              <option value="xai-grok-oauth">xAI · Grok OAuth (공식 Grok CLI)</option>
-            </select>
-          </label>
-          <label>
-            OpenAI Codex 모델
-            <input id="openaiCodexModel" name="openaiCodexModel" type="text" autocomplete="off" value="luna" readonly aria-label="Luna OAuth preset" />
-          </label>
-          <label>
-            xAI Grok 모델
-            <input id="xaiGrokModel" name="xaiGrokModel" type="text" autocomplete="off" value="grok-4.6" />
-          </label>
-          <label id="externalAiConsentField" class="external-ai-consent" hidden>
-            OAuth LLM 데이터 정책 동의
-            <span class="checkbox-row">
-              <input id="aiDataPolicyAccepted" name="aiDataPolicyAccepted" type="checkbox" />
-              선택한 메일의 제목·발신자·본문이 선택한 공식 OpenAI 또는 xAI 서비스로 전송됨을 이해하고 동의합니다.
-            </span>
-          </label>
-          <section class="oauth-provider-panel" aria-labelledby="oauthProviderTitle">
-            <div class="oauth-provider-head">
-              <div>
-                <strong id="oauthProviderTitle">LLM OAuth 연결 상태</strong>
-                <p id="oauthProviderSummary">공식 CLI 설치·로그인 상태를 확인합니다.</p>
-              </div>
-              <div class="oauth-provider-actions">
-                <button id="refreshOauthProviders" type="button">상태 새로고침</button>
-                <button id="testOauthProvider" type="button">선택 Provider 테스트</button>
+          <details class="config-section config-section-outlook" open>
+            <summary><span>Outlook 인증</span><strong>로그인 필수 설정</strong></summary>
+            <div class="config-section-grid config-section-grid-primary">
+              <label>
+                Login Tenant
+                <select id="loginTenant" name="loginTenant">
+                  <option value="common" selected>회사/개인 계정 모두</option>
+                  <option value="organizations">회사 계정만</option>
+                  <option value="consumers">Outlook.com 개인 계정만</option>
+                </select>
+              </label>
+              <label class="config-span-2">
+                Application Client ID
+                <input id="clientId" name="clientId" type="text" autocomplete="off" />
+              </label>
+              <label>
+                Mailbox User
+                <input id="mailboxUser" name="mailboxUser" type="email" autocomplete="off" />
+              </label>
+              <label>
+                업무 도메인 프로필
+                <select id="domainProfile" name="domainProfile">
+                  <option value="generic" selected>범용 업무</option>
+                  <option value="sangfor">Sangfor 엔지니어링</option>
+                </select>
+              </label>
+              <div class="config-actions config-span-all">
+                <button id="loginOutlook" type="button">Outlook으로 로그인</button>
+                <button id="saveConfig" type="submit" class="primary">저장 후 가져오기</button>
+                <button id="clearConfig" type="button">입력 지우기</button>
               </div>
             </div>
-            <div id="oauthProviderCards" class="oauth-provider-cards"></div>
-            <p class="oauth-provider-command-label">Ubuntu에서 같은 서비스 사용자로 실행할 로그인 명령</p>
-            <code id="oauthLoginCommand" class="oauth-login-command">AI Provider를 선택하세요.</code>
-          </section>
-          <section class="assistant-personality-panel" aria-labelledby="assistantPersonalityTitle">
-            <div>
-              <strong id="assistantPersonalityTitle">초안 작성 성격</strong>
-              <p>역할·말투·도입부는 이 서버에만 저장되며, 초안은 자동 발송되지 않습니다.</p>
+          </details>
+
+          <details class="config-section">
+            <summary><span>고급 Outlook 인증</span><strong>선택 입력</strong></summary>
+            <div class="config-section-grid">
+              <label>
+                Access Token
+                <input id="accessToken" name="accessToken" type="password" autocomplete="off" />
+              </label>
+              <label>
+                Tenant ID
+                <input id="tenantId" name="tenantId" type="text" autocomplete="off" />
+              </label>
+              <label>
+                Client Secret, 앱 권한 방식 전용
+                <input id="clientSecret" name="clientSecret" type="password" autocomplete="off" />
+              </label>
             </div>
-            <label>역할<input id="assistantRole" type="text" maxlength="120" placeholder="예: 기술 엔지니어" /></label>
-            <label>말투<input id="assistantTone" type="text" maxlength="120" placeholder="예: 간결하고 전문적인 기업 메일" /></label>
-            <label>도입부<input id="assistantOpening" type="text" maxlength="120" placeholder="예: 안녕하세요, 기술지원팀입니다." /></label>
-            <div class="config-actions">
-              <button id="saveAssistantPersonality" type="button">초안 성격 저장</button>
-              <span id="assistantPersonalityStatus" class="form-status">로컬 설정</span>
+          </details>
+
+          <details class="config-section">
+            <summary><span>AI Provider</span><strong>기본값: Rules</strong></summary>
+            <div class="config-section-grid">
+              <label>
+                AI 프로바이더
+                <select id="aiProvider" name="aiProvider">
+                  <option value="rules" selected>규칙 기반만 사용 (기본·메일 외부 전달 없음)</option>
+                  <option value="openai-codex-oauth">OpenAI · ChatGPT OAuth (공식 Codex CLI)</option>
+                  <option value="xai-grok-oauth">xAI · Grok OAuth (공식 Grok CLI)</option>
+                </select>
+              </label>
+              <label>
+                OpenAI Codex 모델
+                <input id="openaiCodexModel" name="openaiCodexModel" type="text" autocomplete="off" value="luna" readonly aria-label="Luna OAuth preset" />
+              </label>
+              <label>
+                xAI Grok 모델
+                <input id="xaiGrokModel" name="xaiGrokModel" type="text" autocomplete="off" value="grok-4.6" />
+              </label>
+              <label id="externalAiConsentField" class="external-ai-consent" hidden>
+                OAuth LLM 데이터 정책 동의
+                <span class="checkbox-row">
+                  <input id="aiDataPolicyAccepted" name="aiDataPolicyAccepted" type="checkbox" />
+                  선택한 메일의 제목·발신자·본문이 선택한 공식 OpenAI 또는 xAI 서비스로 전송됨을 이해하고 동의합니다.
+                </span>
+              </label>
+              <section class="oauth-provider-panel" aria-labelledby="oauthProviderTitle">
+                <div class="oauth-provider-head">
+                  <div>
+                    <strong id="oauthProviderTitle">LLM OAuth 연결 상태</strong>
+                    <p id="oauthProviderSummary">공식 CLI 설치·로그인 상태를 확인합니다.</p>
+                  </div>
+                  <div class="oauth-provider-actions">
+                    <button id="refreshOauthProviders" type="button">상태 새로고침</button>
+                    <button id="testOauthProvider" type="button">선택 Provider 테스트</button>
+                  </div>
+                </div>
+                <div id="oauthProviderCards" class="oauth-provider-cards"></div>
+                <p class="oauth-provider-command-label">Ubuntu에서 같은 서비스 사용자로 실행할 로그인 명령</p>
+                <code id="oauthLoginCommand" class="oauth-login-command">AI Provider를 선택하세요.</code>
+              </section>
             </div>
-          </section>
-          <label>
-            업무 도메인 프로필
-            <select id="domainProfile" name="domainProfile">
-              <option value="generic" selected>범용 업무</option>
-              <option value="sangfor">Sangfor 엔지니어링</option>
-            </select>
-          </label>
-          <div class="config-actions">
-            <button id="loginOutlook" type="button">Outlook으로 로그인</button>
-            <button id="saveConfig" type="submit" class="primary">저장 후 가져오기</button>
-            <button id="clearConfig" type="button">입력 지우기</button>
-          </div>
+          </details>
+
+          <details class="config-section">
+            <summary><span>초안 작성 성격</span><strong>자동 발송 없음</strong></summary>
+            <div class="config-section-grid">
+              <section class="assistant-personality-panel" aria-labelledby="assistantPersonalityTitle">
+                <div>
+                  <strong id="assistantPersonalityTitle">초안 작성 성격</strong>
+                  <p>역할·말투·도입부는 이 서버에만 저장되며, 초안은 자동 발송되지 않습니다.</p>
+                </div>
+                <label>역할<input id="assistantRole" type="text" maxlength="120" placeholder="예: 기술 엔지니어" /></label>
+                <label>말투<input id="assistantTone" type="text" maxlength="120" placeholder="예: 간결하고 전문적인 기업 메일" /></label>
+                <label>도입부<input id="assistantOpening" type="text" maxlength="120" placeholder="예: 안녕하세요, 기술지원팀입니다." /></label>
+                <div class="config-actions">
+                  <button id="saveAssistantPersonality" type="button">초안 성격 저장</button>
+                  <span id="assistantPersonalityStatus" class="form-status">로컬 설정</span>
+                </div>
+              </section>
+            </div>
+          </details>
         </form>
       </details>
 
-      <section class="mail-shell" id="mailShell">
-        <aside id="messages" class="mail-list-panel">
-          <div class="panel-head compact">
-            <h3>메일 목록</h3>
-            <span id="messageCount">0건</span>
-          </div>
-          <div id="messageList" class="message-list"></div>
-        </aside>
-        <div class="col-resizer" data-col="0"></div>
-        <article id="messageDetail" class="detail-panel">
-          <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
-        </article>
-        <div class="col-resizer" data-col="1"></div>
-        <aside class="action-column">
-          <section id="actions" class="panel">
-            <div class="panel-head compact">
-              <h3>다음 액션</h3>
-              <span id="actionCount">0건</span>
-            </div>
-            <div id="actionList" class="stack"></div>
-          </section>
-          <section id="calendar" class="panel">
-            <div class="panel-head compact">
-              <h3>일정</h3>
-              <span id="calendarCount">0건</span>
-            </div>
-            <div id="calendarList" class="stack"></div>
-          </section>
-          <section id="reminders" class="panel">
-            <div class="panel-head compact">
-              <h3>알림 후보</h3>
-              <span id="reminderCount">0건</span>
-            </div>
-            <div id="reminderList" class="stack"></div>
-          </section>
-        </aside>
-      </section>
     </main>
 
     <script type="module" src="./app.js"></script>

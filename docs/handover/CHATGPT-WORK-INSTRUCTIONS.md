@@ -282,13 +282,13 @@ systemctl --user disable --now mail-intelligence-tailnet.service
 
 ### OAuth 주의
 
-Microsoft Entra는 비-localhost HTTP Redirect URI를 일반적으로 운영 Redirect URI로 사용하지 않도록 구성한다. 최초 Outlook OAuth 연결은 기존 SSH 터널과 아래 loopback Redirect URI를 사용한다.
+Microsoft Entra는 비-localhost HTTP Redirect URI를 일반적으로 운영 Redirect URI로 사용하지 않도록 구성한다. 최초 Outlook OAuth 연결은 기존 SSH 터널을 연 뒤 브라우저에서 `http://localhost:3010`으로 접속하고, 아래 Redirect URI를 사용한다.
 
 ```text
-http://127.0.0.1:3010/auth/callback
+http://localhost:3010/auth/callback
 ```
 
-OAuth 설정이 완료된 뒤 일상 조회와 정밀 탐색은 Tailnet 주소에서 사용할 수 있다.
+Backend는 `127.0.0.1:3010`에만 바인딩하지만 OAuth authorization과 code exchange의 `redirect_uri`는 요청 Host와 무관하게 위 `localhost` 값으로 고정한다. Tailnet IP나 `127.0.0.1` URI를 Azure에 추가하지 않는다. OAuth 설정이 완료된 뒤 일상 조회와 정밀 탐색은 Tailnet 주소에서 사용할 수 있다.
 
 ---
 

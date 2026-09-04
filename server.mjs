@@ -64,6 +64,9 @@ const legacyMailCachePath = legacyFallbackEnabled ? join(legacyDataRoot, '.mail-
 const port = normalizePort(process.env.PORT || 3010);
 const host = normalizeLoopbackHost(process.env.HOST || process.env.MAIL_INTELLIGENCE_HOST || '127.0.0.1');
 const localBaseUrl = host === '::1' ? `http://[::1]:${port}` : `http://${host}:${port}`;
+// Microsoft Entra requires an exact registered redirect URI. Keep this independent
+// from the backend bind address, request Host header, Tailnet address, and SSH tunnel.
+const OUTLOOK_OAUTH_REDIRECT_URI = 'http://localhost:3010/auth/callback';
 const allowedProxyHosts = new Set(parseTailnetAllowedHosts(
   process.env.MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS || '',
 ));
@@ -1104,9 +1107,8 @@ function base64Url(buffer) {
   return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function redirectUri(req) {
-  const requestHost = req.headers.host || `127.0.0.1:${port}`;
-  return `http://${requestHost}/auth/callback`;
+function redirectUri() {
+  return OUTLOOK_OAUTH_REDIRECT_URI;
 }
 
 function configStatus() {
@@ -1138,6 +1140,7 @@ function configStatus() {
     intelligentSearchVersion: INTELLIGENT_SEARCH_VERSION,
     operationalClassificationVersion: OPERATIONAL_CLASSIFICATION_VERSION,
     mailAssistantToolsVersion: MAIL_ASSISTANT_TOOLS_VERSION,
+    outlookOAuthRedirectUri: OUTLOOK_OAUTH_REDIRECT_URI,
     listenHost: host,
     graphConsent: delegatedScopes.split(/\s+/),
     safety: publicSafetyStatus(safetyPolicy),
@@ -1170,6 +1173,7 @@ function publicHealthStatus() {
     intelligentSearchVersion: status.intelligentSearchVersion,
     operationalClassificationVersion: status.operationalClassificationVersion,
     mailAssistantToolsVersion: status.mailAssistantToolsVersion,
+    outlookOAuthRedirectUri: status.outlookOAuthRedirectUri,
     listenHost: status.listenHost,
     graphConsent: status.graphConsent,
     safety: status.safety,
@@ -2097,6 +2101,7 @@ async function handleApi(req, res) {
         throw new HttpError(400, 'LOGIN_TENANT_INVALID', 'Login tenant must be common, organizations, or consumers.');
       }
 
+      const oauthRedirectUri = redirectUri();
       const state = base64Url(randomBytes(24));
       const codeVerifier = base64Url(randomBytes(48));
       const codeChallenge = base64Url(createHash('sha256').update(codeVerifier).digest());
@@ -2108,13 +2113,13 @@ async function handleApi(req, res) {
         tenantId,
         mailboxUser: mailbox,
         createdAt: Date.now(),
-        redirectUri: redirectUri(req)
+        redirectUri: oauthRedirectUri
       });
 
       const authorize = new URL(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/authorize`);
       authorize.searchParams.set('client_id', clientId);
       authorize.searchParams.set('response_type', 'code');
-      authorize.searchParams.set('redirect_uri', redirectUri(req));
+      authorize.searchParams.set('redirect_uri', oauthRedirectUri);
       authorize.searchParams.set('response_mode', 'query');
       authorize.searchParams.set('scope', delegatedScopes);
       authorize.searchParams.set('state', state);
