@@ -63,12 +63,47 @@ const DUE_PHRASES = [
   { value: 'no_due', pattern: /기한\s*없는|마감\s*없는|no\s*deadline|without\s*due/i },
 ];
 
+const WEAK_SEARCH_TOKENS = new Set(['업무', '관련', '필요', '메일', '문서', '확인', '검토', '자동', '생성', '하면', '하는', '해서', '되는', '되어', '될']);
+const CONTROL_PARTICLE_SUFFIXES = ['만', '도', '을', '를', '이', '가', '은', '는'];
+const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되어', '될'];
+const DEADLINE_CUE_PATTERN = /(?:까지|by\b|제출|납기|마감|회신)/i;
+const ABSOLUTE_DATE_PATTERN = /\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b|(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일|\b(\d{1,2})[-/.](\d{1,2})\b|(\d{1,2})월\s*(\d{1,2})일/;
+const SECURITY_TERM_PATTERN = /보안|security/i;
+const OUTAGE_PATTERN = /장애|중단|outage/i;
+const REMOTE_SESSION_GROUP_PATTERN = /원격|remote|vpn|접속|session|access/i;
+const SECURITY_OUTAGE_CONJUNCTION_PATTERN = /(?:보안|security)\s*(?:및|과|와|and)\s*(?:장애|중단|outage)|(?:장애|중단|outage)\s*(?:및|과|와|and)\s*(?:보안|security)|(?:보안|security)\s*[-/+/]\s*(?:장애|중단|outage)|(?:장애|중단|outage)\s*[-/+/]\s*(?:보안|security)/i;
+
 function normalizeSpace(value = '') {
   return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
 }
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function normalizeControlToken(value = '') {
+  const original = String(value);
+  let token = original;
+  let changed = true;
+  while (changed && token.length > 1) {
+    changed = false;
+    for (const suffix of CONTROL_AUXILIARY_SUFFIXES) {
+      if (token.toLowerCase().endsWith(suffix) && token.length > suffix.length) {
+        token = token.slice(0, -suffix.length);
+        changed = true;
+        break;
+      }
+    }
+    if (changed) continue;
+    for (const suffix of CONTROL_PARTICLE_SUFFIXES) {
+      if (token.toLowerCase().endsWith(suffix) && token.length > suffix.length) {
+        token = token.slice(0, -suffix.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return WEAK_SEARCH_TOKENS.has(token.toLowerCase()) ? token : original;
 }
 
 function consumePattern(text, pattern) {
@@ -149,6 +184,95 @@ export function dueRangeFor(filter, nowValue = new Date()) {
   return {};
 }
 
+function absoluteDueRangeFor(query, nowValue) {
+  const datePattern = new RegExp(ABSOLUTE_DATE_PATTERN.source, 'g');
+  const isClauseBoundary = (index) => {
+    const character = query[index];
+    if (character === ',' || character === ';' || character === '|' || character === '\n') return true;
+    return character === '.' && !/\d/.test(query[index - 1] || '') && !/\d/.test(query[index + 1] || '');
+  };
+  const candidates = [];
+  let match;
+  while ((match = datePattern.exec(query))) {
+    let clauseStart = match.index;
+    let clauseEnd = datePattern.lastIndex;
+    while (clauseStart > 0 && !isClauseBoundary(clauseStart - 1)) clauseStart -= 1;
+    while (clauseEnd < query.length && !isClauseBoundary(clauseEnd)) clauseEnd += 1;
+    const clause = query.slice(clauseStart, clauseEnd);
+    const cuePattern = new RegExp(DEADLINE_CUE_PATTERN.source, 'gi');
+    const cueOffsets = [...clause.matchAll(cuePattern)].map((cue) => clauseStart + cue.index);
+    if (!cueOffsets.length) continue;
+    const year = Number(match[1] || match[4] || new Date(nowValue).getUTCFullYear());
+    const month = Number(match[2] || match[5] || match[7] || match[9]);
+    const day = Number(match[3] || match[6] || match[8] || match[10]);
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    if (!month || !day || candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) continue;
+    const dateOffset = match.index + (match[0].length / 2);
+    candidates.push({
+      candidate,
+      distance: Math.min(...cueOffsets.map((cueOffset) => Math.abs(cueOffset - dateOffset))),
+      index: match.index,
+    });
+  }
+  candidates.sort((left, right) => left.distance - right.distance || right.index - left.index);
+  if (candidates.length) {
+    const from = new Date(candidates[0].candidate.getTime() - (9 * 60 * 60 * 1000));
+    const before = new Date(from.getTime() + (24 * 60 * 60 * 1000));
+    return { from: from.toISOString(), before: before.toISOString(), requiresDue: true };
+  }
+  return {};
+}
+
+function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
+  const softTokens = unique(lexicalTokens).filter((token) => !WEAK_SEARCH_TOKENS.has(normalizeControlToken(token).toLowerCase()));
+  const hardAnchors = [];
+  if (absoluteDueRange.from) hardAnchors.push({ kind: 'due_date', range: absoluteDueRange });
+  if (filters.nextActors.includes('external_party')) hardAnchors.push({ kind: 'external_actor' });
+  if (filters.project) hardAnchors.push({ kind: 'project', value: filters.project });
+  const hasSecurity = SECURITY_TERM_PATTERN.test(query);
+  const hasOutage = OUTAGE_PATTERN.test(query);
+  if ((hasSecurity || hasOutage) && REMOTE_SESSION_GROUP_PATTERN.test(query)) {
+    hardAnchors.push({
+      kind: 'security_remote_session',
+      requiresAllIssueTerms: hasSecurity && hasOutage && SECURITY_OUTAGE_CONJUNCTION_PATTERN.test(query),
+      groups: [
+        ['보안', 'security', '침해', '해킹', 'breach', 'malware', '랜섬웨어'],
+        ['원격', 'remote', 'vpn', '접속', 'session', 'access'],
+      ],
+    });
+  }
+  const softTokenCount = softTokens.length;
+  const hasStructuredFilter = Boolean(
+    filters.workStates?.length
+    || filters.nextActors?.length
+    || filters.priorities?.length
+    || filters.signals?.length
+    || filters.dueFilter
+    || filters.dueRange?.from
+    || filters.dueRange?.before
+    || filters.project
+    || filters.reviewOnly
+    || filters.lexicalIncidentSearch
+    || filters.semanticIntent
+  );
+  const minimumCoverage = softTokenCount < 2
+    ? null
+    : hardAnchors.length > 0
+      ? Math.max(1, Math.ceil(softTokenCount * 0.5))
+      : Math.max(2, Math.ceil(softTokenCount * 0.6));
+  return {
+    hardAnchors,
+    softTokens,
+    enumerationFacets: [],
+    fallbackPolicy: {
+      mode: 'coverage',
+      minimumCoverage,
+      allowed: minimumCoverage !== null,
+      failClosed: softTokenCount === 0 && !hasStructuredFilter,
+    },
+  };
+}
+
 export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const query = normalizeSpace(value);
   if (!query) throw new Error('Intelligent search query is required.');
@@ -215,91 +339,103 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   let normalizedSignals = unique(signals).filter((item) => SUPPORTING_SIGNALS.includes(item));
   if (semanticIntent === 'completed_support_ticket') {
     normalizedStates = ['completed'];
-    residual = '';
+    residual = consumePattern(residual, /패치|patch|kernel|티켓|ticket|case/ig);
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'hci_license_incident') {
     normalizedSignals = normalizedSignals.filter((item) => item !== 'incident_security');
-    residual = '';
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'completed_sangfor_support') {
     normalizedStates = ['completed'];
-    residual = '';
+    residual = consumePattern(residual, /지원|문의|support|ticket|case/ig);
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'waiting_license_reply') {
     normalizedStates = ['waiting'];
     normalizedActors = ['external_party'];
-    residual = '';
+    residual = consumePattern(residual, /회신|답변|응답|reply|response/ig);
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'tax_invoice_review') {
     normalizedStates = ['review_required'];
     normalizedSignals = unique([...normalizedSignals, 'quotation_contract']);
-    residual = '';
+    residual = consumePattern(residual, /세금계산서|tax\s*invoice/ig);
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'service_deactivation' || semanticIntent === 'confluence_deactivation') {
     normalizedStates = ['action_required'];
     normalizedActors = ['me'];
-    residual = '';
+    residual = consumePattern(residual, /비활성화|해지|중지|deactivat|inactive|suspend/ig);
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'shared_access_verification') {
     normalizedStates = ['action_required'];
     normalizedActors = ['me'];
-    residual = '';
+    residual = consumePattern(residual, /이메일\s*인증|인증|email\s*verification|verify/ig);
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   if (semanticIntent === 'sangfor_iag') {
-    residual = '';
     recognized.push({ type: 'semanticIntent', value: semanticIntent });
   }
   const normalizedDue = unique(dueFilters);
   const dueFilter = normalizedDue[0] || '';
   const dueRange = dueRangeFor(dueFilter, now);
+  const absoluteDueRange = absoluteDueRangeFor(query, now);
+  const effectiveDueRange = absoluteDueRange.from ? absoluteDueRange : dueRange;
   const residualStopWords = new Set([
     '메일', '찾아', '보여', '알려', '목록', '관련', '것', '건', '중',
     '에서', '대한', '할', '해야', '처리할', 'the', 'mail', 'email', 'show', 'find',
   ]);
   const originalTokens = query.match(/[\p{L}\p{N}_-]+/gu) || [];
-  const preservedDomainTokens = originalTokens
-    .filter((token) => token.length >= 2 && PRESERVED_DOMAIN_TOKEN_PATTERN.test(token));
+  const preservedDomainTokens = unique(originalTokens
+    .filter((token) => token.length >= 2 && PRESERVED_DOMAIN_TOKEN_PATTERN.test(token))
+    .map(normalizeControlToken));
   const residualTokens = normalizeSpace(residual)
     .split(/\s+/)
+    .map(normalizeControlToken)
     .filter((token) => token
       && token.length >= 2
       && !residualStopWords.has(token.toLowerCase())
+      && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())
       && !preservedDomainTokens.some((domainToken) => domainToken !== token && domainToken.includes(token)));
   const incidentExpansion = lexicalIncidentOnly
     ? INCIDENT_LEXICAL_EXPANSIONS[query.toLowerCase()] || [query]
     : [];
-  const lexicalTokens = semanticIntent ? [] : unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
+  const lexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
   const residualText = lexicalTokens.join(' ');
   const residualOperator = lexicalIncidentOnly
     || (lexicalTokens.length > 1 && lexicalTokens.every((token) => PRESERVED_DOMAIN_TOKEN_PATTERN.test(token)))
     ? 'OR'
     : 'AND';
 
+  let filters = {
+    workStates: normalizedStates,
+    nextActors: normalizedActors,
+    priorities: normalizedPriorities,
+    signals: normalizedSignals,
+    dueFilter,
+    dueRange: effectiveDueRange,
+    project: project?.value || '',
+    reviewOnly: normalizedStates.includes('review_required'),
+    lexicalIncidentSearch: lexicalIncidentOnly,
+    lexicalIncidentKind: lexicalIncidentOnly ? query.toLowerCase() : '',
+    semanticIntent,
+  };
+  const searchPlan = searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange });
+  if (searchPlan.hardAnchors.some((anchor) => anchor.kind === 'security_remote_session')) {
+    filters = {
+      ...filters,
+      signals: filters.signals.filter((signal) => signal !== 'incident_security'),
+    };
+  }
   return {
     version: INTELLIGENT_SEARCH_VERSION,
     originalQuery: query,
-    filters: {
-      workStates: normalizedStates,
-      nextActors: normalizedActors,
-      priorities: normalizedPriorities,
-      signals: normalizedSignals,
-      dueFilter,
-      dueRange,
-      project: project?.value || '',
-      reviewOnly: normalizedStates.includes('review_required'),
-      lexicalIncidentSearch: lexicalIncidentOnly,
-      lexicalIncidentKind: lexicalIncidentOnly ? query.toLowerCase() : '',
-      semanticIntent,
-    },
+    filters,
     residualText,
     residualOperator,
+    searchPlan,
     recognized,
     hasStructuredFilters: Boolean(
       normalizedStates.length

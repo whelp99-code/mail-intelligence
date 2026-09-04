@@ -104,12 +104,16 @@ export function deriveOperationalClassification(classification = {}, {
     .join('\n');
   const newBusinessDocument = signals.has('quotation_contract')
     && NEW_BUSINESS_DOCUMENT_PATTERN.test(`${message.subject || ''}\n${message.body || message.bodyPreview || ''}\n${classificationEvidenceText}`);
+  const unresolvedAutomaticReviewReasons = classification.source !== 'user-corrected'
+    && classification.reviewStatus === 'review_required'
+    ? classification.reviewReasons || []
+    : [];
 
   if (stateConflicts.length) {
     riskSignals.push('event_conflict');
     reasons.push('사건 후보가 서로 다른 업무 상태를 가리킵니다.');
   }
-  if ((classification.reviewReasons || []).length) {
+  if (unresolvedAutomaticReviewReasons.length) {
     riskSignals.push('classification_review_reason');
   }
   if (workStateConfidence < 0.82) {
@@ -157,6 +161,7 @@ export function deriveOperationalClassification(classification = {}, {
     if (eventsWithAction.length) archiveBlockers.push('actionable_event_present');
     if (eventsUnresolved.length) archiveBlockers.push('unresolved_event_present');
     if (stateConflicts.length) archiveBlockers.push('event_conflict_present');
+    if (unresolvedAutomaticReviewReasons.length) archiveBlockers.push('classification_review_reason_present');
     if (activeSignals.length) archiveBlockers.push('active_signal_present');
     if (classification.dueAt || classification.dueText) archiveBlockers.push('due_present');
     if (hasMeetingCandidate) archiveBlockers.push('meeting_candidate_present');

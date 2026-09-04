@@ -20,6 +20,8 @@ const EVENT_FAMILY_BY_TYPE = Object.freeze({
   procurement_deadline_action: 'user_action',
   document_package_urgent_action: 'user_action',
   support_handoff_action: 'user_action',
+  support_remote_availability_action: 'user_action',
+  incoming_collaboration_invite_action: 'user_action',
   support_incoming_request_action: 'user_action',
   support_close_approval: 'user_action',
   concrete_question_action: 'user_action',
@@ -36,6 +38,7 @@ const EVENT_FAMILY_BY_TYPE = Object.freeze({
   support_provider_request_waiting: 'external_commitment',
   support_schedule_confirmed: 'external_commitment',
   outgoing_delivery_waiting_for_recipient: 'external_commitment',
+  outgoing_commercial_quote_delivery_waiting: 'external_commitment',
   outgoing_request_waiting: 'external_commitment',
   support_resolved: 'completion',
   support_artifact_delivered: 'completion',
@@ -89,11 +92,15 @@ const SUPPORT_RESOLUTION_PATTERN = /(?:issue|problem|patch|service).{0,64}(?:has
 const SUPPORT_ARTIFACT_DELIVERY_PATTERN = /(?:we\s+have\s+attach(?:ed)?|please\s+find\s+attached|첨부(?:드립니다|했습니다)|전달(?:드립니다|했습니다)|송부(?:드립니다|했습니다)).{0,120}(?:patch|log|dump|file|image|report|패치|로그|파일|이미지|자료)|(?:patch|log|dump|file|image|report|패치|로그|파일|이미지|자료).{0,120}(?:attach(?:ed)?|provided|첨부(?:드립니다|했습니다|되어)|전달(?:드립니다|했습니다)|송부(?:드립니다|했습니다))/i;
 const SUPPORT_SCHEDULE_PATTERN = /(?:scheduled|confirmed|let'?s\s+make\s+it|we\s+can\s+make\s+it|(?:we|i)\s+(?:will|'?ll)\s+(?:connect|join|start|provide\s+support)).{0,100}(?:today|tomorrow|\d{1,2}(?::\d{2})?\s*(?:am|pm)|gmt[+-]?\d*|오늘|내일|오전|오후)|(?:오늘|내일|tomorrow).{0,80}(?:지원|방문|세션|접속|connect|join|schedule|works|confirmed)/i;
 const SUPPORT_REMOTE_AVAILABILITY_PATTERN = /(?:we|i)\s+can\s+(?:remote|connect|join).{0,64}(?:today|tomorrow|any\s*time)|(?:today|tomorrow).{0,64}(?:remote|connect|join).{0,32}(?:available|possible|works)/i;
+const SUPPORT_REMOTE_AVAILABILITY_ACTION_PATTERN = /(?:(?:may|can|could|would|will)\s+(?:you|we).{0,72}(?:remote|connect|join|support).{0,72}(?:today|tomorrow)|(?:today|tomorrow).{0,72}(?:remote\s*(?:support|session)?|connect|join).{0,48}(?:available|possible|work|가능)).{0,12}\?/i;
 const SUPPORT_ACKNOWLEDGED_WAITING_PATTERN = /(?:request|case|ticket).{0,80}(?:has\s+been\s+received|was\s+received|is\s+received).{0,120}(?:will\s+be\s+reviewed|support\s+staff.{0,32}get\s+back|under\s+review)|(?:support\s+staff|support\s+team).{0,80}(?:will\s+review|will\s+get\s+back|is\s+reviewing)/i;
 const SUPPORT_PENDING_RESPONSE_PATTERN = /(?:require|need)\s+(?:some\s+)?additional\s+time.{0,100}(?:internal\s+verification|investigat|confirm(?:ed)?\s+response)|(?:internal\s+verification|investigat).{0,100}(?:before\s+providing|will\s+update|confirmed\s+response)|(?:currently|still)\s+(?:checking|investigating|verifying).{0,80}(?:update|response|reply)/i;
 const SUPPORT_HANDOFF_ACTION_PATTERN = /(?:need|have)\s+to\s+contact.{0,80}(?:sales|account|partner|reseller|vendor|licen[cs]e)\s+team|only\s+(?:the\s+)?(?:sales|account|partner|reseller|vendor)\s+team.{0,80}(?:authori[sz]ed|permission)|(?:do\s+not|don't)\s+have\s+permission.{0,120}(?:licen[cs]e|gateway|device)|(?:영업|총판|파트너|공급사).{0,40}(?:문의|연락|요청).{0,40}(?:필요|바랍니다)/i;
 const SUPPORT_PROVIDER_REQUEST_PATTERN = /(?:빠른|긴급|즉시|금일|오늘)?.{0,32}(?:조치|해결|복구|확인|발급|생성|갱신|초기화|원격|삭제|해제).{0,40}(?:부탁|요청|필요|바랍니다)|(?:please|kindly).{0,28}(?:fix|resolve|restore|issue|generate|renew|reset|connect|remote|clear|remove)|(?:발급|조치|해결|복구|삭제|해제).{0,28}(?:부탁|요청)/i;
 const SUPPORT_ROLE_RECIPIENT_PATTERN = /(?:support|helpdesk|service\s*desk|sales|account\s*team|licen[cs]e|technical\s*team|기술\s*지원|고객\s*지원|영업|총판|파트너)/i;
+const INCOMING_COLLABORATION_ACTION_PATTERN = /(?:(?:you(?:'re| are)?\s+invited|invitation\s+(?:to|from)|shared\s+(?:workspace|project|folder)).{0,120}\b(?:accept|open|review)\b|(?:notion.{0,120}(?:invite|초대)|(?:초대|공유).{0,120}(?:수락|열어|검토)))/i;
+const COLLABORATION_EXPLICIT_ACTION_CUE_PATTERN = /(?:please|kindly|action\s+required|required|must|need\s+to|액션\s*필요|(?:수락|열어|검토).{0,24}(?:해\s*주|하세요|바랍니다|필요))/i;
+const COLLABORATION_ACTION_EXCLUSION_PATTERN = /(?:promo(?:tional)?|webinar|unsubscribe|수신\s*거부|expired?|만료|already\s+accepted|이미\s*수락)/i;
 
 const SERVICE_CONTINUITY_ACTION_PATTERN = /(?:\[?action\s+required\]?\s*)?.{0,80}(?:subscription|account|service|workspace|구독|계정|서비스).{0,80}(?:currently\s+inactive|inactive|deactivat(?:e|ed|ion)|suspend(?:ed|sion)|disabled?|비활성화|중지|해지).{0,64}(?:soon|예정|유지|keep|reactivate|renew|login|sign\s+in|action\s+required)?|jump\s+back\s+in.{0,40}keep\s+your\s+subscription/i;
 const MARKETING_UNSUBSCRIBE_PATTERN = /(?:marketing|newsletter|promotional|광고|마케팅).{0,96}(?:unsubscribe|구독.{0,20}해지|수신.{0,12}거부)|(?:unsubscribe|수신.{0,12}거부).{0,120}(?:marketing|newsletter|광고|마케팅|구독.{0,20}해지)/i;
@@ -137,6 +144,7 @@ const OUTGOING_DELIVERY_PATTERN = /(?:견적서|제안서|계약서|발주서|�
 const RECIPIENT_RESPONSE_REQUEST_PATTERN = /(?:확인|검토).{0,120}(?:해\s*주시면|후.{0,100}(?:회신|알려|답변)|결과.{0,80}(?:회신|알려))|(?:회신|답변|알려).{0,32}(?:부탁|바랍니다|주세요|주시면)|(?:수용\s*가능\s*여부|추가\s*협의).{0,100}(?:회신|답변)|please\s+(?:confirm|review|reply|respond)|let\s+me\s+know/i;
 const INFORMATIONAL_COURTESY_REVIEW_PATTERN = /(?:오해|혼선)\s*없이.{0,24}(?:검토|확인)\s*(?:부탁|바랍니다)|for\s+your\s+(?:review|reference)\s+only/i;
 const CONDITIONAL_FUTURE_OFFER_PATTERN = /(?:필요하신|원하시는|추가\s*필요).{0,48}(?:요청|말씀).{0,20}(?:주시면|해\s*주시면).{0,32}(?:전달|보내|공유|준비)\s*(?:드리겠습니다|하겠습니다)|if\s+you\s+need.{0,64}(?:let\s+me\s+know|we\s+can\s+provide)/i;
+const OUTGOING_UNRESOLVED_COMMITMENT_PATTERN = /(?:will|shall|plan\s+to|intend\s+to).{0,48}(?:send|attach|provide|share)|(?:전달|송부|첨부|제공|공유).{0,32}(?:드리겠습니다|하겠습니다|예정)/i;
 const OUTGOING_REQUEST_PATTERN = /(?:요청드립니다|(?:보내|제출|발행|발주|전달|회신|확인|검토|수정|수용|협의)\s*(?:해\s*)?(?:주세요|주시기\s*바랍니다|부탁드립니다)|(?:회신|답변|확인|검토|수정|수용|협의).{0,18}(?:부탁드립니다|바랍니다)|please\s+(?:send|provide|confirm|review|reply|respond)|can\s+you|could\s+you|let\s+me\s+know)/i;
 const OUTGOING_SUBSTANTIVE_RESPONSE_PATTERN = /(?:문의|질문|요청).{0,48}(?:사항|내용).{0,48}(?:검토|답변|회신).{0,32}(?:하였습니다|했습니다|드립니다)|(?:검토|답변|회신).{0,32}(?:결과|내용).{0,32}(?:다음과\s*같|아래와\s*같)/i;
 
@@ -501,6 +509,19 @@ export function extractMailEventFrame({
       }, remoteAvailability));
     }
 
+    const remoteAvailabilityAction = firstClause(clauses, SUPPORT_REMOTE_AVAILABILITY_ACTION_PATTERN, { excludeBoilerplate: true });
+    if (!outgoing
+        && remoteAvailabilityAction
+        && !handoff
+        && !SUPPORT_RESOLUTION_PATTERN.test(combined)
+        && !/(?:ticket|case).{0,48}(?:closed|종료|닫)/i.test(combined)) {
+      add(event('support_remote_availability_action', 986, 0.97, {
+        workState: 'action_required',
+        nextActor: 'me',
+        priority: 'high',
+      }, remoteAvailabilityAction));
+    }
+
     const providerRequest = firstClause(clauses, SUPPORT_PROVIDER_REQUEST_PATTERN, { excludeBoilerplate: true });
     if (providerRequest && hasSupportRoleRecipient(message) && !handoff) {
       const urgentProviderRequest = CURRENT_URGENCY_PATTERN.test(combined)
@@ -557,6 +578,21 @@ export function extractMailEventFrame({
         priority: 'normal',
       }, schedule));
     }
+  }
+
+  const collaborationInvite = firstClause(clauses, INCOMING_COLLABORATION_ACTION_PATTERN, {
+    excludeBoilerplate: true,
+  });
+  if (!outgoing
+      && collaborationInvite
+      && !automated
+      && COLLABORATION_EXPLICIT_ACTION_CUE_PATTERN.test(collaborationInvite.text)
+      && !COLLABORATION_ACTION_EXCLUSION_PATTERN.test(combined)) {
+    add(event('incoming_collaboration_invite_action', 973, 0.96, {
+      workState: 'action_required',
+      nextActor: 'me',
+      priority: 'normal',
+    }, collaborationInvite));
   }
 
   const progressUpdate = firstSubjectOrBodyClause(clauses, PROGRESS_UPDATE_REVIEW_PATTERN, {
@@ -889,7 +925,20 @@ export function extractMailEventFrame({
       excludeBoilerplate: true,
     });
 
-    if (delivery && recipientResponse && !courtesyOnly && !conditionalOffer) {
+    const commercialQuoteDelivery = Boolean(message.hasAttachments)
+      && /(?:견적(?:서)?|quotation|quote)/i.test(`${subject}\n${delivery?.text || ''}`)
+      && Boolean(delivery)
+      && Boolean(recipientResponse)
+      && !/(?:\[\s*(?:긴급|urgent)\s*\]|\b(?:urgent|asap)\b|긴급)/i.test(subject)
+      && !conditionalOffer
+      && !OUTGOING_UNRESOLVED_COMMITMENT_PATTERN.test(combined);
+    if (commercialQuoteDelivery) {
+      add(event('outgoing_commercial_quote_delivery_waiting', 845, 0.96, {
+        workState: 'waiting',
+        nextActor: 'external_party',
+        priority: 'normal',
+      }, recipientResponse));
+    } else if (delivery && recipientResponse && !courtesyOnly && !conditionalOffer) {
       add(event('outgoing_delivery_waiting_for_recipient', 840, 0.94, {
         workState: 'waiting',
         nextActor: 'external_party',
@@ -964,6 +1013,8 @@ const EVENT_RULE_NAMES = Object.freeze({
   editorial_guide_reference: 'editorial-guide-reference',
   active_incident_action: 'active-incident-action',
   support_handoff_action: 'support-handoff-action',
+  support_remote_availability_action: 'support-remote-availability-action',
+  incoming_collaboration_invite_action: 'incoming-collaboration-invite-action',
   support_acknowledged_waiting: 'support-acknowledged-waiting',
   support_pending_response: 'support-pending-response',
   support_remote_availability: 'support-remote-availability',
@@ -996,6 +1047,7 @@ const EVENT_RULE_NAMES = Object.freeze({
   automated_notification_reference: 'automated-notification-reference',
   marketing_reference: 'marketing-reference',
   outgoing_delivery_waiting_for_recipient: 'outgoing-request-awaiting-recipient',
+  outgoing_commercial_quote_delivery_waiting: 'outgoing-commercial-quote-awaiting-recipient',
   outgoing_delivery_completed: 'outgoing-delivery-completed',
   outgoing_response_completed: 'outgoing-response-completed',
   outgoing_substantive_response_completed: 'outgoing-substantive-response-completed',

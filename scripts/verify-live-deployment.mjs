@@ -23,7 +23,7 @@ const health = await jsonResponse('/api/health');
 assert.equal(health.response.status, 200);
 assert.equal(health.body.ok, true);
 assert.equal(health.body.version, '1.2.2');
-assert.equal(health.body.precisionClassificationVersion, 'precision-classification-v1.2.2-fix9');
+assert.equal(health.body.precisionClassificationVersion, 'precision-classification-v1.2.2-fix10');
 assert.equal(health.body.intelligentSearchVersion, 'intelligent-search-v1.2.2');
 assert.equal(health.body.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
 assert.equal(health.body.listenHost, '127.0.0.1');

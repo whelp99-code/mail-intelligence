@@ -23,7 +23,7 @@ workername               mailintelligence
 path                     /home/jm/orca/projects/mail-intelligence
 branch                   main
 package                  1.2.2
-classifier               precision-classification-v1.2.2-fix9
+classifier               precision-classification-v1.2.2-fix10
 mail event frame         mail-event-frame-v3
 operational projection   operational-classification-v1.2.2
 search                   intelligent-search-v1.2.2
@@ -181,7 +181,7 @@ ss -ltnp | grep ':3010'
 
 ```text
 version=1.2.2
-precisionClassificationVersion=precision-classification-v1.2.2-fix9
+precisionClassificationVersion=precision-classification-v1.2.2-fix10
 operationalClassificationVersion=operational-classification-v1.2.2
 intelligentSearchVersion=intelligent-search-v1.2.2
 mailAssistantToolsVersion=mail-assistant-tools-v1.2.2
@@ -432,7 +432,7 @@ quick_check=ok
 foreign_key_check=0
 active messages = active classifications
 duplicate active graph_id=0
-모든 활성 분류 prompt_version=precision-classification-v1.2.2-fix9
+`fix10` 배포 뒤 force reclassification을 실행한 뒤 모든 활성 분류 prompt_version=precision-classification-v1.2.2-fix10
 correction row와 current projection 참조 무결성 PASS
 ```
 
@@ -519,7 +519,7 @@ unique hash=50
 known label overlap=0
 containsMessageContent=false
 containsStoredPredictions=false
-classifierVersion=precision-classification-v1.2.2-fix9
+classifierVersion=precision-classification-v1.2.2-fix10
 mode=0600
 ```
 

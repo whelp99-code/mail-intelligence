@@ -67,6 +67,88 @@ test('support close approval beats generic resolved wording', () => {
   assert.equal(result.eventType, 'support_close_approval');
 });
 
+test('R1 support availability question today is a high owner action, except closed tickets', () => {
+  const actionable = decision({
+    subject: 'Support Ticket#20260011',
+    body: 'May we join a remote session tomorrow? Is your support team available?',
+  });
+  assert.equal(actionable.workState, 'action_required');
+  assert.equal(actionable.nextActorHint, 'me');
+  assert.equal(actionable.priorityHint, 'high');
+  assert.equal(actionable.eventType, 'support_remote_availability_action');
+
+  const closed = decision({
+    subject: 'Support Ticket#20260012',
+    body: 'The issue is resolved and the ticket is closed. Can you join remotely tomorrow?',
+  });
+  assert.equal(closed.workState, 'completed');
+  assert.equal(closed.eventType, 'support_resolved');
+});
+
+test('R2 invitation accept/open/review is an owner action and excludes promotional variants', () => {
+  const actionable = decision({
+    subject: 'Project invitation',
+    body: 'You are invited to a shared workspace. Please accept and review the project.',
+  });
+  assert.equal(actionable.workState, 'action_required');
+  assert.equal(actionable.nextActorHint, 'me');
+  assert.equal(actionable.priorityHint, 'normal');
+  assert.equal(actionable.eventType, 'incoming_collaboration_invite_action');
+
+  const koreanActionable = decision({
+    subject: 'Action needed: workspace invitation',
+    body: '액션 필요: Notion workspace에 초대했습니다.',
+  });
+  assert.equal(koreanActionable.eventType, 'incoming_collaboration_invite_action');
+
+  const promotional = decision({
+    subject: 'Webinar invitation',
+    body: 'You are invited to our webinar. Accept the promotional invitation or unsubscribe.',
+    message: { isPromotional: true },
+  });
+  assert.notEqual(promotional.eventType, 'incoming_collaboration_invite_action');
+
+  const passiveInvite = decision({
+    subject: 'Project invitation',
+    body: 'You are invited to a shared workspace to review project updates.',
+  });
+  assert.notEqual(passiveInvite?.eventType, 'incoming_collaboration_invite_action');
+});
+
+test('R4 outgoing attached commercial quote awaits explicit recipient review or reply', () => {
+  const waiting = decision({
+    subject: 'Commercial quotation',
+    body: 'The quotation is attached. Please review and reply with your acceptance.',
+    message: { isOutgoing: true, hasAttachments: true },
+  });
+  assert.equal(waiting.workState, 'waiting');
+  assert.equal(waiting.nextActorHint, 'external_party');
+  assert.equal(waiting.eventType, 'outgoing_commercial_quote_delivery_waiting');
+
+  const deliveryOnly = decision({
+    subject: 'Commercial quotation',
+    body: 'The quotation is attached for your records.',
+    message: { isOutgoing: true, hasAttachments: true },
+  });
+  assert.equal(deliveryOnly.workState, 'completed');
+  assert.equal(deliveryOnly.nextActorHint, 'none');
+
+  const replyDelivery = decision({
+    subject: 'Re: Commercial quotation request',
+    body: 'The quotation is attached for your records.',
+    message: { isOutgoing: true, hasAttachments: true },
+  });
+  assert.equal(replyDelivery.workState, 'completed');
+  assert.equal(replyDelivery.nextActorHint, 'none');
+
+  const conditional = decision({
+    subject: 'Commercial quotation',
+    body: 'If you need a quotation, let us know and we will provide one.',
+    message: { isOutgoing: true, hasAttachments: true },
+  });
+  assert.notEqual(conditional?.eventType, 'outgoing_commercial_quote_delivery_waiting');
+});
+
 test('support resolution and patch delivery become completed events', () => {
   const resolved = decision({
     subject: 'Ticket#20260002',

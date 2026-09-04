@@ -11,7 +11,7 @@ import {
   operationalSummary,
 } from './operational-classification.js';
 
-export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix9';
+export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix10';
 export const EVIDENCE_NORMALIZATION_VERSION = 'exact-source-span-v1';
 
 export const WORK_STATES = Object.freeze([
@@ -1576,13 +1576,28 @@ export function classifyMessage(message = {}, {
     baseState: state,
   });
   const eventDecision = decisionFromMailEventFrame(eventFrame);
+  const automaticNotificationDirective = /자동\s*시스템\s*알림/i.test(currentText)
+    && clauses.some((clause) => (
+      clause.sourceField === 'body'
+      && /(?:오늘|금일|내일).{0,48}(?:보내|제출).{0,24}(?:주세요|바랍니다)/i.test(clause.text)
+    ));
   const adjustedState = adjustedStateForMessage(directionalMessage, state, clauses, currentText, now);
-  state = directionalMessage.isDeletedFolder
+  const selectedState = directionalMessage.isDeletedFolder
     || directionalMessage.isJunkFolder
     || directionalMessage.isDraft
     || directionalMessage.isDraftFolder
     ? adjustedState
     : eventDecision || adjustedState;
+  state = automaticNotificationDirective
+    ? {
+      workState: 'action_required',
+      stateConfidence: 0.96,
+      stateEvidence: clauses.find((clause) => clause.sourceField === 'body'
+        && /(?:오늘|금일|내일).{0,48}(?:보내|제출).{0,24}(?:주세요|바랍니다)/i.test(clause.text)) || null,
+      stateRule: 'automatic-notification-current-directive',
+      reviewReasons: [],
+    }
+    : selectedState;
   const actor = state.nextActorHint
     ? {
       nextActor: state.nextActorHint,

@@ -60,6 +60,40 @@ test('low-confidence completed message cannot be silently archived', () => {
   assert.equal(result.silentRiskPrevented, true);
 });
 
+test('archive 후보에 review reason이 남으면 fail-closed REVIEW로 보낸다', () => {
+  const result = deriveOperationalClassification(classification({
+    reviewReasons: ['project_conflict_requires_review'],
+    reviewStatus: 'review_required',
+  }));
+  assert.equal(result.lane, 'review');
+  assert.equal(result.archiveEligible, false);
+  assert.ok(result.riskSignals.includes('classification_review_reason_present'));
+});
+
+test('user-corrected reference and completed states retain ARCHIVE despite stale review reasons', () => {
+  for (const workState of ['reference', 'completed']) {
+    const result = deriveOperationalClassification(classification({
+      workState,
+      priority: 'normal',
+      source: 'user-corrected',
+      reviewStatus: 'corrected',
+      reviewReasons: ['project_conflict_requires_review'],
+    }));
+    assert.equal(result.lane, 'archive');
+    assert.equal(result.archiveEligible, true);
+  }
+});
+
+test('priority-only correction does not revive a resolved project conflict', () => {
+  const result = deriveOperationalClassification(classification({
+    priority: 'normal',
+    source: 'user-corrected',
+    reviewStatus: 'corrected',
+    reviewReasons: ['project_conflict_requires_review'],
+  }));
+  assert.equal(result.lane, 'archive');
+});
+
 test('known action with ME becomes DO NOW', () => {
   const result = deriveOperationalClassification(classification({
     workState: 'action_required',

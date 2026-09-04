@@ -148,7 +148,7 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(health.storage.schemaVersion, 4);
   assert.equal(health.safety.mode, 'read-only');
   assert.equal(health.graphConsent.includes('Mail.Send'), false);
-  assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix9');
+  assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix10');
   assert.equal(health.operationalClassificationVersion, 'operational-classification-v1.2.2');
   assert.equal(health.mailAssistantToolsVersion, 'mail-assistant-tools-v1.2.2');
   assert.equal(health.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
@@ -276,7 +276,17 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(result.response.status, 200);
   assert.equal(result.body.results.length, 1);
   assert.equal(result.body.results[0].message.id, 'action-api');
+  assert.equal(result.body.fallbackApplied, false);
+  assert.equal(result.body.effectiveResidualOperator, 'AND');
   assert.ok(result.body.results[0].matchedBecause.length >= 2);
+  assert.ok(result.body.results[0].matchedBecause.includes('메일 근거 검색: 견적'));
+
+  result = await api(baseUrl, `/api/intelligence/search?q=${encodeURIComponent('내가 처리할 견적 수정 미일치')}`, { cookie });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.fallbackApplied, true);
+  assert.equal(result.body.effectiveResidualOperator, 'COVERAGE');
+  assert.equal(result.body.results[0].message.id, 'action-api');
+  assert.ok(result.body.results[0].matchedBecause.includes(`메일 근거 검색: ${result.body.parsedQuery.residualText}`));
 
   result = await api(baseUrl, '/api/intelligence/correct', {
     method: 'POST',

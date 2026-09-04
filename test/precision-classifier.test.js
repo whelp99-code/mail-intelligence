@@ -58,6 +58,18 @@ test('뉴스레터와 명시적 무조치 메일은 참고로 남고 액터는 �
   assert.equal(result.reviewStatus, 'auto');
 });
 
+test('현재 직접 요청은 자동 알림 표현보다 우선해 archive로 강등되지 않는다', () => {
+  const result = classifyMessage(message({
+    subject: '자동 알림: 정책표 요청',
+    from: 'notification@example.com',
+    body: '자동 시스템 알림입니다. 오늘까지 보안 정책표를 보내주세요.',
+  }), { now: new Date(receivedAt) });
+
+  assert.equal(result.workState, 'action_required');
+  assert.equal(result.nextActor, 'me');
+  assert.equal(result.operational.lane, 'do_now');
+});
+
 test('외부 승인 대기와 내부 검토 대기를 다음 행동 주체로 분리한다', () => {
   const external = classifyMessage(message({
     body: '방화벽 정책표는 고객 보안팀 승인 대기 상태입니다.',
@@ -598,6 +610,16 @@ test('automated document final-completion notice is COMPLETED rather than Refere
   assert.equal(result.nextActor, 'none');
   assert.equal(result.priority, 'low');
   assert.equal(result.evidence.priority.rule, 'automated-completion-low');
+});
+
+test('completion event is not overridden by request-shaped workflow nouns', () => {
+  const result = classifyMessage(message({
+    subject: '검수요청 승인 결과',
+    body: '발주 계약 건으로 검수요청 승인이 완료 되었습니다.',
+  }), { now: new Date(receivedAt) });
+  assert.equal(result.workState, 'completed');
+  assert.equal(result.nextActor, 'none');
+  assert.equal(result.priority, 'normal');
 });
 
 test('incoming request for another email address or contact remains actionable', () => {

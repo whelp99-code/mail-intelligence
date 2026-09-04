@@ -11,7 +11,7 @@ import { INTELLIGENT_SEARCH_VERSION } from '../src/domain/intelligent-search.js'
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(packageJson.version, '1.2.2');
-assert.equal(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix9');
+assert.equal(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix10');
 assert.equal(INTELLIGENT_SEARCH_VERSION, 'intelligent-search-v1.2.2');
 
 function message(id, subject, body, overrides = {}) {

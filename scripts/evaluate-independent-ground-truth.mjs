@@ -105,7 +105,7 @@ function validateLabels(payload, expectedCount) {
 }
 
 function ratio(passed, total) {
-  return total ? passed / total : 1;
+  return total ? passed / total : null;
 }
 
 const labelsArgument = argumentValue('--labels');
@@ -322,6 +322,7 @@ try {
       count: importantPriorityMisses,
       total: importantPriorityTotal,
       rate: ratio(importantPriorityMisses, importantPriorityTotal),
+      applicable: importantPriorityTotal > 0,
       contractVersion: IMPORTANT_MISS_CONTRACT_VERSION,
       definition: 'important=true, expected priority is not low, and actual priority is low',
     },
@@ -329,6 +330,7 @@ try {
       count: importantActionMisses,
       total: importantActionTotal,
       rate: ratio(importantActionMisses, importantActionTotal),
+      applicable: importantActionTotal > 0,
       contractVersion: IMPORTANT_MISS_CONTRACT_VERSION,
       definition: 'expected state is actionable and actual state is not actionable',
     },
@@ -347,8 +349,10 @@ try {
     nextActor: metrics.nextActor.accuracy >= RELEASE_THRESHOLDS.nextActorAccuracy,
     priority: metrics.priority.accuracy >= RELEASE_THRESHOLDS.priorityAccuracy,
     referenceFalseAction: metrics.referenceFalseAction.rate <= RELEASE_THRESHOLDS.referenceFalseActionRate,
-    importantPriorityMiss: metrics.importantPriorityMiss.rate <= RELEASE_THRESHOLDS.importantPriorityMissRate,
-    importantActionMiss: metrics.importantActionMiss.rate <= RELEASE_THRESHOLDS.importantActionMissRate,
+    importantPriorityMiss: !metrics.importantPriorityMiss.applicable
+      || metrics.importantPriorityMiss.rate <= RELEASE_THRESHOLDS.importantPriorityMissRate,
+    importantActionMiss: !metrics.importantActionMiss.applicable
+      || metrics.importantActionMiss.rate <= RELEASE_THRESHOLDS.importantActionMissRate,
   };
   const verdict = Object.values(gates).every(Boolean) ? 'GO_CANDIDATE' : 'NO_GO';
 

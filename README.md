@@ -578,7 +578,7 @@ v1.2.2는 엔지니어링 검증 대상이며, 최종 Production GO는 신규 �
 
 ## v1.2.2 사건·운영 Lane 기반 분류
 
-현재 운영 분류기는 `precision-classification-v1.2.2-fix9`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다.
+현재 운영 분류기는 `precision-classification-v1.2.2-fix10`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다.
 
 조건부 문의 Footer, 법적 Disclaimer, 마케팅 수신거부, tracking asset은 상태·Priority Evidence에서 제외한다. 외부 행동과 외부 AI는 운영 안전선에서 기본 비활성화 상태를 유지한다.
 

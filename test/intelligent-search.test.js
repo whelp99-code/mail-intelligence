@@ -44,6 +44,78 @@ test('오늘·내일·기한 초과 범위를 KST 기준으로 생성한다', ()
   assert.equal(overdue.requiresDue, true);
 });
 
+test('절대 날짜는 같은 절의 deadline cue가 있을 때만 KST hard due anchor가 된다', () => {
+  const hard = parseIntelligentQuery('2026-09-10까지 견적 회신', { now });
+  assert.deepEqual(hard.filters.dueRange, {
+    from: '2026-09-09T15:00:00.000Z',
+    before: '2026-09-10T15:00:00.000Z',
+    requiresDue: true,
+  });
+  assert.equal(hard.searchPlan.hardAnchors[0].kind, 'due_date');
+
+  const soft = parseIntelligentQuery('2026-09-10 견적 문서', { now });
+  assert.deepEqual(soft.filters.dueRange, {});
+  assert.equal(soft.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), false);
+
+  const koreanDate = parseIntelligentQuery('2026년 9월 10일까지 견적 회신', { now });
+  assert.deepEqual(koreanDate.filters.dueRange, hard.filters.dueRange);
+  const monthDay = parseIntelligentQuery('9월 10일 마감 견적', { now });
+  assert.deepEqual(monthDay.filters.dueRange, hard.filters.dueRange);
+
+  const laterClause = parseIntelligentQuery('2026-09-01 논의, 2026-09-10까지 회신', { now });
+  assert.deepEqual(laterClause.filters.dueRange, hard.filters.dueRange);
+  const englishClause = parseIntelligentQuery('2026-09-01 discussed; reply due by 2026-09-10', { now });
+  assert.deepEqual(englishClause.filters.dueRange, hard.filters.dueRange);
+  const sameClause = parseIntelligentQuery('2026-09-01 discussed then reply by 2026-09-10', { now });
+  assert.deepEqual(sameClause.filters.dueRange, hard.filters.dueRange);
+  const koreanClause = parseIntelligentQuery('2026년 9월 1일 참고; 9월 10일 회신 마감', { now });
+  assert.deepEqual(koreanClause.filters.dueRange, hard.filters.dueRange);
+  const invalid = parseIntelligentQuery('2026-02-30까지 회신', { now });
+  assert.deepEqual(invalid.filters.dueRange, {});
+});
+
+test('명시 프로젝트 구문 외 임의 잔여 토큰은 hard entity anchor가 되지 않는다', () => {
+  const parsed = parseIntelligentQuery('AlphaCorp 견적 계약', { now });
+  assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'entity'), false);
+});
+
+test('원격과 보안 또는 장애 issue group은 hard anchor가 되고 명시 결합만 모두 요구한다', () => {
+  const anchored = parseIntelligentQuery('원격 접속 보안 사고', { now });
+  assert.ok(anchored.searchPlan.hardAnchors.some((item) => item.kind === 'security_remote_session'));
+  const ordinary = parseIntelligentQuery('원격 접속 오류', { now });
+  assert.equal(ordinary.searchPlan.hardAnchors.some((item) => item.kind === 'security_remote_session'), false);
+
+  const outage = parseIntelligentQuery('원격 접속 보안 장애', { now });
+  assert.equal(outage.searchPlan.hardAnchors.find((item) => item.kind === 'security_remote_session').requiresAllIssueTerms, false);
+  const explicit = parseIntelligentQuery('원격 접속 보안 및 장애', { now });
+  assert.equal(explicit.searchPlan.hardAnchors.find((item) => item.kind === 'security_remote_session').requiresAllIssueTerms, true);
+  assert.deepEqual(explicit.filters.signals, []);
+  assert.deepEqual(parseIntelligentQuery('보안 점검', { now }).filters.signals, ['incident_security']);
+});
+
+test('자동 생성 문서의 조사와 보조형 control words는 coverage soft token 분모에 포함하지 않는다', () => {
+  const parsed = parseIntelligentQuery('자동 생성되는 문서를 메일 확인하면', { now });
+  assert.deepEqual(parsed.searchPlan.softTokens, []);
+  assert.equal(parsed.searchPlan.fallbackPolicy.allowed, false);
+  assert.equal(parsed.searchPlan.fallbackPolicy.failClosed, true);
+
+  const core = parseIntelligentQuery('자동 생성 문서 세금계산서를 확인하는', { now });
+  assert.deepEqual(core.searchPlan.softTokens, ['세금계산서를']);
+  assert.equal(core.searchPlan.fallbackPolicy.allowed, false);
+
+  const standalone = parseIntelligentQuery('하면 하는 해서 되는 되어 될 세금계산서', { now });
+  assert.deepEqual(standalone.searchPlan.softTokens, ['세금계산서']);
+  assert.equal(standalone.searchPlan.fallbackPolicy.allowed, false);
+});
+
+test('semantic intent consumes only recognized control spans and keeps entity qualifiers in the search plan', () => {
+  const parsed = parseIntelligentQuery('완료된 Sangfor 지원 문의 고객', { now });
+  assert.equal(parsed.filters.semanticIntent, 'completed_sangfor_support');
+  assert.match(parsed.residualText, /Sangfor/);
+  assert.deepEqual(parsed.filters.nextActors, ['external_party']);
+  assert.ok(parsed.searchPlan.softTokens.includes('Sangfor'));
+});
+
 test('검토 필요 질의는 review_required 필터를 만든다', () => {
   const parsed = parseIntelligentQuery('분류 불확실한 메일', { now });
   assert.deepEqual(parsed.filters.workStates, ['review_required']);
@@ -141,7 +213,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
   const hciIncident = parseIntelligentQuery('HCI 라이선스 장애', { now });
   assert.equal(hciIncident.filters.semanticIntent, 'hci_license_incident');
   assert.deepEqual(hciIncident.filters.signals, []);
-  assert.equal(hciIncident.residualText, '');
+  assert.equal(hciIncident.residualText, 'HCI 라이선스 장애');
 });
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
@@ -149,30 +221,33 @@ test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태�
   assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
-  assert.equal(completedSangfor.residualText, '');
+  assert.equal(completedSangfor.residualText, 'Sangfor');
 
   const waitingLicense = parseIntelligentQuery('대기 중인 라이선스 회신', { now });
   assert.equal(waitingLicense.filters.semanticIntent, 'waiting_license_reply');
   assert.deepEqual(waitingLicense.filters.workStates, ['waiting']);
   assert.deepEqual(waitingLicense.filters.nextActors, ['external_party']);
-  assert.equal(waitingLicense.residualText, '');
+  assert.equal(waitingLicense.residualText, '라이선스');
 
   const invoiceReview = parseIntelligentQuery('검토 필요한 세금계산서', { now });
   assert.equal(invoiceReview.filters.semanticIntent, 'tax_invoice_review');
   assert.deepEqual(invoiceReview.filters.workStates, ['review_required']);
   assert.ok(invoiceReview.filters.signals.includes('quotation_contract'));
+  assert.equal(invoiceReview.residualText, '세금계산서');
 
   const deactivation = parseIntelligentQuery('Confluence 비활성화', { now });
   assert.equal(deactivation.filters.semanticIntent, 'confluence_deactivation');
   assert.deepEqual(deactivation.filters.workStates, ['action_required']);
   assert.deepEqual(deactivation.filters.nextActors, ['me']);
+  assert.equal(deactivation.residualText, 'Confluence');
 
   const sharedAccess = parseIntelligentQuery('공유 폴더 이메일 인증', { now });
   assert.equal(sharedAccess.filters.semanticIntent, 'shared_access_verification');
   assert.deepEqual(sharedAccess.filters.workStates, ['action_required']);
   assert.deepEqual(sharedAccess.filters.nextActors, ['me']);
+  assert.equal(sharedAccess.residualText, '공유 폴더');
 
   const sangforIag = parseIntelligentQuery('Sangfor IAG', { now });
   assert.equal(sangforIag.filters.semanticIntent, 'sangfor_iag');
-  assert.equal(sangforIag.residualText, '');
+  assert.equal(sangforIag.residualText, 'Sangfor IAG');
 });

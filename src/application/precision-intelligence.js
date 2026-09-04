@@ -202,14 +202,28 @@ export class PrecisionIntelligenceService {
     const mailbox = this.ensureMailbox(mailboxUser);
     this.classifyStored(mailboxUser);
     const parsedQuery = parseIntelligentQuery(query, { now });
-    const results = this.store.intelligentSearch(mailbox.id, parsedQuery, {
+    const searchOptions = {
       limit: boundedLimit(limit, 25, 100),
-    });
+    };
+    let results = this.store.intelligentSearch(mailbox.id, parsedQuery, searchOptions);
+    let effectiveParsedQuery = parsedQuery;
+    let fallbackApplied = false;
+    if (results.length === 0 && parsedQuery.searchPlan?.fallbackPolicy?.allowed) {
+      effectiveParsedQuery = {
+        ...parsedQuery,
+        searchMode: 'coverage',
+      };
+      results = this.store.intelligentSearch(mailbox.id, effectiveParsedQuery, searchOptions);
+      fallbackApplied = true;
+    }
     return {
       parsedQuery,
+      fallbackApplied,
+      effectiveResidualOperator: effectiveParsedQuery.searchMode === 'coverage' ? 'COVERAGE' : effectiveParsedQuery.residualOperator,
+      softTokenCount: parsedQuery.searchPlan?.softTokens?.length || 0,
       results: results.map((result) => ({
         ...result,
-        matchedBecause: explainIntelligentMatch(result, parsedQuery),
+        matchedBecause: explainIntelligentMatch(result, effectiveParsedQuery),
       })),
     };
   }

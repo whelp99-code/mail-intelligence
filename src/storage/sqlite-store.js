@@ -1274,6 +1274,12 @@ export class SQLiteMailStore {
     const residualTokens = String(parsedQuery?.residualText || '')
       .normalize('NFKC')
       .match(/[\p{L}\p{N}_-]+/gu) || [];
+    const searchPlan = parsedQuery?.searchPlan || {};
+    const softTokens = Array.isArray(searchPlan.softTokens) && searchPlan.softTokens.length
+      ? searchPlan.softTokens
+      : residualTokens;
+    if (searchPlan.fallbackPolicy?.failClosed) return [];
+    const coverageMode = parsedQuery?.searchMode === 'coverage';
     const clauses = [
       'm.mailbox_id = ?',
       'm.deleted_at IS NULL',
@@ -1286,9 +1292,10 @@ export class SQLiteMailStore {
     const joins = [];
     let rankSelect = '0 AS rank';
     let semanticRank = '';
-    if (residualTokens.length) {
-      const operator = parsedQuery?.residualOperator === 'OR' ? ' OR ' : ' AND ';
-      const ftsQuery = residualTokens.slice(0, 12)
+    const ftsTokens = filters.semanticIntent === 'hci_license_incident' ? [] : softTokens;
+    if (ftsTokens.length) {
+      const operator = coverageMode || parsedQuery?.residualOperator === 'OR' ? ' OR ' : ' AND ';
+      const ftsQuery = ftsTokens.slice(0, 12)
         .map((token) => `"${token.replace(/"/g, '""')}"*`)
         .join(operator);
       joins.push('JOIN message_fts ON message_fts.rowid = m.id');
@@ -1313,6 +1320,39 @@ export class SQLiteMailStore {
     const stateEvidenceText = 'LOWER(COALESCE(json_extract(pc.evidence_json, \'$.workState.exactText\'), \'\'))';
     const searchableCurrentText = `(${subjectText} || ' ' || ${bodyText} || ' ' || ${stateEvidenceText})`;
     const strictCurrentText = `(${subjectText} || ' ' || ${previewText} || ' ' || ${stateEvidenceText})`;
+    const softMatchTerms = softTokens.slice(0, 12).map((token) => (
+      `CASE WHEN ${searchableCurrentText} LIKE ${sqlLiteral(`%${String(token).toLowerCase()}%`)} THEN 1 ELSE 0 END`
+    ));
+    const matchedSoftCountSelect = softMatchTerms.length ? `(${softMatchTerms.join(' + ')})` : '0';
+    const hardAnchorKinds = [];
+    for (const anchor of searchPlan.hardAnchors || []) {
+      if (anchor.kind === 'due_date') hardAnchorKinds.push(anchor.kind);
+      if (anchor.kind === 'external_actor') hardAnchorKinds.push(anchor.kind);
+      if (anchor.kind === 'project') hardAnchorKinds.push(anchor.kind);
+      if (anchor.kind === 'security_remote_session') {
+        const groupClause = (text, tokens) => `(${tokens.map((token) => `${text} LIKE ${sqlLiteral(`%${String(token).toLowerCase()}%`)}`).join(' OR ')})`;
+        const security = groupClause(strictCurrentText, anchor.groups[0] || []);
+        const remote = groupClause(strictCurrentText, anchor.groups[1] || []);
+        const outage = groupClause(strictCurrentText, ['장애', '중단', 'outage']);
+        const strictIssue = `(${security} OR ${outage})`;
+        const strictMatch = anchor.requiresAllIssueTerms
+          ? `(${remote} AND ${security} AND ${outage})`
+          : `(${remote} AND ${strictIssue})`;
+        const bodySecurity = groupClause(bodyText, anchor.groups[0] || []);
+        const bodyRemote = groupClause(bodyText, anchor.groups[1] || []);
+        const bodyOutage = groupClause(bodyText, ['장애', '중단', 'outage']);
+        const bodyIssue = `(${bodySecurity} OR ${bodyOutage})`;
+        const bodyMatch = anchor.requiresAllIssueTerms
+          ? `(${bodyRemote} AND ${bodySecurity} AND ${bodyOutage})`
+          : `(${bodyRemote} AND ${bodyIssue})`;
+        const minimumCoverage = Number(searchPlan.fallbackPolicy?.minimumCoverage || 0);
+        const supplementedMatch = coverageMode && minimumCoverage > 0
+          ? `(( ${remote} OR ${strictIssue} ) AND ${bodyMatch} AND ${matchedSoftCountSelect} >= ${minimumCoverage})`
+          : '0';
+        clauses.push(`(${strictMatch} OR ${supplementedMatch})`);
+        hardAnchorKinds.push(anchor.kind);
+      }
+    }
     if (filters.semanticIntent === 'completed_support_ticket') {
       clauses.push('pc.work_state = \'completed\'');
       clauses.push(`(${searchableCurrentText} LIKE '%patch%' OR ${searchableCurrentText} LIKE '%패치%' OR ${searchableCurrentText} LIKE '%kernel%')`);
@@ -1413,6 +1453,11 @@ export class SQLiteMailStore {
       semanticRank = `CASE WHEN ${subjectText} LIKE '%sangfor%' AND ${subjectText} LIKE '%iag%' THEN 0 ELSE 1 END,`;
     }
 
+    if (filters.reviewOnly && /계약|contract|유지보수|maintenance/i.test(parsedQuery.originalQuery || '')) {
+      const reviewContractText = `(${subjectText} || ' ' || ${previewText} || ' ' || ${stateEvidenceText})`;
+      semanticRank = `CASE WHEN ${reviewContractText} LIKE '%유지보수%' OR ${reviewContractText} LIKE '%maintenance%' THEN 0 WHEN ${reviewContractText} LIKE '%계약%' OR ${reviewContractText} LIKE '%contract%' THEN 1 ELSE 2 END,${semanticRank}`;
+    }
+
     const hasDueRange = Boolean(
       filters.dueRange
       && Object.keys(filters.dueRange).length
@@ -1483,6 +1528,12 @@ export class SQLiteMailStore {
       params.push(pattern, pattern, pattern);
     }
 
+    if (coverageMode) {
+      const minimumCoverage = Number(searchPlan.fallbackPolicy?.minimumCoverage || 0);
+      clauses.push(`${matchedSoftCountSelect} >= ?`);
+      params.push(minimumCoverage);
+    }
+
     const subjectTerms = residualTokens.slice(0, 6).map((token) => `LOWER(m.subject) LIKE ${sqlLiteral(`%${token.toLowerCase()}%`)}`);
     const subjectRank = subjectTerms.length
       ? `CASE WHEN ${subjectTerms.join(' AND ')} THEN 0 WHEN ${subjectTerms.join(' OR ')} THEN 1 ELSE 2 END,`
@@ -1506,7 +1557,8 @@ export class SQLiteMailStore {
         END,`;
 
     const rows = this.db.prepare(`
-      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name, ${rankSelect}
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name,
+             ${rankSelect}, ${matchedSoftCountSelect} AS matched_soft_count
       FROM messages m
       JOIN precision_classifications pc ON pc.message_id = m.id
       LEFT JOIN projects p ON p.id = pc.primary_project_id
@@ -1531,6 +1583,8 @@ export class SQLiteMailStore {
       message: rowToMessage(row),
       classification: this.getPrecisionClassification(mailboxId, row.graph_id),
       rank: Number(row.rank || 0),
+      matchedSoftCount: Number(row.matched_soft_count || 0),
+      matchedAnchorKinds: hardAnchorKinds,
     }));
   }
 
