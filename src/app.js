@@ -40,6 +40,7 @@ const clientId = document.querySelector('#clientId');
 const clientSecret = document.querySelector('#clientSecret');
 const mailboxUser = document.querySelector('#mailboxUser');
 const loginTenant = document.querySelector('#loginTenant');
+const domainProfile = document.querySelector('#domainProfile');
 const loginOutlook = document.querySelector('#loginOutlook');
 const aiProvider = document.querySelector('#aiProvider');
 const openaiCodexModel = document.querySelector('#openaiCodexModel');
@@ -89,7 +90,7 @@ const feedbackReasons = {
 const feedbackStatuses = ['urgent', 'active', 'waiting', 'done', 'reference'];
 const feedbackReasonOptions = ['urgent', 'active', 'waiting', 'done', 'reference', 'hold'];
 
-let currentResult = null;
+let currentResult = emptyResult();
 let currentMessages = [];
 let visibleMessages = [];
 let activeFilter = 'all';
@@ -97,6 +98,8 @@ let searchQuery = '';
 let selectedMessageId = '';
 let precisionProjects = [];
 let precisionSmartViews = [];
+let assistantRequestSequence = 0;
+let searchRequestSequence = 0;
 
 let latestOutlookStatus = {};
 
@@ -218,7 +221,7 @@ async function loadOauthProviderStatus() {
   refreshOauthProviders.disabled = true;
   try {
     const response = await apiFetch('/api/ai/oauth/status');
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || 'OAuth Provider 상태 확인 실패');
     renderOauthProviderStatus(payload);
   } catch (error) {
@@ -250,7 +253,7 @@ async function testSelectedOauthProvider() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: aiProvider.value, model })
     });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) {
       oauthProviderSummary.textContent = [
         payload.message || 'OAuth Provider 연결 테스트 실패',
@@ -275,7 +278,7 @@ async function ensureLocalSession() {
       credentials: 'same-origin',
       cache: 'no-store'
     }).then(async (response) => {
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
       if (!response.ok || !payload.csrfToken) {
         throw new Error(payload.message || '로컬 보안 세션을 만들지 못했습니다.');
       }
@@ -288,6 +291,22 @@ async function ensureLocalSession() {
   }
   return localSessionPromise;
 }
+
+async function readApiPayload(response) {
+  if (response.status === 204) return {};
+  const text = await response.text();
+  if (!text) return {};
+  const contentType = response.headers.get('content-type') || '';
+  if (/application\/json/i.test(contentType)) {
+    try { return JSON.parse(text); } catch { return { code: 'NON_JSON_RESPONSE', message: '서버 응답을 안전하게 처리하지 못했습니다.' }; }
+  }
+  if (response.status === 405 && /text\/plain/i.test(contentType) && /MAIL_BROWSER_RELAY_READ_ONLY/i.test(text)) {
+    return { code: 'READ_ONLY_RELAY_BLOCKED', message: '읽기 전용 브라우저 릴레이에서는 이 작업을 실행할 수 없습니다.' };
+  }
+  return { code: 'NON_JSON_RESPONSE', message: response.ok ? '' : '서버 응답을 안전하게 처리하지 못했습니다.' };
+}
+
+function emptyResult() { return { insights: [], calendar: [], reminders: [], precision: { summary: null } }; }
 
 async function apiFetch(url, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
@@ -505,6 +524,10 @@ function messageCard(message) {
   const lane = precision?.workState || legacyToPrecisionState(effectiveStatus(insight));
   const operationalLane = precision?.operational?.lane || 'review';
   const article = document.createElement('article');
+  article.tabIndex = 0;
+  article.setAttribute('role', 'button');
+  article.dataset.messageId = String(message.id);
+  article.setAttribute('aria-selected', String(message.id === selectedMessageId));
   article.className = `message-card precision-${lane.replaceAll('_', '-')} operational-${operationalLane.replaceAll('_', '-')}`;
   article.innerHTML = `
     <div class="message-row">
@@ -526,6 +549,11 @@ function messageCard(message) {
   if (!message.isRead) article.classList.add('unread');
   if (insight?.isSpamCandidate) article.classList.add('promo');
   article.addEventListener('click', () => selectMessage(message.id));
+  article.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    selectMessage(message.id);
+  });
   return article;
 }
 
@@ -699,7 +727,7 @@ function feedbackPanel(insight) {
       </div>
       ${insight?.feedbackHint && !feedback ? `<p class="feedback-hint">이전 보정과 유사하여 ${escapeHtml(statusLabel(insight.feedbackHint.userStatus))} 기준을 참고했습니다.</p>` : ''}
       <div class="feedback-buttons" role="group" aria-label="분류 보정">
-        ${feedbackStatuses.map((status) => `<button type="button" class="feedback-status ${applied === status ? 'selected' : ''}" data-status="${status}">${statusLabel(status)}</button>`).join('')}
+        ${feedbackStatuses.map((status) => `<button type="button" class="feedback-status ${applied === status ? 'selected' : ''}" data-status="${status}" aria-pressed="${applied === status}">${statusLabel(status)}</button>`).join('')}
       </div>
       <div class="feedback-form">
         <label>보정 이유
@@ -766,6 +794,7 @@ function mountAssistantDraft(draft) {
 }
 
 async function runAssistantTool(action, messageId) {
+  const requestSequence = ++assistantRequestSequence;
   renderAssistantOutput('처리 중입니다.');
   try {
     if (action === 'confirm') {
@@ -774,7 +803,8 @@ async function runAssistantTool(action, messageId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messageId })
       });
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
+      if (requestSequence !== assistantRequestSequence || messageId !== selectedMessageId) return;
       if (!response.ok) throw new Error(payload.message || '분류 확인 저장 실패');
       const message = currentMessages.find((item) => item.id === messageId);
       if (message) message.precision = payload.classification;
@@ -792,7 +822,8 @@ async function runAssistantTool(action, messageId) {
         attachments: `/api/intelligence/attachments?messageId=${encodeURIComponent(messageId)}`
       }[action];
       const response = await apiFetch(endpoint);
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
+      if (requestSequence !== assistantRequestSequence || messageId !== selectedMessageId) return;
       if (!response.ok) throw new Error(payload.message || '메일 도우미 실행 실패');
       if (action === 'summary') {
         renderAssistantOutput([payload.oneLine, ...(payload.detail || [])].filter(Boolean).join('\n'));
@@ -833,7 +864,8 @@ async function runAssistantTool(action, messageId) {
           timeZone: 'Asia/Seoul'
         })
       });
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
+      if (requestSequence !== assistantRequestSequence || messageId !== selectedMessageId) return;
       if (!response.ok) throw new Error(payload.message || '초안 생성 실패');
       mountAssistantDraft(payload);
       return;
@@ -844,7 +876,8 @@ async function runAssistantTool(action, messageId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messageId })
       });
-      const payload = await response.json();
+      const payload = await readApiPayload(response);
+      if (requestSequence !== assistantRequestSequence || messageId !== selectedMessageId) return;
       if (!response.ok) throw new Error(payload.message || 'Luna 2차 검토 실패');
       if (payload.status === 'policy_blocked') {
         renderAssistantOutput('외부 AI가 운영 정책으로 꺼져 있습니다. Rules 결과를 유지하고 이 메일은 REVIEW에서 사람이 확인합니다.');
@@ -946,9 +979,13 @@ function selectMessage(messageId) {
     button.addEventListener('click', () => runAssistantTool(button.dataset.assistantAction, messageId));
   });
 
-  messageList.querySelectorAll('.message-card').forEach((node) => node.classList.remove('selected'));
-  const index = currentMessages.findIndex((item) => item.id === messageId);
-  if (index >= 0) messageList.querySelectorAll('.message-card')[index]?.classList.add('selected');
+  messageList.querySelectorAll('.message-card').forEach((node) => {
+    node.classList.remove('selected');
+    node.setAttribute('aria-selected', 'false');
+  });
+  const selectedCard = [...messageList.querySelectorAll('.message-card')].find((node) => node.dataset.messageId === String(messageId));
+  selectedCard?.classList.add('selected');
+  selectedCard?.setAttribute('aria-selected', 'true');
   renderActionPanel();
 }
 
@@ -971,7 +1008,7 @@ async function saveFeedback(messageId, userStatus) {
         sender: insight?.from || ''
       })
     });
-    const result = await response.json();
+    const result = await readApiPayload(response);
     if (!response.ok) throw new Error(result.message || '보정값 저장 실패');
     if (insight) {
       insight.userFeedback = result.feedback;
@@ -1010,7 +1047,7 @@ async function savePrecisionCorrection(event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const result = await response.json();
+    const result = await readApiPayload(response);
     if (!response.ok) throw new Error(result.message || '정밀 분류 보정 저장 실패');
     const message = currentMessages.find((item) => item.id === messageId);
     if (message) message.precision = result.classification;
@@ -1080,14 +1117,13 @@ function filteredMessages() {
   });
 }
 
-function actionVisible(action) {
-  const visibleIds = new Set(visibleMessages.map((message) => message.id));
-  return !action.messageId || visibleIds.has(action.messageId);
-}
+function actionVisible(action) { return Boolean(action?.messageId) && action.messageId === selectedMessageId; }
 
 function refreshFilterButtons() {
   document.querySelectorAll('.metric').forEach((button) => {
-    button.classList.toggle('selected', button.dataset.filter === activeFilter);
+    const selected = button.dataset.filter === activeFilter;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
   });
 }
 
@@ -1106,10 +1142,12 @@ function renderFilteredView() {
 
   clear(messageList);
   const unreadCount = visibleMessages.filter((message) => !message.isRead).length;
-  messageCount.textContent = `${visibleMessages.length}건 · 읽지않음 ${unreadCount}건`;
+  messageCount.textContent = `현재 로드 ${currentMessages.length}건 중 ${visibleMessages.length}건 · 읽지않음 ${unreadCount}건`;
   if (!visibleMessages.length) {
     messageList.appendChild(empty('조건에 맞는 메일이 없습니다.'));
+    selectedMessageId = '';
     messageDetail.innerHTML = '<div class="empty">필터 또는 검색 조건을 조정하세요.</div>';
+    renderActionPanel();
   } else {
     const groups = new Map();
     visibleMessages.forEach((message) => {
@@ -1162,8 +1200,8 @@ function renderActionPanel() {
 }
 
 function render(result, messages = []) {
-  currentResult = result;
-  currentMessages = messages;
+  currentResult = result && typeof result === 'object' ? { ...emptyResult(), ...result, calendar: Array.isArray(result.calendar) ? result.calendar : [], reminders: Array.isArray(result.reminders) ? result.reminders : [], insights: Array.isArray(result.insights) ? result.insights : [] } : emptyResult();
+  currentMessages = Array.isArray(messages) ? messages : [];
   activeFilter = 'all';
   searchQuery = '';
   mailSearch.value = '';
@@ -1207,7 +1245,7 @@ function renderPrecisionOverview(summary) {
     if (node) node.textContent = String(operationalLanes[lane] || 0);
   });
   precisionStatus.textContent = total
-    ? `정밀 분류 ${total}건 · DO NOW ${operationalLanes.do_now || 0} · WAITING ${operationalLanes.waiting || 0} · REVIEW ${operationalLanes.review || review} · ARCHIVE ${operationalLanes.archive || 0}`
+    ? `저장 전체 정밀 분류 ${total}건 · DO NOW ${operationalLanes.do_now || 0} · WAITING ${operationalLanes.waiting || 0} · REVIEW ${operationalLanes.review || review} · ARCHIVE ${operationalLanes.archive || 0}`
     : '정밀 분류할 저장 메일이 없습니다.';
   precisionSummaryNode.textContent = total
     ? `사용자 보정 ${corrected}건 · 자동 보관 차단 ${operational.silentRiskPrevented || 0}건 · 확정 프로젝트 연결 ${confirmed}건 · 애매한 판단은 REVIEW에 남깁니다.`
@@ -1218,7 +1256,7 @@ async function loadAssistantPersonality() {
   if (!assistantRole || !assistantTone || !assistantOpening) return;
   try {
     const response = await apiFetch('/api/intelligence/personality');
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '초안 성격 확인 실패');
     assistantRole.value = payload.personality?.role || '';
     assistantTone.value = payload.personality?.tone || '';
@@ -1242,7 +1280,7 @@ async function saveAssistantPersonality() {
         opening: assistantOpening.value
       })
     });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '초안 성격 저장 실패');
     assistantRole.value = payload.personality.role;
     assistantTone.value = payload.personality.tone;
@@ -1277,7 +1315,7 @@ function renderProjectRegistry() {
 async function loadPrecisionProjects() {
   try {
     const response = await apiFetch('/api/intelligence/projects');
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '프로젝트 목록 확인 실패');
     precisionProjects = payload.projects || [];
     renderProjectRegistry();
@@ -1304,7 +1342,7 @@ function renderSmartViews() {
 async function loadSmartViews() {
   try {
     const response = await apiFetch('/api/intelligence/smart-views');
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '스마트 뷰 확인 실패');
     precisionSmartViews = payload.views || [];
     renderSmartViews();
@@ -1327,7 +1365,7 @@ async function loadPrecisionOverview({ classify = true, force = false } = {}) {
       if (!classifyResponse.ok) throw new Error(classifyPayload.message || '정밀 분류 실패');
     }
     const response = await apiFetch('/api/intelligence/summary');
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '정밀 분류 상태 확인 실패');
     renderPrecisionOverview(payload);
     await loadPrecisionProjects();
@@ -1354,7 +1392,7 @@ async function createPrecisionProject(event) {
         aliases
       })
     });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '프로젝트 등록 실패');
     projectForm.reset();
     await loadPrecisionOverview({ classify: false });
@@ -1371,7 +1409,7 @@ async function loadMemoryStatus() {
   refreshMemory.disabled = true;
   try {
     const response = await apiFetch('/api/storage/status');
-    const storage = await response.json();
+    const storage = await readApiPayload(response);
     if (!response.ok) throw new Error(storage.message || '메일 DB 상태 확인 실패');
     renderMemoryStatus(storage);
   } catch (error) {
@@ -1391,11 +1429,12 @@ async function synchronizePersistentMemory() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ top: Number(mailLimit.value), forceInitial: false })
     });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || 'Delta 동기화 실패');
     const sync = payload.sync || {};
     fetchStatus.textContent = `Delta 동기화 완료 · 폴더 ${sync.completedFolders || 0}/${sync.discoveredFolders || 0} · 수집 ${sync.fetchedFromGraph || 0} · 반영 ${sync.upserted || 0} · 삭제 ${sync.deleted || 0} · 경고 ${sync.failedFolders || 0}`;
     await loadMemoryStatus();
+    await loadOutlookMessages();
   } catch (error) {
     fetchStatus.textContent = error instanceof Error ? error.message : 'Delta 동기화 실패';
   } finally {
@@ -1412,7 +1451,7 @@ async function createPersistentMemoryBackup() {
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
     });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || '백업 생성 실패');
     memorySummary.textContent = `검증 백업 완료 · ${payload.backup.name} · ${(payload.backup.sizeBytes / 1024 / 1024).toFixed(1)} MB · SHA-256 ${payload.backup.checksumSha256.slice(0, 12)}…`;
     await loadMemoryStatus();
@@ -1464,8 +1503,11 @@ function renderDatabaseSearchResults(results, query, parsedQuery = null) {
     }
     item.addEventListener('click', () => {
       const existing = currentMessages.find((candidate) => candidate.id === message.id);
-      if (existing) existing.precision = classification || existing.precision;
-      else currentMessages.push({ ...message, precision: classification || null });
+      if (!existing) {
+        fetchStatus.textContent = 'Search result is not in the loaded mailbox.';
+        return;
+      }
+      existing.precision = classification || existing.precision;
       searchQuery = '';
       activeFilter = 'all';
       renderFilteredView();
@@ -1476,6 +1518,7 @@ function renderDatabaseSearchResults(results, query, parsedQuery = null) {
 }
 
 async function searchPersistentMemory() {
+  const requestSequence = ++searchRequestSequence;
   const query = mailSearch.value.trim();
   if (!query) {
     fetchStatus.textContent = 'DB 전체 검색어를 입력하세요.';
@@ -1485,7 +1528,8 @@ async function searchPersistentMemory() {
   searchDatabase.disabled = true;
   try {
     const response = await apiFetch(`/api/intelligence/search?q=${encodeURIComponent(query)}&limit=25`);
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
+    if (requestSequence !== searchRequestSequence) return;
     if (!response.ok) throw new Error(payload.message || '지능형 탐색 실패');
     renderDatabaseSearchResults(payload.results || [], query, payload.parsedQuery);
     fetchStatus.textContent = `정밀 분류 + SQLite 근거 탐색 완료 · ${payload.results?.length || 0}건`;
@@ -1499,13 +1543,14 @@ async function searchPersistentMemory() {
 async function loadStatus() {
   try {
     const response = await apiFetch('/api/outlook/config');
-    const status = await response.json();
+    const status = await readApiPayload(response);
     if (!response.ok) throw new Error(status.message || 'Outlook 상태 확인 실패');
     updateOutlookConnectionStatus(status);
     loginTenant.value = status.loginTenant || 'common';
     tenantId.value = status.tenantId || '';
     clientId.value = status.clientId || '';
     mailboxUser.value = status.mailboxUser || '';
+    domainProfile.value = status.domainProfile || 'generic';
     aiProvider.value = status.aiProvider || 'rules';
     openaiCodexModel.value = status.openaiCodexModel || 'luna';
     xaiGrokModel.value = status.xaiGrokModel || 'grok-4.6';
@@ -1540,6 +1585,7 @@ async function saveConfig(event) {
         clientId: clientId.value,
         clientSecret: clientSecret.value,
         mailboxUser: mailboxUser.value,
+        domainProfile: domainProfile.value,
         loginTenant: loginTenant.value,
         aiProvider: aiProvider.value,
         aiDataPolicyAccepted: aiProvider.value !== 'rules' && aiDataPolicyAccepted.checked,
@@ -1548,7 +1594,7 @@ async function saveConfig(event) {
         persist: true
       })
     });
-    const status = await response.json();
+    const status = await readApiPayload(response);
     if (!response.ok) throw new Error(status.message || '저장 실패');
     updateOutlookConnectionStatus(status);
     accessToken.value = '';
@@ -1591,7 +1637,7 @@ async function startOutlookLogin() {
         mailboxUser: mailboxUser.value.trim()
       })
     });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok || !payload.authorizeUrl) throw new Error(payload.message || 'OAuth 시작 실패');
     const authorize = new URL(payload.authorizeUrl);
     if (authorize.protocol !== 'https:' || authorize.hostname !== 'login.microsoftonline.com') {
@@ -1650,7 +1696,7 @@ async function loadOutlookMessages() {
   updateFetchStatus('Outlook Delta 동기화 후 SQLite 메일을 분석하는 중입니다.');
   try {
     const response = await apiFetch(`/api/outlook/analyze?top=${encodeURIComponent(mailLimit.value)}`);
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.message || 'Outlook fetch failed');
     const sync = payload.sync;
     const syncLabel = sync
@@ -1688,7 +1734,7 @@ async function loadOutlookMessages() {
     await loadMemoryStatus();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Outlook을 가져오지 못했습니다.';
-    updateFetchStatus(message);
+    updateFetchStatus(message + ' · 현재 화면은 마지막으로 로드한 데이터입니다.');
     updateOutlookConnectionStatus({}, { phase: 'error', message });
   } finally {
     loadOutlook.disabled = false;
@@ -1708,27 +1754,17 @@ projectForm.addEventListener('submit', createPrecisionProject);
 configForm.addEventListener('submit', saveConfig);
 loginOutlook.addEventListener('click', startOutlookLogin);
 clearConfig.addEventListener('click', async () => {
-  accessToken.value = '';
-  tenantId.value = '';
-  clientId.value = '';
-  clientSecret.value = '';
-  mailboxUser.value = '';
-  loginTenant.value = 'common';
-  aiProvider.value = 'rules';
-  openaiCodexModel.value = 'luna';
-  xaiGrokModel.value = 'grok-4.6';
-  aiDataPolicyAccepted.checked = false;
-  syncExternalAiConsent();
   try {
-    await apiFetch('/api/outlook/config', { method: 'DELETE' });
+    const response = await apiFetch('/api/outlook/config', { method: 'DELETE' });
+    const payload = await readApiPayload(response);
+    if (!response.ok) throw new Error(payload.message || '설정 초기화 실패');
+    accessToken.value = ''; tenantId.value = ''; clientId.value = ''; clientSecret.value = ''; mailboxUser.value = ''; domainProfile.value = 'generic'; loginTenant.value = 'common'; aiProvider.value = 'rules'; openaiCodexModel.value = 'luna'; xaiGrokModel.value = 'grok-4.6'; aiDataPolicyAccepted.checked = false;
+    syncExternalAiConsent();
     latestOutlookStatus = {};
     updateOutlookConnectionStatus({ connected: false, safety: { mode: 'read-only' } });
     updateFetchStatus('Outlook 저장값을 초기화했습니다.');
   } catch (error) {
-    updateOutlookConnectionStatus({}, {
-      phase: 'error',
-      message: error instanceof Error ? error.message : '설정 초기화 실패',
-    });
+    updateOutlookConnectionStatus({}, { phase: 'error', message: error instanceof Error ? error.message : '설정 초기화 실패' });
   }
 });
 aiProvider.addEventListener('change', syncExternalAiConsent);
@@ -1743,6 +1779,11 @@ document.querySelectorAll('.metric').forEach((button) => {
 });
 mailSearch.addEventListener('input', () => {
   searchQuery = mailSearch.value;
+  if (!searchQuery.trim()) {
+    searchRequestSequence += 1;
+    databaseSearchResults.hidden = true;
+    clear(databaseSearchResults);
+  }
   renderFilteredView();
 });
 
@@ -1753,7 +1794,7 @@ fetchStatusObserver.observe(fetchStatus, { childList: true, characterData: true,
 updateFetchStatus(fetchStatus.textContent);
 
 syncExternalAiConsent();
-loadStatus();
+loadStatus().finally(() => loadOutlookMessages());
 loadMemoryStatus();
 loadPrecisionOverview();
 loadSmartViews();
@@ -1782,6 +1823,8 @@ loadAssistantPersonality();
 
   function setPanelWidth(index, width) {
     shell.style.setProperty(widthVariables[index], `${Math.round(width)}px`);
+    const resizer = resizers[index] || resizers[index - 1];
+    if (resizer) resizer.setAttribute('aria-valuenow', String(Math.round(width)));
   }
 
   function resizeAdjacentPanels(index, delta, startWidths) {
@@ -1792,6 +1835,8 @@ loadAssistantPersonality();
     );
     setPanelWidth(index, left);
     setPanelWidth(index + 1, total - left);
+    resizers[index].setAttribute('aria-valuemin', String(minimumWidths[index]));
+    resizers[index].setAttribute('aria-valuemax', String(Math.round(total - minimumWidths[index + 1])));
   }
 
   function resetPanelWidths() {
@@ -1801,6 +1846,10 @@ loadAssistantPersonality();
   resizers.forEach((resizer) => {
     const columnIndex = Number.parseInt(resizer.dataset.col || '', 10);
     if (!Number.isInteger(columnIndex) || columnIndex < 0 || columnIndex > 1) return;
+    const widths = measuredWidths();
+    resizer.setAttribute('aria-valuemin', String(minimumWidths[columnIndex]));
+    resizer.setAttribute('aria-valuemax', String(Math.round(widths[columnIndex] + widths[columnIndex + 1] - minimumWidths[columnIndex + 1])));
+    resizer.setAttribute('aria-valuenow', String(Math.round(widths[columnIndex])));
 
     resizer.addEventListener('mousedown', (event) => {
       if (!desktopQuery.matches || event.button !== 0) return;

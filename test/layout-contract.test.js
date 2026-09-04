@@ -21,6 +21,9 @@ test('desktop mail workspace is the first primary section and keeps five grid tr
   assert.equal((html.match(/class="col-resizer"/g) || []).length, 2);
   assert.equal((html.match(/role="separator"/g) || []).length, 2);
   assert.equal((html.match(/aria-orientation="vertical"/g) || []).length, 2);
+  assert.equal((html.match(/aria-valuemin=/g) || []).length, 2);
+  assert.equal((html.match(/aria-valuemax=/g) || []).length, 2);
+  assert.equal((html.match(/aria-valuenow=/g) || []).length, 2);
 
   assert.match(css, /\.mail-shell\s*\{[\s\S]*?grid-template-columns:\s*\n\s*minmax\(240px,[\s\S]*?\) 6px\s*\n\s*minmax\(320px,[\s\S]*?\) 6px\s*\n\s*minmax\(280px,/);
   assert.match(css, /height:\s*clamp\(540px, calc\(100vh - 178px\), 760px\)/);
@@ -28,6 +31,14 @@ test('desktop mail workspace is the first primary section and keeps five grid tr
   assert.doesNotMatch(app, /\.style\.flex\s*=/);
   assert.match(app, /--mail-list-width/);
   assert.match(app, /resizeAdjacentPanels/);
+  assert.match(app, /setAttribute\('aria-valuenow'/);
+});
+
+test('scope labels distinguish loaded, stored, and global precision counts', () => {
+  assert.match(html, /Precision Classification · 저장 전체/);
+  assert.match(html, /저장 메일/);
+  assert.match(app, /현재 로드 \$\{currentMessages\.length\}건 중/);
+  assert.match(app, /저장 전체 정밀 분류/);
 });
 
 test('settings are split, bounded, and secondary sections remain collapsed by default', () => {

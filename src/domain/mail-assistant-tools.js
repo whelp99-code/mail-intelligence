@@ -57,6 +57,36 @@ function currentContent(message = {}) {
   return splitMessageHistory(message.body || message.bodyPreview || '').currentContent;
 }
 
+function validClock(value = '') {
+  const match = String(value).match(/(?:오전|오후)\s*(\d{1,2})(?::(\d{2}))?|\b(\d{1,2}):(\d{2})\s*(am|pm)?\b|\b(\d{1,2})\s*(am|pm)\b/i);
+  if (!match) return true;
+  const hour = Number(match[1] || match[3] || match[6]);
+  const minute = match[2] == null && match[4] == null ? 0 : Number(match[2] || match[4]);
+  const meridiem = /오전|오후|am|pm/i.test(match[0]);
+  return Number.isInteger(hour) && Number.isInteger(minute)
+    && minute >= 0 && minute <= 59
+    && hour >= (meridiem ? 1 : 0) && hour <= (meridiem ? 12 : 23);
+}
+
+function validMeetingCandidate(value = '', source = '', offset = 0) {
+  const text = normalizeSpace(value);
+  const context = String(source).slice(Math.max(0, offset - 48), offset + value.length + 48);
+  if (/https?:\/\/|\b(?:utm_|campaign|newsletter|tracking)\b/i.test(context)) return false;
+  const contextNumericDate = context.match(/\b(\d{4})[./-](\d{1,2})[./-](\d{1,2})\b/);
+  if (contextNumericDate) {
+    const contextDate = new Date(Date.UTC(Number(contextNumericDate[1]), Number(contextNumericDate[2]) - 1, Number(contextNumericDate[3])));
+    if (contextDate.getUTCFullYear() !== Number(contextNumericDate[1]) || contextDate.getUTCMonth() !== Number(contextNumericDate[2]) - 1 || contextDate.getUTCDate() !== Number(contextNumericDate[3])) return false;
+  }
+  const numericDate = text.match(/\b(\d{4})[./-](\d{1,2})[./-](\d{1,2})\b/);
+  const koreanDate = text.match(/\b(\d{1,2})월\s*(\d{1,2})일\b/);
+  const date = numericDate
+    ? new Date(Date.UTC(Number(numericDate[1]), Number(numericDate[2]) - 1, Number(numericDate[3])))
+    : koreanDate ? new Date(Date.UTC(2024, Number(koreanDate[1]) - 1, Number(koreanDate[2]))) : null;
+  if (numericDate && (date.getUTCFullYear() !== Number(numericDate[1]) || date.getUTCMonth() !== Number(numericDate[2]) - 1 || date.getUTCDate() !== Number(numericDate[3]))) return false;
+  if (koreanDate && (date.getUTCMonth() !== Number(koreanDate[1]) - 1 || date.getUTCDate() !== Number(koreanDate[2]))) return false;
+  return validClock(text);
+}
+
 function personalityValue(value, fallback, max = 120) {
   const clean = normalizeSpace(value).slice(0, max);
   return clean || fallback;
@@ -148,7 +178,7 @@ export function extractMeetingCandidate(message = {}, { timeZone = 'Asia/Seoul' 
     let match;
     while ((match = pattern.exec(source))) {
       const text = normalizeSpace(match[0]);
-      if (text && !candidates.includes(text)) candidates.push(text);
+      if (text && validMeetingCandidate(text, source, match.index) && !candidates.includes(text)) candidates.push(text);
       if (candidates.length >= 8) break;
     }
   }

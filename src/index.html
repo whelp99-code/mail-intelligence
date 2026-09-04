@@ -64,11 +64,11 @@
           </div>
           <div id="messageList" class="message-list"></div>
         </aside>
-        <div class="col-resizer" data-col="0" role="separator" aria-label="메일 목록과 상세 너비 조절" aria-orientation="vertical" tabindex="0"></div>
+        <div class="col-resizer" data-col="0" role="separator" aria-label="메일 목록과 상세 너비 조절" aria-orientation="vertical" aria-valuemin="240" aria-valuemax="1000" aria-valuenow="360" tabindex="0"></div>
         <article id="messageDetail" class="detail-panel">
           <div class="empty">메일을 선택하면 요약, 핵심 내용, 다음 액션, 원문 미리보기가 표시됩니다.</div>
         </article>
-        <div class="col-resizer" data-col="1" role="separator" aria-label="메일 상세와 액션 너비 조절" aria-orientation="vertical" tabindex="0"></div>
+        <div class="col-resizer" data-col="1" role="separator" aria-label="메일 상세와 액션 너비 조절" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="1200" aria-valuenow="560" tabindex="0"></div>
         <aside class="action-column">
           <section id="actions" class="panel">
             <div class="panel-head compact">
@@ -97,7 +97,7 @@
       <section id="precisionIntelligence" class="precision-panel" aria-live="polite">
         <div class="precision-head">
           <div>
-            <span class="memory-label">Precision Classification</span>
+            <span class="memory-label">Precision Classification · 저장 전체</span>
             <strong id="precisionStatus">정밀 분류 확인 중</strong>
             <p id="precisionSummary">현재 상태, 다음 행동 주체, 프로젝트, 기한과 근거를 확인합니다.</p>
           </div>
@@ -138,10 +138,10 @@
           <p id="memorySummary">DB 스키마와 동기화 상태를 불러오는 중입니다.</p>
         </div>
         <dl class="memory-metrics">
-          <div><dt>메일</dt><dd id="memoryMessageCount">0</dd></div>
-          <div><dt>폴더</dt><dd id="memoryFolderCount">0</dd></div>
-          <div><dt>작업</dt><dd id="memoryJobCount">0</dd></div>
-          <div><dt>경고</dt><dd id="memoryWarningCount">0</dd></div>
+          <div><dt>저장 메일</dt><dd id="memoryMessageCount">0</dd></div>
+          <div><dt>저장 폴더</dt><dd id="memoryFolderCount">0</dd></div>
+          <div><dt>저장 작업</dt><dd id="memoryJobCount">0</dd></div>
+          <div><dt>저장 경고</dt><dd id="memoryWarningCount">0</dd></div>
         </dl>
         <div class="memory-actions">
           <button id="refreshMemory" type="button">상태 새로고침</button>

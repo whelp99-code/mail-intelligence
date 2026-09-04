@@ -1301,3 +1301,13 @@ textarea {
   .safety-notice span { white-space: normal; }
   .metric { border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+.mail-shell, .mail-shell > *, .message-card, .detail-content, .panel { min-width: 0; }
+.action-column, .action-column .panel, .action-column .stack, .mini-card { max-width: 100%; min-height: 0; overflow-x: hidden; }
+.action-column .panel, .action-column .stack { overflow-y: auto; }
+.message-list, .detail-panel, .action-column .stack { overscroll-behavior: contain; }
+.message-card, .detail-meta, .detail-body, .detail-summary, .detail-next, .memory-search-item { overflow-wrap: anywhere; }
+.message-card[role="button"] { cursor: pointer; }
+:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+
+@media (width <= 640px) { .main { min-width: 0; overflow-x: hidden; } .detail-panel, .mail-list-panel, .panel { max-height: 520px; min-height: 0; } }

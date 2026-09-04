@@ -62,6 +62,23 @@ test('meeting intent returns candidates but never guesses availability or writes
   assert.equal(result.confirmationDraftAllowed, true);
 });
 
+test('meeting candidate rejects invalid, URL, tracking, and newsletter numeric dates', () => {
+  for (const body of [
+    'Teams 미팅은 2026/0/24 오후 3시입니다.',
+    '회의 일정은 2026/9/73 30:18입니다.',
+    '미팅 링크 https://example.test/schedule/2026/09/12?utm_source=newsletter',
+    '뉴스레터 campaign 2026-09-12 일정 안내',
+  ]) {
+    const result = extractMeetingCandidate({ subject: '미팅 안내', body });
+    assert.deepEqual(result.candidateTimes, []);
+  }
+});
+
+test('meeting candidate retains valid calendar dates without treating the year as a clock', () => {
+  const result = extractMeetingCandidate({ subject: '회의 일정', body: '2026-09-12에 회의가 있습니다.' });
+  assert.ok(result.candidateTimes.includes('2026-09-12'));
+});
+
 test('AI personality is local bounded configuration', () => {
   const result = normalizeAssistantPersonality({
     role: '기술 엔지니어',
