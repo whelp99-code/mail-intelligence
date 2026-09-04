@@ -11,7 +11,7 @@ import {
   operationalSummary,
 } from './operational-classification.js';
 
-export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix10';
+export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix11';
 export const EVIDENCE_NORMALIZATION_VERSION = 'exact-source-span-v1';
 
 export const WORK_STATES = Object.freeze([
@@ -481,8 +481,8 @@ export function extractDue(text, referenceValue = new Date()) {
   }
 
   const relativeDays = [
-    { pattern: /오늘|금일/, days: 0 },
-    { pattern: /내일/, days: 1 },
+    { pattern: /오늘|금일|\btoday\b/i, days: 0 },
+    { pattern: /내일|\btomorrow\b/i, days: 1 },
     { pattern: /모레/, days: 2 },
   ];
   for (const item of relativeDays) {
@@ -1315,18 +1315,6 @@ function priorityAndEvidence(message, currentText, clauses, workState, stateEvid
         priorityRule: automatedCompletion ? 'automated-completion-low' : 'operational-completion-low',
       };
     }
-    const subjectUrgency = firstMatching(
-      clausesWithOffsets(String(message.subject || ''), 'subject', String(message.id || '')),
-      EXPLICIT_THREAD_URGENCY_PATTERN,
-    );
-    if (subjectUrgency) {
-      return {
-        priority: 'high',
-        priorityConfidence: 0.9,
-        priorityEvidence: subjectUrgency,
-        priorityRule: 'completed-explicit-thread-urgency',
-      };
-    }
     return { priority: 'normal', priorityConfidence: 0.9, priorityEvidence: stateEvidence || clauses[0] || null, priorityRule: 'completed-business-context' };
   }
   if (workState === 'reference') {
@@ -1359,12 +1347,11 @@ function priorityAndEvidence(message, currentText, clauses, workState, stateEvid
       || (PROMOTIONAL_CONTENT_PATTERN.test(currentText) && !businessRecordDetails)
       || ((message.isDraft || message.isDraftFolder || message.isOutgoing)
         && (!bodyCurrentText || GREETING_ONLY_PATTERN.test(bodyCurrentText)));
-    const importantReference = !lowReference && String(message.importance || '').toLowerCase() === 'high';
     return {
-      priority: lowReference ? 'low' : importantReference ? 'high' : 'normal',
-      priorityConfidence: lowReference ? 0.98 : importantReference ? 0.9 : 0.86,
+      priority: lowReference ? 'low' : 'normal',
+      priorityConfidence: lowReference ? 0.98 : 0.86,
       priorityEvidence: stateEvidence || clauses[0] || null,
-      priorityRule: lowReference ? 'low-value-reference' : importantReference ? 'important-business-reference' : 'business-reference',
+      priorityRule: lowReference ? 'low-value-reference' : 'business-reference',
     };
   }
   const priorityClauses = focusedClauses(clauses, stateEvidence)
@@ -1378,8 +1365,8 @@ function priorityAndEvidence(message, currentText, clauses, workState, stateEvid
   const now = new Date(nowValue);
   const dueAt = due.dueAt ? new Date(due.dueAt) : null;
   const hours = dueAt ? (dueAt.getTime() - now.getTime()) / (60 * 60 * 1000) : null;
-  const dueSoon48 = hours != null && hours >= -12 && hours <= 48;
-  const dueSoon24 = hours != null && hours >= -12 && hours <= 24;
+  const dueSoon48 = hours != null && hours >= 0 && hours <= 48;
+  const dueSoon24 = hours != null && hours >= 0 && hours <= 24;
 
   if (signals.includes('incident_security') && urgentClause) {
     return { priority: 'critical', priorityConfidence: 0.94, priorityEvidence: incidentClause || urgentClause, priorityRule: 'urgent-incident' };

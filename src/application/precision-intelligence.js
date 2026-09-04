@@ -9,6 +9,7 @@ import {
   intelligentSmartViews,
   parseIntelligentQuery,
 } from '../domain/intelligent-search.js';
+import { evaluateSemanticSearchResults } from '../domain/search-semantic-ranker.js';
 
 function mailboxKey(value = '') {
   return String(value || 'me').trim().toLowerCase() || 'me';
@@ -18,6 +19,19 @@ function boundedLimit(value, fallback = 250, max = 1000) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) return fallback;
   return Math.min(parsed, max);
+}
+
+function validatedSearchDecision(decision, results) {
+  const hasResults = Array.isArray(results) && results.length > 0;
+  if (!decision
+    || decision.answerable !== hasResults
+    || decision.abstained !== !hasResults
+    || !['direct_result', 'no_safe_result'].includes(decision.reason)
+    || (hasResults && decision.reason !== 'direct_result')
+    || (!hasResults && decision.reason !== 'no_safe_result')) {
+    throw new Error('Invalid semantic search decision.');
+  }
+  return decision;
 }
 
 export class PrecisionIntelligenceService {
@@ -205,7 +219,11 @@ export class PrecisionIntelligenceService {
     const searchOptions = {
       limit: boundedLimit(limit, 25, 100),
     };
-    let results = this.store.intelligentSearch(mailbox.id, parsedQuery, searchOptions);
+    let evaluated = evaluateSemanticSearchResults(
+      parsedQuery.originalQuery,
+      this.store.intelligentSearch(mailbox.id, parsedQuery, searchOptions),
+    );
+    let results = evaluated.results;
     let effectiveParsedQuery = parsedQuery;
     let fallbackApplied = false;
     if (results.length === 0 && parsedQuery.searchPlan?.fallbackPolicy?.allowed) {
@@ -213,14 +231,20 @@ export class PrecisionIntelligenceService {
         ...parsedQuery,
         searchMode: 'coverage',
       };
-      results = this.store.intelligentSearch(mailbox.id, effectiveParsedQuery, searchOptions);
+      evaluated = evaluateSemanticSearchResults(
+        parsedQuery.originalQuery,
+        this.store.intelligentSearch(mailbox.id, effectiveParsedQuery, searchOptions),
+      );
+      results = evaluated.results;
       fallbackApplied = true;
     }
+    const decision = validatedSearchDecision(evaluated.decision, results);
     return {
       parsedQuery,
       fallbackApplied,
       effectiveResidualOperator: effectiveParsedQuery.searchMode === 'coverage' ? 'COVERAGE' : effectiveParsedQuery.residualOperator,
       softTokenCount: parsedQuery.searchPlan?.softTokens?.length || 0,
+      ...decision,
       results: results.map((result) => ({
         ...result,
         matchedBecause: explainIntelligentMatch(result, effectiveParsedQuery),

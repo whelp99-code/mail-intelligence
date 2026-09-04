@@ -148,7 +148,7 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(health.storage.schemaVersion, 4);
   assert.equal(health.safety.mode, 'read-only');
   assert.equal(health.graphConsent.includes('Mail.Send'), false);
-  assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix10');
+  assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix11');
   assert.equal(health.operationalClassificationVersion, 'operational-classification-v1.2.2');
   assert.equal(health.mailAssistantToolsVersion, 'mail-assistant-tools-v1.2.2');
   assert.equal(health.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
@@ -278,6 +278,9 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(result.body.results[0].message.id, 'action-api');
   assert.equal(result.body.fallbackApplied, false);
   assert.equal(result.body.effectiveResidualOperator, 'AND');
+  assert.equal(result.body.answerable, true);
+  assert.equal(result.body.abstained, false);
+  assert.equal(result.body.reason, 'direct_result');
   assert.ok(result.body.results[0].matchedBecause.length >= 2);
   assert.ok(result.body.results[0].matchedBecause.includes('메일 근거 검색: 견적'));
 
@@ -287,6 +290,13 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(result.body.effectiveResidualOperator, 'COVERAGE');
   assert.equal(result.body.results[0].message.id, 'action-api');
   assert.ok(result.body.results[0].matchedBecause.includes(`메일 근거 검색: ${result.body.parsedQuery.residualText}`));
+
+  result = await api(baseUrl, `/api/intelligence/search?q=${encodeURIComponent('isolated absent evidence')}`, { cookie });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body.results, []);
+  assert.equal(result.body.answerable, false);
+  assert.equal(result.body.abstained, true);
+  assert.equal(result.body.reason, 'no_safe_result');
 
   result = await api(baseUrl, '/api/intelligence/correct', {
     method: 'POST',

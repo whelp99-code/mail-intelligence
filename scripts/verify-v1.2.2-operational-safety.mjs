@@ -8,11 +8,14 @@ import { deriveOperationalClassification } from '../src/domain/operational-class
 import { classifyMessage, PRECISION_CLASSIFICATION_VERSION } from '../src/domain/precision-classifier.js';
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { INTELLIGENT_SEARCH_VERSION } from '../src/domain/intelligent-search.js';
+import { BLIND_ACCEPTANCE_RUBRIC_VERSION, CLASSIFICATION_POLICY_VERSION } from '../src/version.js';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(packageJson.version, '1.2.2');
-assert.equal(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix10');
-assert.equal(INTELLIGENT_SEARCH_VERSION, 'intelligent-search-v1.2.2');
+assert.equal(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix11');
+assert.equal(INTELLIGENT_SEARCH_VERSION, 'intelligent-search-v1.2.2-fix11');
+assert.equal(CLASSIFICATION_POLICY_VERSION, 'classification-policy-v1.2.2-o01-o06');
+assert.equal(BLIND_ACCEPTANCE_RUBRIC_VERSION, 'blind-acceptance-rubric-v2');
 
 function message(id, subject, body, overrides = {}) {
   return normalizeGraphMessage({
@@ -116,6 +119,8 @@ console.log(JSON.stringify({
   packageVersion: packageJson.version,
   classifierVersion: PRECISION_CLASSIFICATION_VERSION,
   searchVersion: INTELLIGENT_SEARCH_VERSION,
+  classificationPolicyVersion: CLASSIFICATION_POLICY_VERSION,
+  blindAcceptanceRubricVersion: BLIND_ACCEPTANCE_RUBRIC_VERSION,
   lanes: {
     directAction: directAction.operational.lane,
     externalWaiting: externalWaiting.operational.lane,

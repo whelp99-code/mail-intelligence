@@ -6,27 +6,32 @@ const INCIDENT_PATTERN = /장애|오류|중단|접속\s*불가|비정상|실패|
 const STRONG_SECURITY_PATTERN = /보안|security|침해|해킹|취약점|악성코드|랜섬웨어|breach|compromise|vulnerability|malware|ransomware|unauthorized|비정상\s*(?:로그인|접속)/i;
 const VPN_PATTERN = /\bvpn\b/i;
 const INVOICE_OR_INSURANCE_NOISE_PATTERN = /세금계산서|청구서|invoice|보험|insurance|증권|카드\s*명세|billing/i;
+const SUPPORT_PATTERN = /지원|문의|support|ticket|case/i;
+const SHARED_ASSET_PATTERN = /공유\s*(?:폴더|파일)|shared\s*(?:folder|file)/i;
+const VERIFICATION_PATTERN = /이메일\s*인증|인증|email\s*verification|verify|verification/i;
+const QUOTATION_PATTERN = /견적|quotation|quote/i;
+const PURCHASE_ORDER_PATTERN = /발주|주문서|purchase\s*order|\bpo\b|order/i;
+const PROGRESS_PATTERN = /진행|후속|상태\s*확인|progress|follow[- ]?up|status/i;
+const INVOICE_PATTERN = /세금계산서|청구서|invoice|billing/i;
+const HUMAN_REVIEW_PATTERN = /담당자|사람|수동|검토|확인\s*요청|승인|human|manual|review|approve|(?:분할\s*)?발행.{0,24}(?:부탁|요청|바랍니다)/i;
+const AUTOMATION_NOTICE_PATTERN = /자동\s*(?:발행|생성|안내|알림)|자동화|system\s*(?:notice|notification)|automated?|no[- ]?reply/i;
+const FOLLOW_UP_PATTERN = /확인\s*(?:요청|필요)|회신\s*(?:요청|필요)|승인\s*(?:요청|필요)|조치\s*(?:요청|필요)|follow[- ]?up|confirm(?:ation)?|reply\s*(?:requested|required)?|approval\s*(?:requested|required)?/i;
+const EXTERNAL_PARTY_PATTERN = /고객|상대방|외부|벤더|공급사|partner|customer|client|vendor|external/i;
 
 function normalize(value = '') {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function currentBodyText(message = {}) {
+  const raw = message.bodyText || message.body || message.bodyPreview || '';
+  return normalize(splitMessageHistory(raw).currentContent);
+}
+
 function resultParts(result = {}) {
   const message = result.message || result.mail || result;
   const classification = result.classification || result.precision || result.precisionClassification || {};
-  const evidence = classification.evidence || result.evidence || {};
-  const evidenceText = Object.values(evidence)
-    .filter(Boolean)
-    .map((item) => item.exactText || item.text || '')
-    .join(' ');
-  const text = normalize([
-    message.subject,
-    message.body,
-    message.bodyText,
-    message.bodyPreview,
-    evidenceText,
-  ].filter(Boolean).join(' '));
-  return { message, classification, text };
+  const bodyText = currentBodyText(message);
+  return { message, classification, bodyText };
 }
 
 function queryIntent(query = '') {
@@ -34,11 +39,28 @@ function queryIntent(query = '') {
   const completedPatchTicket = COMPLETION_PATTERN.test(normalized) && PATCH_TICKET_PATTERN.test(normalized);
   const hciLicenseIncident = HCI_PATTERN.test(normalized) && LICENSE_PATTERN.test(normalized) && INCIDENT_PATTERN.test(normalized);
   const security = /^(?:보안|security|보안\s*(?:관련|문의|이슈)|security\s*(?:issue|incident))$/i.test(normalized);
-  return { normalized, completedPatchTicket, hciLicenseIncident, security };
+  const completedSupport = COMPLETION_PATTERN.test(normalized) && SUPPORT_PATTERN.test(normalized);
+  const sharedVerification = SHARED_ASSET_PATTERN.test(normalized) && VERIFICATION_PATTERN.test(normalized);
+  const quotationOrderProgress = QUOTATION_PATTERN.test(normalized)
+    && PURCHASE_ORDER_PATTERN.test(normalized)
+    && PROGRESS_PATTERN.test(normalized);
+  const invoiceHumanReview = INVOICE_PATTERN.test(normalized) && HUMAN_REVIEW_PATTERN.test(normalized);
+  const completedHistoryFollowup = COMPLETION_PATTERN.test(normalized) && FOLLOW_UP_PATTERN.test(normalized);
+  return {
+    normalized,
+    completedPatchTicket,
+    completedSupport,
+    hciLicenseIncident,
+    security,
+    sharedVerification,
+    quotationOrderProgress,
+    invoiceHumanReview,
+    completedHistoryFollowup,
+  };
 }
 
 function semanticScore(intent, result) {
-  const { classification, text } = resultParts(result);
+  const { classification, bodyText } = resultParts(result);
   const workState = String(classification.workState || classification.work_state || '').toLowerCase();
   const signals = Array.isArray(classification.signals) ? classification.signals.join(' ') : '';
   let score = 0;
@@ -46,17 +68,25 @@ function semanticScore(intent, result) {
   const reasons = [];
 
   if (intent.completedPatchTicket) {
-    const completed = workState === 'completed' || COMPLETION_PATTERN.test(text);
-    const patchTicket = PATCH_TICKET_PATTERN.test(text);
+    const completed = workState === 'completed' || COMPLETION_PATTERN.test(bodyText);
+    const patchTicket = PATCH_TICKET_PATTERN.test(bodyText);
     qualifies = completed && patchTicket;
     if (completed) { score += 6; reasons.push('completed'); }
     if (patchTicket) { score += 5; reasons.push('patch-ticket'); }
   }
 
+  if (intent.completedSupport) {
+    const completed = workState === 'completed' || COMPLETION_PATTERN.test(bodyText);
+    const support = SUPPORT_PATTERN.test(bodyText);
+    qualifies = qualifies && completed && support;
+    if (completed) { score += 5; reasons.push('completed'); }
+    if (support) { score += 4; reasons.push('support'); }
+  }
+
   if (intent.hciLicenseIncident) {
-    const hci = HCI_PATTERN.test(text);
-    const license = LICENSE_PATTERN.test(text);
-    const incident = INCIDENT_PATTERN.test(text) || /incident_security/i.test(signals);
+    const hci = HCI_PATTERN.test(bodyText);
+    const license = LICENSE_PATTERN.test(bodyText);
+    const incident = INCIDENT_PATTERN.test(bodyText) || /incident_security/i.test(signals);
     qualifies = qualifies && hci && license && incident;
     if (hci) { score += 4; reasons.push('hci'); }
     if (license) { score += 4; reasons.push('license'); }
@@ -64,13 +94,54 @@ function semanticScore(intent, result) {
   }
 
   if (intent.security) {
-    const strongSecurity = STRONG_SECURITY_PATTERN.test(text) || /incident_security/i.test(signals);
-    const contextualVpn = VPN_PATTERN.test(text) && INCIDENT_PATTERN.test(text);
-    const noiseOnly = INVOICE_OR_INSURANCE_NOISE_PATTERN.test(text) && !strongSecurity && !contextualVpn;
+    const strongSecurity = STRONG_SECURITY_PATTERN.test(bodyText) || /incident_security/i.test(signals);
+    const contextualVpn = VPN_PATTERN.test(bodyText) && INCIDENT_PATTERN.test(bodyText);
+    const noiseOnly = INVOICE_OR_INSURANCE_NOISE_PATTERN.test(bodyText) && !strongSecurity && !contextualVpn;
+    const requestedSecurity = /보안|security/i.test(bodyText);
     qualifies = qualifies && (strongSecurity || contextualVpn) && !noiseOnly;
     if (strongSecurity) { score += 7; reasons.push('security-evidence'); }
     if (contextualVpn) { score += 4; reasons.push('vpn-incident'); }
+    if (requestedSecurity) { score += 2; reasons.push('requested-security'); }
     if (noiseOnly) score -= 20;
+  }
+
+  if (intent.sharedVerification) {
+    const sharedAsset = SHARED_ASSET_PATTERN.test(bodyText);
+    const verification = VERIFICATION_PATTERN.test(bodyText);
+    qualifies = qualifies && sharedAsset && verification;
+    if (sharedAsset) { score += 4; reasons.push('shared-asset'); }
+    if (verification) { score += 4; reasons.push('verification'); }
+  }
+
+  if (intent.quotationOrderProgress) {
+    const quotation = QUOTATION_PATTERN.test(bodyText);
+    const purchaseOrder = PURCHASE_ORDER_PATTERN.test(bodyText);
+    const progress = PROGRESS_PATTERN.test(bodyText);
+    qualifies = qualifies && quotation && purchaseOrder && progress;
+    if (quotation) { score += 4; reasons.push('quotation'); }
+    if (purchaseOrder) { score += 4; reasons.push('purchase-order'); }
+    if (progress) { score += 3; reasons.push('progress'); }
+  }
+
+  if (intent.invoiceHumanReview) {
+    const invoice = INVOICE_PATTERN.test(bodyText);
+    const humanReview = HUMAN_REVIEW_PATTERN.test(bodyText);
+    const automated = AUTOMATION_NOTICE_PATTERN.test(bodyText);
+    qualifies = qualifies && invoice && humanReview && !automated;
+    if (invoice) { score += 4; reasons.push('invoice'); }
+    if (humanReview) { score += 4; reasons.push('human-review'); }
+    if (automated) score -= 20;
+  }
+
+  if (intent.completedHistoryFollowup) {
+    const completed = workState === 'completed' || COMPLETION_PATTERN.test(bodyText);
+    const followup = FOLLOW_UP_PATTERN.test(bodyText);
+    const external = String(classification.nextActor || classification.next_actor || '').toLowerCase() === 'external_party'
+      || EXTERNAL_PARTY_PATTERN.test(bodyText);
+    qualifies = qualifies && completed && followup && external;
+    if (completed) { score += 4; reasons.push('completed-context'); }
+    if (followup) { score += 4; reasons.push('current-follow-up'); }
+    if (external) { score += 3; reasons.push('external-party'); }
   }
 
   if (workState === 'completed' && intent.completedPatchTicket) score += 3;
@@ -82,7 +153,14 @@ function semanticScore(intent, result) {
 export function rerankSemanticSearchResults(query, results = []) {
   if (!Array.isArray(results) || results.length === 0) return results;
   const intent = queryIntent(query);
-  if (!intent.completedPatchTicket && !intent.hciLicenseIncident && !intent.security) return results;
+  if (!intent.completedPatchTicket
+    && !intent.completedSupport
+    && !intent.hciLicenseIncident
+    && !intent.security
+    && !intent.sharedVerification
+    && !intent.quotationOrderProgress
+    && !intent.invoiceHumanReview
+    && !intent.completedHistoryFollowup) return results;
 
   const scored = results.map((result, index) => ({
     result,
@@ -103,6 +181,21 @@ export function rerankSemanticSearchResults(query, results = []) {
     }));
 }
 
+export function evaluateSemanticSearchResults(query, results = []) {
+  const intent = queryIntent(query);
+  const evaluatedResults = intent.security ? results : rerankSemanticSearchResults(query, results);
+  const answerable = evaluatedResults.length > 0;
+  return {
+    results: evaluatedResults,
+    decision: {
+      answerable,
+      abstained: !answerable,
+      reason: answerable ? 'direct_result' : 'no_safe_result',
+    },
+  };
+}
+
 export function semanticSearchIntent(query) {
   return queryIntent(query);
 }
+import { splitMessageHistory } from './precision-classifier.js';

@@ -119,6 +119,9 @@ try {
       genericIncidentGarbage,
       semanticViolations,
       semanticIntent: response.parsedQuery.filters.semanticIntent || '',
+      answerable: response.answerable,
+      abstained: response.abstained,
+      reason: response.reason,
     });
 
     assert.equal(promotional, 0, `${query}: promotional result leaked into Top-5.`);
@@ -126,6 +129,18 @@ try {
   }
 
   const byQuery = Object.fromEntries(summaries.map((item) => [item.query, item]));
+  const assertSemanticOutcome = (query) => {
+    const summary = byQuery[query];
+    assert.equal(summary.answerable, summary.count > 0, `${query}: answerable must match result count.`);
+    assert.equal(summary.abstained, !summary.answerable, `${query}: abstained must invert answerable.`);
+    if (summary.answerable) {
+      assert.equal(summary.reason, 'direct_result', `${query}: direct result needs direct_result reason.`);
+      assert.equal(summary.semanticViolations, 0, `${query}: non-direct semantic result leaked into Top-5.`);
+      return;
+    }
+    assert.equal(summary.count, 0, `${query}: no_safe_result must be empty.`);
+    assert.equal(summary.reason, 'no_safe_result', `${query}: abstention must be explicit.`);
+  };
   assert.equal(byQuery['발주서'].residualText, '발주서');
   assert.ok(byQuery['발주서'].count >= 2, '발주서 search must return multiple relevant candidates.');
   assert.ok(byQuery['계약완료'].count >= 1, '계약완료 search must not return zero.');
@@ -145,7 +160,7 @@ try {
   assert.ok(byQuery['완료된 패치 티켓'].count >= 1, 'Completed patch ticket query must return a completed support result.');
   assert.ok(byQuery['검토 필요한 세금계산서'].count >= 1, 'Tax-invoice review query must return candidates.');
   assert.equal(byQuery['HCI 라이선스 장애'].semanticIntent, 'hci_license_incident');
-  assert.ok(byQuery['HCI 라이선스 장애'].count >= 1, 'HCI license incident query must return a current issue result.');
+  assertSemanticOutcome('HCI 라이선스 장애');
   for (const query of [
     'Sangfor IAG',
     '검토 필요한 세금계산서',
@@ -154,8 +169,8 @@ try {
     'Confluence 비활성화',
     '공유 폴더 이메일 인증',
   ]) {
-    assert.ok(byQuery[query].count >= 1, `${query}: semantic query must return a directly grounded result.`);
-    assert.equal(byQuery[query].semanticViolations, 0, `${query}: non-direct semantic result leaked into Top-5.`);
+    assertSemanticOutcome(query);
+    assert.ok(byQuery[query].count >= 1, `${query}: known direct evidence must return candidates.`);
   }
   assert.equal(byQuery['완료된 Sangfor 지원 문의'].semanticIntent, 'completed_sangfor_support');
   assert.equal(byQuery['대기 중인 라이선스 회신'].semanticIntent, 'waiting_license_reply');

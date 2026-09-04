@@ -1008,8 +1008,8 @@ test('completed outbound delivery preserves explicit urgent thread priority', ()
   });
   assert.equal(result.workState, 'completed');
   assert.equal(result.nextActor, 'none');
-  assert.equal(result.priority, 'high');
-  assert.equal(result.evidence.priority.rule, 'completed-explicit-thread-urgency');
+  assert.equal(result.priority, 'normal');
+  assert.equal(result.evidence.priority.rule, 'completed-business-context');
 });
 
 test('access information delivery with conditional contact text remains a business reference', () => {
@@ -1094,4 +1094,39 @@ test('구매 포털의 검수 승인 완료 알림은 저가치 reference가 아
   assert.equal(result.workState, 'completed');
   assert.equal(result.nextActor, 'none');
   assert.equal(result.priority, 'normal');
+});
+
+
+test('cycle03 current-content relationship controls exclude quoted requests and preserve inbound ownership', () => {
+  const quotedOnly = classifyMessage(message({
+    subject: 'Re: Commercial document',
+    isOutgoing: true,
+    hasAttachments: true,
+    body: ['The document is attached.', '', '-----Original Message-----', 'Please confirm approval.'].join('\n'),
+  }), { now: new Date(receivedAt) });
+  assert.equal(quotedOnly.workState, 'completed');
+  assert.equal(quotedOnly.nextActor, 'none');
+  assert.equal(quotedOnly.priority, 'normal');
+
+  const inbound = classifyMessage(message({
+    body: 'Please update the contract document.',
+  }), { now: new Date(receivedAt) });
+  assert.equal(inbound.workState, 'action_required');
+  assert.equal(inbound.nextActor, 'me');
+  assert.equal(inbound.priority, 'normal');
+});
+
+test('cycle03 priority accepts current tomorrow evidence but rejects importance-only evidence', () => {
+  const tomorrow = classifyMessage(message({
+    body: 'Please update the contract document by tomorrow.',
+  }), { now: new Date(receivedAt) });
+  assert.equal(tomorrow.priority, 'high');
+
+  const importanceOnly = classifyMessage(message({
+    subject: 'Business reference',
+    body: 'FYI: information is provided for reference.',
+    importance: 'high',
+  }), { now: new Date(receivedAt) });
+  assert.equal(importanceOnly.workState, 'reference');
+  assert.equal(importanceOnly.priority, 'normal');
 });

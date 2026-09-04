@@ -100,7 +100,7 @@ test('자동 생성 문서의 조사와 보조형 control words는 coverage soft
   assert.equal(parsed.searchPlan.fallbackPolicy.failClosed, true);
 
   const core = parseIntelligentQuery('자동 생성 문서 세금계산서를 확인하는', { now });
-  assert.deepEqual(core.searchPlan.softTokens, ['세금계산서를']);
+  assert.deepEqual(core.searchPlan.softTokens, ['세금계산서']);
   assert.equal(core.searchPlan.fallbackPolicy.allowed, false);
 
   const standalone = parseIntelligentQuery('하면 하는 해서 되는 되어 될 세금계산서', { now });
@@ -114,6 +114,16 @@ test('semantic intent consumes only recognized control spans and keeps entity qu
   assert.match(parsed.residualText, /Sangfor/);
   assert.deepEqual(parsed.filters.nextActors, ['external_party']);
   assert.ok(parsed.searchPlan.softTokens.includes('Sangfor'));
+});
+
+test('bounded particle equivalence preserves business content without arbitrary verb stemming', () => {
+  const commercial = parseIntelligentQuery('세금계산서를 발주서와 확인', { now });
+  assert.ok(commercial.searchPlan.softTokens.includes('세금계산서'));
+  assert.ok(commercial.searchPlan.softTokens.includes('발주서'));
+
+  const nonControlVerb = parseIntelligentQuery('협의하는 세금계산서', { now });
+  assert.ok(nonControlVerb.searchPlan.softTokens.includes('협의하는'));
+  assert.ok(nonControlVerb.searchPlan.softTokens.includes('세금계산서'));
 });
 
 test('검토 필요 질의는 review_required 필터를 만든다', () => {
@@ -205,7 +215,7 @@ test('incident lexical query preserves the requested kind for strict ranking', (
 
 test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다', () => {
   const completedSupport = parseIntelligentQuery('완료된 패치 티켓', { now });
-  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2');
+  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix11');
   assert.equal(completedSupport.filters.semanticIntent, 'completed_support_ticket');
   assert.deepEqual(completedSupport.filters.workStates, ['completed']);
   assert.equal(completedSupport.residualText, '');
@@ -218,7 +228,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
   const completedSangfor = parseIntelligentQuery('완료된 Sangfor 지원 문의', { now });
-  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2');
+  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix11');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
   assert.equal(completedSangfor.residualText, 'Sangfor');

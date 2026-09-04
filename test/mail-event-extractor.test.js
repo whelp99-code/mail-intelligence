@@ -315,3 +315,29 @@ test('incoming support request is owner action unless an external support recipi
   assert.equal(waiting.primaryEvent.decision.workState, 'waiting');
   assert.equal(waiting.primaryEvent.decision.nextActor, 'external_party');
 });
+
+
+test('current delivery/request clause relationships preserve completed and waiting boundaries', () => {
+  const pureDelivery = decision({
+    subject: 'Commercial document',
+    body: 'The document is attached.',
+    message: { isOutgoing: true, hasAttachments: true },
+  });
+  assert.equal(pureDelivery.workState, 'completed');
+  assert.equal(pureDelivery.nextActorHint, 'none');
+
+  for (const body of [
+    'The document is attached. Please confirm approval.',
+    'The document is attached.\nPlease confirm approval.',
+    '<p>The document is attached.</p><p>Please confirm approval.</p>',
+  ]) {
+    const result = decision({
+      subject: 'Commercial document',
+      body,
+      message: { isOutgoing: true, hasAttachments: true },
+    });
+    assert.equal(result.workState, 'waiting');
+    assert.equal(result.nextActorHint, 'external_party');
+    assert.equal(result.priorityHint, 'normal');
+  }
+});

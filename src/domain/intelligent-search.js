@@ -5,7 +5,7 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix11';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
 
@@ -64,8 +64,9 @@ const DUE_PHRASES = [
 ];
 
 const WEAK_SEARCH_TOKENS = new Set(['업무', '관련', '필요', '메일', '문서', '확인', '검토', '자동', '생성', '하면', '하는', '해서', '되는', '되어', '될']);
-const CONTROL_PARTICLE_SUFFIXES = ['만', '도', '을', '를', '이', '가', '은', '는'];
+const CONTROL_PARTICLE_SUFFIXES = ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로'];
 const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되어', '될'];
+const CONTROL_AUXILIARY_BASES = new Set(['확인', '생성', '처리']);
 const DEADLINE_CUE_PATTERN = /(?:까지|by\b|제출|납기|마감|회신)/i;
 const ABSOLUTE_DATE_PATTERN = /\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b|(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일|\b(\d{1,2})[-/.](\d{1,2})\b|(\d{1,2})월\s*(\d{1,2})일/;
 const SECURITY_TERM_PATTERN = /보안|security/i;
@@ -82,28 +83,21 @@ function unique(values) {
 }
 
 function normalizeControlToken(value = '') {
-  const original = String(value);
-  let token = original;
-  let changed = true;
-  while (changed && token.length > 1) {
-    changed = false;
-    for (const suffix of CONTROL_AUXILIARY_SUFFIXES) {
-      if (token.toLowerCase().endsWith(suffix) && token.length > suffix.length) {
-        token = token.slice(0, -suffix.length);
-        changed = true;
-        break;
-      }
-    }
-    if (changed) continue;
-    for (const suffix of CONTROL_PARTICLE_SUFFIXES) {
-      if (token.toLowerCase().endsWith(suffix) && token.length > suffix.length) {
-        token = token.slice(0, -suffix.length);
-        changed = true;
-        break;
-      }
-    }
+  let token = String(value).normalize('NFKC');
+  for (const suffix of CONTROL_AUXILIARY_SUFFIXES) {
+    if (!token.toLowerCase().endsWith(suffix) || token.length <= suffix.length) continue;
+    const base = token.slice(0, -suffix.length);
+    if (CONTROL_AUXILIARY_BASES.has(base.toLowerCase())) token = base;
+    break;
   }
-  return WEAK_SEARCH_TOKENS.has(token.toLowerCase()) ? token : original;
+  while (token.length > 1) {
+    const suffix = CONTROL_PARTICLE_SUFFIXES.find((item) => token.toLowerCase().endsWith(item));
+    if (!suffix || token.length <= suffix.length) break;
+    const base = token.slice(0, -suffix.length);
+    if (!WEAK_SEARCH_TOKENS.has(base.toLowerCase()) && !PRESERVED_DOMAIN_TOKEN_PATTERN.test(base)) break;
+    token = base;
+  }
+  return token;
 }
 
 function consumePattern(text, pattern) {

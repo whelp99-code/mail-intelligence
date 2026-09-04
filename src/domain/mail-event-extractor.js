@@ -141,7 +141,7 @@ const BULK_SUBJECT_REQUEST_PATTERN = /(?:요청|request|제출|발행|검수|세
 
 const OUTGOING_PAST_ACTION_PATTERN = /(?:기입|등록|제출|반영|처리|답변|회신|전달|송부|첨부|보내).{0,20}(?:하였습니다|했습니다|드렸습니다|드립니다|완료했습니다)|(?:have\s+)?(?:entered|registered|submitted|updated|answered|sent|attached|provided)\b/i;
 const OUTGOING_DELIVERY_PATTERN = /(?:견적서|제안서|계약서|발주서|자료|파일|연락처|답변|정보|patch|report|quotation|proposal|document).{0,64}(?:전달|송부|첨부|회신|보내|sent|attached|provided)|(?:전달|송부|첨부|회신|보내|sent|attached|provided).{0,64}(?:견적서|제안서|계약서|발주서|자료|파일|연락처|답변|정보|patch|report|quotation|proposal|document)/i;
-const RECIPIENT_RESPONSE_REQUEST_PATTERN = /(?:확인|검토).{0,120}(?:해\s*주시면|후.{0,100}(?:회신|알려|답변)|결과.{0,80}(?:회신|알려))|(?:회신|답변|알려).{0,32}(?:부탁|바랍니다|주세요|주시면)|(?:수용\s*가능\s*여부|추가\s*협의).{0,100}(?:회신|답변)|please\s+(?:confirm|review|reply|respond)|let\s+me\s+know/i;
+const RECIPIENT_RESPONSE_REQUEST_PATTERN = /(?:확인|검토).{0,120}(?:해\s*주시면|후.{0,100}(?:회신|알려|답변)|결과.{0,80}(?:회신|알려))|(?:회신|답변|알려).{0,32}(?:부탁|바랍니다|주세요|주시면|주시기)|(?:수용\s*가능\s*여부|추가\s*협의).{0,100}(?:회신|답변)|(?:승인|결정|수용|의견|조치).{0,48}(?:회신|답변|알려|공유).{0,32}(?:부탁|바랍니다|주세요|주시면|주시기)|(?:please|kindly).{0,24}(?:confirm|review|reply|respond|share|advise).{0,64}(?:approval|acceptance|decision|response|reply)|let\s+me\s+know/i;
 const INFORMATIONAL_COURTESY_REVIEW_PATTERN = /(?:오해|혼선)\s*없이.{0,24}(?:검토|확인)\s*(?:부탁|바랍니다)|for\s+your\s+(?:review|reference)\s+only/i;
 const CONDITIONAL_FUTURE_OFFER_PATTERN = /(?:필요하신|원하시는|추가\s*필요).{0,48}(?:요청|말씀).{0,20}(?:주시면|해\s*주시면).{0,32}(?:전달|보내|공유|준비)\s*(?:드리겠습니다|하겠습니다)|if\s+you\s+need.{0,64}(?:let\s+me\s+know|we\s+can\s+provide)/i;
 const OUTGOING_UNRESOLVED_COMMITMENT_PATTERN = /(?:will|shall|plan\s+to|intend\s+to).{0,48}(?:send|attach|provide|share)|(?:전달|송부|첨부|제공|공유).{0,32}(?:드리겠습니다|하겠습니다|예정)/i;
@@ -166,6 +166,16 @@ function firstClause(clauses, pattern, { bodyOnly = false, excludeBoilerplate = 
 function firstSubjectOrBodyClause(clauses, pattern, options = {}) {
   return firstClause(clauses, pattern, options)
     || firstClause(clauses.filter((clause) => clause.sourceField === 'subject'), pattern, options);
+}
+
+function adjacentCurrentBodyClause(delivery, clauses, pattern) {
+  if (!delivery) return null;
+  const bodyClauses = clauses.filter((clause) => clause.sourceField === 'body');
+  const deliveryIndex = bodyClauses.indexOf(delivery);
+  if (deliveryIndex < 0) return null;
+  return bodyClauses.find((clause, index) => Math.abs(index - deliveryIndex) <= 1
+    && !LEGAL_OR_CONTACT_BOILERPLATE_PATTERN.test(clause.text)
+    && pattern.test(clause.text)) || null;
 }
 
 function combinedEvidence(clauses, combined, combinedPattern, evidencePattern, options = {}) {
@@ -899,10 +909,11 @@ export function extractMailEventFrame({
       bodyOnly: true,
       excludeBoilerplate: true,
     });
-    const recipientResponse = firstClause(clauses, RECIPIENT_RESPONSE_REQUEST_PATTERN, {
-      bodyOnly: true,
-      excludeBoilerplate: true,
-    });
+    const recipientResponse = adjacentCurrentBodyClause(
+      delivery,
+      clauses,
+      RECIPIENT_RESPONSE_REQUEST_PATTERN,
+    );
     const courtesyEvidence = firstClause(clauses, INFORMATIONAL_COURTESY_REVIEW_PATTERN, {
       bodyOnly: true,
       excludeBoilerplate: true,
