@@ -890,6 +890,7 @@ async function runAssistantTool(action, messageId) {
       }
     }
   } catch (error) {
+    if (requestSequence !== assistantRequestSequence || messageId !== selectedMessageId) return;
     renderAssistantOutput(error instanceof Error ? error.message : '메일 도우미 실행 실패');
   }
 }
@@ -1534,9 +1535,10 @@ async function searchPersistentMemory() {
     renderDatabaseSearchResults(payload.results || [], query, payload.parsedQuery);
     fetchStatus.textContent = `정밀 분류 + SQLite 근거 탐색 완료 · ${payload.results?.length || 0}건`;
   } catch (error) {
+    if (requestSequence !== searchRequestSequence) return;
     fetchStatus.textContent = error instanceof Error ? error.message : '지능형 탐색 실패';
   } finally {
-    searchDatabase.disabled = false;
+    if (requestSequence === searchRequestSequence) searchDatabase.disabled = false;
   }
 }
 
