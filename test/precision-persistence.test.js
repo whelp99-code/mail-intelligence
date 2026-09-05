@@ -350,7 +350,7 @@ test('qa-fix7 semantic search finds completed patch tickets and HCI license inci
     graphMessage({
       id: 'patch-ticket-completed',
       subject: 'RE: Request to kernel patch file [Ticket#20260001]',
-      body: 'The issue has been resolved, so we will proceed to close this ticket.',
+      body: 'The kernel patch issue has been resolved, so we will proceed to close this ticket.',
       from: 'support@example.com',
     }),
     graphMessage({

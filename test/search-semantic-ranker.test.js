@@ -27,7 +27,7 @@ test('completed patch-ticket query keeps resolved patch tickets and drops unrela
     result({
       id: 'resolved-patch',
       subject: 'Kernel patch issue [Ticket#123]',
-      body: 'The issue has been resolved and the ticket is closed.',
+      body: 'The kernel patch issue has been resolved and the ticket is closed.',
       workState: 'completed',
     }),
     result({
@@ -237,5 +237,69 @@ test('ordinary queries preserve the storage ranking unchanged', () => {
     quotationOrderProgress: false,
     invoiceHumanReview: false,
     completedHistoryFollowup: false,
+  });
+});
+test('reply-only semantic keywords cannot make a generic current update answerable', () => {
+  const evaluated = evaluateSemanticSearchResults('완료된 패치 티켓', [
+    result({
+      id: 'reply-subject-only-patch',
+      subject: 'RE: Patch ticket',
+      body: 'The support case has been resolved.',
+      workState: 'completed',
+    }),
+  ]);
+  assert.deepEqual(evaluated, {
+    results: [],
+    decision: { answerable: false, abstained: true, reason: 'no_safe_result' },
+  });
+});
+
+test('semantic admission ignores non-current evidence provenance and reply-subject variants', () => {
+  for (const sourceField of ['subject', 'user_correction']) {
+    const evaluated = evaluateSemanticSearchResults('완료된 패치 티켓', [{
+      message: {
+        id: `evidence-${sourceField}`,
+        subject: '[EXTERNAL] Re : Patch ticket',
+        body: 'The support case has been resolved.',
+      },
+      classification: {
+        workState: 'completed',
+        evidence: {
+          workState: {
+            sourceField,
+            exactText: 'Patch ticket',
+          },
+        },
+      },
+    }]);
+    assert.deepEqual(evaluated, {
+      results: [],
+      decision: { answerable: false, abstained: true, reason: 'no_safe_result' },
+    });
+  }
+});
+
+test('semantic admission requires all requested topic dimensions in current body content', () => {
+  const splitCandidates = [
+    {
+      message: {
+        id: 'hci-subject-only',
+        subject: 'FW : HCI license incident',
+        body: 'The license failed and service is unavailable.',
+      },
+      classification: { workState: 'action_required', evidence: {} },
+    },
+    {
+      message: {
+        id: 'license-subject-only',
+        subject: 'HCI license notice',
+        body: 'An incident caused the virtual machines to become unavailable.',
+      },
+      classification: { workState: 'action_required', evidence: {} },
+    },
+  ];
+  assert.deepEqual(evaluateSemanticSearchResults('HCI 라이선스 장애', splitCandidates), {
+    results: [],
+    decision: { answerable: false, abstained: true, reason: 'no_safe_result' },
   });
 });

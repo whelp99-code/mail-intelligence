@@ -10,6 +10,7 @@ import { PRECISION_CLASSIFICATION_VERSION, splitMessageHistory } from '../src/do
 const INCIDENT_SECURITY_PATTERN = /장애|오류|중단|접속\s*불가|비정상\s*(?:로그인|접속)|보안\s*(?:경고|알림|이슈|사고)|침해|해킹|취약점|악성코드|랜섬웨어|\bhci\b.{0,48}(?:라이선스|license).{0,48}(?:오류|실패|장애)|\bvpn\b.{0,48}(?:오류|실패|접속\s*불가)|security\s+(?:alert|incident|issue)|incident|outage|breach|compromise|vulnerability|malware|ransomware/i;
 const NOISE_ONLY_PATTERN = /세금계산서|청구서|invoice|보험|insurance|증권|광고|newsletter|webinar/i;
 const DEFAULT_COUNT = 5;
+const LABEL_ADMISSIBILITY_CONTRACT_VERSION = 'current-message-evidence-v1';
 const DEFAULT_SEED = 'mail-intelligence-qafix7-incident-supplement-v1';
 const QA_FIX_TAG = PRECISION_CLASSIFICATION_VERSION.match(/qa-fix\d+$/)?.[0] || 'qa-candidate';
 
@@ -130,6 +131,7 @@ try {
 
   const payload = {
     version: 'independent-ground-truth-draft-v1',
+    labelAdmissibilityContractVersion: LABEL_ADMISSIBILITY_CONTRACT_VERSION,
     benchmarkId: `${QA_FIX_TAG}-incident-security-${createHash('sha256').update(seed).digest('hex').slice(0, 12)}`,
     createdAt: new Date().toISOString(),
     classifierVersion: PRECISION_CLASSIFICATION_VERSION,
@@ -160,6 +162,8 @@ try {
       reference: null,
       important: null,
       reviewerNote: '',
+      reviewerDisagreement: null,
+      currentEvidence: null,
     })),
   };
 

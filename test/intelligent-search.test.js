@@ -215,7 +215,7 @@ test('incident lexical query preserves the requested kind for strict ranking', (
 
 test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다', () => {
   const completedSupport = parseIntelligentQuery('완료된 패치 티켓', { now });
-  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix11');
+  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix12');
   assert.equal(completedSupport.filters.semanticIntent, 'completed_support_ticket');
   assert.deepEqual(completedSupport.filters.workStates, ['completed']);
   assert.equal(completedSupport.residualText, '');
@@ -228,7 +228,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
   const completedSangfor = parseIntelligentQuery('완료된 Sangfor 지원 문의', { now });
-  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix11');
+  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix12');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
   assert.equal(completedSangfor.residualText, 'Sangfor');

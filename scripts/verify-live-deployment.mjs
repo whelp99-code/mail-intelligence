@@ -24,7 +24,7 @@ assert.equal(health.response.status, 200);
 assert.equal(health.body.ok, true);
 assert.equal(health.body.version, '1.2.2');
 assert.equal(health.body.precisionClassificationVersion, 'precision-classification-v1.2.2-fix11');
-assert.equal(health.body.intelligentSearchVersion, 'intelligent-search-v1.2.2-fix11');
+assert.equal(health.body.intelligentSearchVersion, 'intelligent-search-v1.2.2-fix12');
 assert.equal(health.body.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
 assert.equal(health.body.listenHost, '127.0.0.1');
 assert.equal(health.body.safety?.mode, 'read-only');

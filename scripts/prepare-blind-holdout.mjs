@@ -17,6 +17,7 @@ const INCIDENT_PATTERN = /장애|오류|중단|접속\s*불가|보안|security|i
 const BUSINESS_DOCUMENT_PATTERN = /견적|발주|계약|제안서|세금계산서|검수|라이선스|license|quotation|purchase\s*order|contract|invoice/i;
 const THREAD_SUBJECT_PATTERN = /^(?:(?:\[(?:re|fw|fwd)\])\s*)*(?:re|fw|fwd|전달)\s*:/i;
 const DEFAULT_COUNT = 50;
+const LABEL_ADMISSIBILITY_CONTRACT_VERSION = 'current-message-evidence-v1';
 const ADDITIONAL_DEFAULT_EXCLUSION_PATHS = Object.freeze([
   'test/fixtures/aside-qafix6-blind-fixed-50.json',
   'test/fixtures/aside-qafix5-blind-fixed-50.json',
@@ -217,6 +218,7 @@ try {
   chmodSync(outputDirectory, 0o700);
   const payload = {
     version: 'independent-ground-truth-draft-v1',
+    labelAdmissibilityContractVersion: LABEL_ADMISSIBILITY_CONTRACT_VERSION,
     benchmarkId: `${QA_FIX_TAG}-blind-${createHash('sha256').update(seed).digest('hex').slice(0, 12)}`,
     createdAt: new Date().toISOString(),
     seed,
@@ -251,6 +253,8 @@ try {
       reference: null,
       important: null,
       reviewerNote: '',
+      reviewerDisagreement: null,
+      currentEvidence: null,
     })),
   };
   writeFileSync(outputPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600, flag: overwrite ? 'w' : 'wx' });

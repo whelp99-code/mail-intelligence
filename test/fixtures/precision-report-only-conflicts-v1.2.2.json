@@ -1,0 +1,13 @@
+{
+  "version": "precision-report-only-conflicts-v1.2.2",
+  "conflicts": [
+    {
+      "fixtureId": "high-importance-reference",
+      "field": "priority",
+      "expected": "high",
+      "actual": "normal",
+      "policy": ["O-04", "O-06"],
+      "disposition": "report_only"
+    }
+  ]
+}

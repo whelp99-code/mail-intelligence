@@ -13,7 +13,7 @@ import { BLIND_ACCEPTANCE_RUBRIC_VERSION, CLASSIFICATION_POLICY_VERSION } from '
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(packageJson.version, '1.2.2');
 assert.equal(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix11');
-assert.equal(INTELLIGENT_SEARCH_VERSION, 'intelligent-search-v1.2.2-fix11');
+assert.equal(INTELLIGENT_SEARCH_VERSION, 'intelligent-search-v1.2.2-fix12');
 assert.equal(CLASSIFICATION_POLICY_VERSION, 'classification-policy-v1.2.2-o01-o06');
 assert.equal(BLIND_ACCEPTANCE_RUBRIC_VERSION, 'blind-acceptance-rubric-v2');
 

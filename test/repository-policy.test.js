@@ -36,6 +36,7 @@ test('approved planning baseline, historical release, current release and projec
     'docs/planning/V1.2.1-OAUTH-LLM-PROVIDERS.md',
     'docs/planning/V1.2.2-OPERATIONAL-CLASSIFICATION-STABILIZATION.md',
     'docs/qa/ASIDE-V1.2.2-FINAL-INDEPENDENT-RELEASE-QA-INSTRUCTIONS.md',
+    'docs/qa/BLIND-LABEL-ADMISSIBILITY-CURRENT-MESSAGE-V1.md',
     'docs/planning/V1.2.1-QA-FIX5-ACCURACY-DESIGN.md',
     'docs/planning/V1.2.1-QA-FIX7-EVENT-CLASSIFICATION-DESIGN.md',
     'docs/releases/v1.2.1-QA-FIX5-ACCURACY-IMPLEMENTATION-REPORT.md',
@@ -65,6 +66,8 @@ test('approved planning baseline, historical release, current release and projec
     'scripts/prepare-blind-holdout.mjs',
     'scripts/inspect-blind-holdout.mjs',
     'scripts/finalize-blind-holdout.mjs',
+    'scripts/verify-v1.2.2-precision-diagnostic.mjs',
+    'test/fixtures/precision-report-only-conflicts-v1.2.2.json',
     'scripts/prepare-incident-security-supplement.mjs',
   ];
   for (const path of required) assert.equal(await exists(path), true, `${path} must exist`);
@@ -101,7 +104,8 @@ test('package release contract is pinned to v1.2.2 verification', async () => {
   assert.match(packageJson.scripts['verify:v1.2.2'], /verify:health:full/);
   assert.match(packageJson.scripts['verify:v1.2.2'], /verify:safety/);
   assert.match(packageJson.scripts['verify:v1.2.2'], /npm run audit/);
-  assert.match(packageJson.scripts['verify:v1.2.2'], /evaluate:precision/);
+  assert.match(packageJson.scripts['verify:v1.2.2'], /evaluate:precision:diagnostic/);
+  assert.equal(packageJson.scripts['evaluate:precision:diagnostic'], 'node scripts/verify-v1.2.2-precision-diagnostic.mjs');
   assert.match(packageJson.scripts['verify:v1.2.2'], /verify:oauth/);
   assert.match(packageJson.scripts['verify:v1.2.2'], /verify:qa:v1\.2\.2/);
   assert.equal(packageJson.scripts['verify:qa:v1.2.2'], 'node scripts/verify-v1.2.2-operational-safety.mjs');
@@ -301,4 +305,11 @@ test('README declares the current v1.2.2 operational-classification contract', a
   assert.match(readme, /xai-grok-oauth/);
   assert.match(readme, /OAuth Access Token이나 Refresh Token을 읽거나 복사해 자체 DB에 저장하지 않습니다/);
   assert.match(readme, /Provider 간 자동 폴백.*하지 않음/s);
+});
+
+test('new Release Blind finalization requires current-message evidence admissibility', async () => {
+  const finalize = await read('scripts/finalize-blind-holdout.mjs');
+  assert.match(finalize, /current-message-evidence-v1/);
+  assert.match(finalize, /reviewerDisagreement/);
+  assert.match(finalize, /currentEvidence/);
 });

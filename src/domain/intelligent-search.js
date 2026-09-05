@@ -5,7 +5,7 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix11';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix12';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
 

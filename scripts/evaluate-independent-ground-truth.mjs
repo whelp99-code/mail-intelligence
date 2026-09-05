@@ -26,6 +26,9 @@ const NEXT_ACTORS = new Set([
 const PRIORITIES = new Set(['critical', 'high', 'normal', 'low']);
 const ACTIONABLE_STATES = new Set(['action_required', 'waiting', 'decision_required']);
 const IMPORTANT_MISS_CONTRACT_VERSION = 'important-priority-and-action-v3';
+const LABEL_ADMISSIBILITY_CONTRACT_VERSION = 'current-message-evidence-v1';
+const CURRENT_CONTENT_FIELDS = new Set(['currentContent']);
+const CURRENT_METADATA_FIELDS = new Set(['direction', 'lifecycle', 'isDraft', 'isPromotional', 'receivedAt', 'sentAt', 'importance', 'folderName']);
 const reportOnly = process.argv.includes('--report-only');
 const SENT_FOLDER_PATTERN = /^(?:sent|sentitems|sent items|sent mail|보낸 편지함|보낸메일함|보낸 메일함)$/i;
 const DELETED_FOLDER_PATTERN = /^(?:deleteditems|deleted items|trash|지운 편지함|삭제된 항목|휴지통)$/i;
@@ -127,7 +130,21 @@ try {
 } catch {
   fail('Ground Truth file is not valid JSON.');
 }
+const labelContractVersion = String(payload.labelAdmissibilityContractVersion || '').trim();
+if (labelContractVersion && labelContractVersion !== LABEL_ADMISSIBILITY_CONTRACT_VERSION) fail('UNKNOWN_LABEL_CONTRACT');
+const releaseEligible = labelContractVersion === LABEL_ADMISSIBILITY_CONTRACT_VERSION;
+if (!releaseEligible && !reportOnly) fail('LEGACY_LABEL_CONTRACT_REQUIRED: use --report-only for a legacy label file.');
 const labels = validateLabels(payload, expectedCount);
+if (releaseEligible) {
+  for (const item of payload.labels) {
+    if (item.reviewerDisagreement !== false) fail('labels.reviewerDisagreement must be resolved.');
+    if (!ACTIONABLE_STATES.has(String(item.workState || ''))) continue;
+    const evidence = item.currentEvidence;
+    const source = String(evidence?.source || '').trim();
+    const field = String(evidence?.field || '').trim();
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence) || !((source === 'current_content' && CURRENT_CONTENT_FIELDS.has(field)) || (source === 'current_metadata' && CURRENT_METADATA_FIELDS.has(field)))) fail('labels.currentEvidence is inadmissible.');
+  }
+}
 const labelSha256 = createHash('sha256').update(labelBytes).digest('hex');
 
 const db = new DatabaseSync(databasePath, { readOnly: true });
@@ -366,6 +383,8 @@ try {
     includeDeleted,
     expectedCount,
     reportOnly,
+    releaseEligible,
+    labelAdmissibilityContractVersion: labelContractVersion || 'legacy',
     classifierVersion: recompute ? PRECISION_CLASSIFICATION_VERSION : 'stored',
     evaluationNow: evaluationNow.toISOString(),
     mailboxSenderAliases: senderAliases.length,
