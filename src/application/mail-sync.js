@@ -10,6 +10,12 @@ function safeMessage(error) {
   return String(error?.message || 'Mail synchronization failed.').slice(0, 1000);
 }
 
+function auditStatusCode(error) {
+  return Number.isInteger(error?.statusCode) && error.statusCode >= 100 && error.statusCode <= 599
+    ? error.statusCode
+    : 0;
+}
+
 export class MailSyncService {
   constructor({ store, graphClientFactory, attachmentMetadataLimit = 10 }) {
     if (!store) throw new Error('store is required.');
@@ -226,7 +232,11 @@ export class MailSyncService {
               this.store.audit('attachment.metadata.failed', {
                 entityType: 'message',
                 entityId: item.graphId,
-                payload: { code: error?.code || 'ATTACHMENT_METADATA_FAILED' },
+                payload: {
+                  code: error?.code || 'ATTACHMENT_METADATA_FAILED',
+                  statusCode: auditStatusCode(error),
+                  retryable: error?.retryable === true,
+                },
               });
             }
           }

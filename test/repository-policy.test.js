@@ -100,7 +100,8 @@ test('package release contract is pinned to v1.2.2 verification', async () => {
   assert.match(packageJson.scripts.check, /oauth-cli-provider\.js/);
   assert.match(packageJson.scripts.check, /oauth-provider-admin\.mjs/);
   assert.match(packageJson.scripts.check, /backup-restore\.js/);
-  assert.equal(packageJson.scripts.test, 'node --test test/*.test.js');
+  assert.equal(packageJson.scripts.test, 'node scripts/run-tests-isolated.mjs');
+  assert.match(packageJson.scripts['verify:oauth'], /run-tests-isolated\.mjs/);
   assert.match(packageJson.scripts['verify:v1.2.2'], /verify:health:full/);
   assert.match(packageJson.scripts['verify:v1.2.2'], /verify:safety/);
   assert.match(packageJson.scripts['verify:v1.2.2'], /npm run audit/);

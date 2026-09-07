@@ -18,7 +18,7 @@ Mail Intelligence는 **Outlook 전체 메일을 지속적으로 분석해 프로
 
 **Version: 1.2.2 — Operational Classification Stabilization**
 
-v1.2.2는 v1.2.1의 **authoritative SQLite**, 정밀 분류, 지능형 탐색, 공식 CLI OAuth Provider와 읽기 전용 안전 기준을 유지하면서, 의미 사건·상태 머신과 `DO_NOW / WAITING / REVIEW / ARCHIVE` 운영 Lane을 추가한 버전입니다. 확실한 업무는 빠르게 배치하고, 불확실하거나 충돌하는 메일은 Silent Action Miss 방지 Gate를 통해 자동 보관하지 않습니다.
+v1.2.2는 v1.2.1의 **authoritative SQLite**, 정밀 분류, 지능형 탐색, 공식 CLI OAuth Provider와 읽기 전용 안전 기준을 유지하면서, 의미 사건·상태 머신과 `DO_NOW / WAITING / REVIEW / ARCHIVE` 운영 Lane을 추가한 버전입니다. 현재 classifier는 `precision-classification-v1.2.2-fix11`, 검색은 `intelligent-search-v1.2.2-fix12`입니다. 확실한 업무는 빠르게 배치하고, 불확실하거나 충돌하는 메일은 Silent Action Miss 방지 Gate를 통해 자동 보관하지 않습니다.
 
 MailMaestro 메일에서 확인된 Improve, Thread Summary, Rapid Reply, Auto Label, Meeting Intent, AI Personality, Email/Attachment Summary는 발송·캘린더·CRM 쓰기 없이 로컬 요약·초안·검토 기능으로만 반영합니다. 공개 API, Gmail 지원, 가격 숫자는 근거가 없으므로 제품 기능으로 주장하지 않습니다.
 
@@ -578,7 +578,7 @@ v1.2.2는 엔지니어링 검증 대상이며, 최종 Production GO는 신규 �
 
 ## v1.2.2 사건·운영 Lane 기반 분류
 
-현재 운영 분류기는 `precision-classification-v1.2.2-fix10`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다.
+현재 운영 분류기는 `precision-classification-v1.2.2-fix11`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다. 검색 버전은 `intelligent-search-v1.2.2-fix12`입니다.
 
 조건부 문의 Footer, 법적 Disclaimer, 마케팅 수신거부, tracking asset은 상태·Priority Evidence에서 제외한다. 외부 행동과 외부 AI는 운영 안전선에서 기본 비활성화 상태를 유지한다.
 

@@ -7,7 +7,7 @@
     "dev": "PORT=3010 node server.mjs",
     "start": "PORT=3010 node server.mjs",
     "check": "node --check server.mjs && node --check src/app.js && node --check src/analyzer.js && node --check src/ai-contract.js && node --check src/ai/response.js && node --check src/ai/resilience.js && node --check src/safety.js && node --check src/security/safety-policy.js && node --check src/security/static-path.js && node --check src/security/service-url.js && node --check src/domain-profiles/index.js && node --check src/domain-profiles/sangfor.js && node --check src/resilience.js && node --check src/runtime-safety.js && node --check src/adapters/microsoft-graph-mail.js && node --check src/application/mail-sync.js && node --check src/application/persistent-mail-memory.js && node --check src/application/precision-intelligence.js && node --check src/domain/mail-normalizer.js && node --check src/domain/mail-event-extractor.js && node --check src/domain/precision-classifier.js && node --check src/domain/search-semantic-ranker.js && node --check src/domain/intelligent-search.js && node --check src/storage/legacy-import.js && node --check src/storage/sqlite-store.js && node --check src/storage/storage-paths.js && node --check src/storage/backup-restore.js && node --check src/version.js && node --check scripts/mail-memory-admin.mjs && node --check scripts/evaluate-precision-classification.mjs && node --check scripts/evaluate-independent-ground-truth.mjs && node --check scripts/verify-health.mjs && node --check scripts/verify-safety-contract.mjs && node --check scripts/verify-repository-hygiene.mjs && node --check src/security/tcp-allowlist-proxy.js && node --check scripts/run-tailnet-proxy.mjs && node --check scripts/verify-tailnet-exposure.mjs && node --check scripts/verify-live-deployment.mjs && node --check scripts/verify-live-restart.mjs && node --check scripts/verify-live-stability.mjs && node --check src/ai/oauth-cli-provider.js && node --check scripts/oauth-provider-admin.mjs && node --check scripts/verify-operational-qa-blockers.mjs && node --check scripts/verify-search-qa-smoke.mjs && node --check scripts/prepare-incident-security-supplement.mjs && node --check scripts/prepare-blind-holdout.mjs && node --check scripts/inspect-blind-holdout.mjs && node --check scripts/finalize-blind-holdout.mjs && node --check scripts/audit-ground-truth-consistency.mjs && bash -n scripts/verify-working-copy-snapshot.sh && node --check scripts/verify-live-delta-twice.mjs && node --check scripts/verify-isolated-backup-restore.mjs && node --check scripts/audit-ground-truth-policy.mjs && node --check src/domain/operational-classification.js && node --check src/domain/mail-assistant-tools.js && node --check src/application/mail-assistant.js && node --check scripts/verify-v1.2.2-operational-safety.mjs",
-    "test": "node --test test/*.test.js",
+    "test": "node scripts/run-tests-isolated.mjs",
     "verify:core": "npm run check && npm test && npm run verify:safety && npm run verify:health:full",
     "verify:safety": "node scripts/verify-safety-contract.mjs && node scripts/verify-repository-hygiene.mjs",
     "verify:health": "node scripts/verify-health.mjs",
@@ -37,7 +37,7 @@
     "verify:fresh": "bash scripts/verify-fresh-extract.sh",
     "oauth:status": "node scripts/oauth-provider-admin.mjs status",
     "oauth:instructions": "node scripts/oauth-provider-admin.mjs instructions",
-    "verify:oauth": "node --test test/oauth-cli-provider.test.js test/oauth-provider-api.test.js test/ai-enrichment.integration.test.js",
+    "verify:oauth": "node scripts/run-tests-isolated.mjs test/oauth-cli-provider.test.js test/oauth-provider-api.test.js test/ai-enrichment.integration.test.js",
     "verify:v1.2.1": "npm run check && npm test && npm run evaluate:precision && npm run verify:oauth && npm run lint && npm run validate:html && npm run validate:css && npm run verify:health:full && npm run verify:safety && npm run audit",
     "oauth:enable": "bash scripts/enable-oauth-ai.sh",
     "verify:qa:operational": "node scripts/verify-operational-qa-blockers.mjs",
@@ -64,7 +64,9 @@
     "verify:stability:status": "node scripts/verify-live-stability.mjs --status",
     "verify:v1.2.2": "npm run check && npm test && npm run evaluate:precision:diagnostic && npm run verify:oauth && npm run lint && npm run validate:html && npm run validate:css && npm run verify:health:full && npm run verify:safety && npm run verify:qa:v1.2.2 && npm run audit",
     "verify:qa:v1.2.2": "node scripts/verify-v1.2.2-operational-safety.mjs",
-    "evaluate:precision:diagnostic": "node scripts/verify-v1.2.2-precision-diagnostic.mjs"
+    "evaluate:precision:diagnostic": "node scripts/verify-v1.2.2-precision-diagnostic.mjs",
+    "qa:incident:capacity": "node scripts/inspect-incident-capacity.mjs",
+    "backup:retention:inventory": "node scripts/inventory-backup-retention.mjs"
   },
   "devDependencies": {
     "eslint": "^8.57.0",

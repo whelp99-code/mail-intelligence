@@ -33,7 +33,6 @@ const ATTACHMENT_SELECT = [
   'contentType',
   'size',
   'isInline',
-  'contentId',
   'lastModifiedDateTime',
 ].join(',');
 

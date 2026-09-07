@@ -37,7 +37,7 @@ jobs:
         run: npm test
 
       - name: Precision classification evaluation
-        run: npm run evaluate:precision
+        run: npm run evaluate:precision:diagnostic
 
       - name: ESLint
         run: npm run lint

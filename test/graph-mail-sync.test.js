@@ -148,7 +148,7 @@ test('Graph 410 is mapped to DELTA_CURSOR_EXPIRED', async () => {
   );
 });
 
-test('attachment metadata query selects metadata and never requests contentBytes', async () => {
+test('attachment metadata query selects only supported base metadata', async () => {
   const calls = [];
   const client = new GraphMailClient({
     accessToken: 'token',
@@ -163,7 +163,10 @@ test('attachment metadata query selects metadata and never requests contentBytes
   const attachments = await client.fetchAttachmentMetadata({ messageId: 'm1' });
   assert.equal(attachments[0].name, '견적서.pdf');
   assert.match(calls[0], /attachments/);
-  assert.equal(decodeURIComponent(calls[0]).includes('contentBytes'), false);
+  const selected = new URL(calls[0]).searchParams.get('$select').split(',');
+  assert.deepEqual(selected, ['id', 'name', 'contentType', 'size', 'isInline', 'lastModifiedDateTime']);
+  assert.equal(selected.includes('contentId'), false);
+  assert.equal(selected.includes('contentBytes'), false);
 });
 
 test('sync service commits each page and resumes from persisted nextLink after interruption', async (t) => {
@@ -343,4 +346,46 @@ test('delta removal is persisted and attachment metadata failure does not abort 
   const mailbox = store.getMailbox('me');
   assert.equal(store.getRecentMessages(mailbox.id).length, 0);
   assert.equal(store.getRecentMessages(mailbox.id, { includeDeleted: true }).length, 1);
+});
+
+test('attachment metadata audit keeps only validated diagnostic fields', async (t) => {
+  const store = await withStore(t);
+  let attempt = 0;
+  const client = {
+    async *iterateDelta() {
+      yield {
+        pageIndex: 0,
+        requestUrl: 'https://graph.microsoft.com/v1.0/delta',
+        items: [message('m-http', { hasAttachments: true }), message('m-invalid', { hasAttachments: true })],
+        nextLink: '',
+        deltaLink: 'https://graph.microsoft.com/v1.0/delta-token',
+      };
+    },
+    async fetchAttachmentMetadata() {
+      attempt += 1;
+      if (attempt === 1) {
+        throw Object.assign(new Error('raw body token=secret'), {
+          code: 'GRAPH_REQUEST_FAILED',
+          statusCode: 400,
+          retryable: false,
+        });
+      }
+      throw Object.assign(new Error('raw body token=secret'), {
+        code: 'GRAPH_REQUEST_FAILED',
+        statusCode: '400',
+        retryable: 'true',
+      });
+    },
+  };
+  const service = new MailSyncService({ store, graphClientFactory: () => client, attachmentMetadataLimit: 2 });
+  const result = await service.syncFolder({ accessToken: 'token' });
+  assert.equal(result.attachmentErrors, 2);
+  const mailbox = store.getMailbox('me');
+  const httpAudit = store.latestAuditEvent('attachment.metadata.failed', { entityType: 'message', entityId: 'm-http' });
+  const invalidAudit = store.latestAuditEvent('attachment.metadata.failed', { entityType: 'message', entityId: 'm-invalid' });
+  assert.equal(mailbox.id > 0, true);
+  assert.deepEqual(httpAudit.payload, { code: 'GRAPH_REQUEST_FAILED', statusCode: 400, retryable: false });
+  assert.deepEqual(invalidAudit.payload, { code: 'GRAPH_REQUEST_FAILED', statusCode: 0, retryable: false });
+  assert.equal(JSON.stringify([httpAudit.payload, invalidAudit.payload]).includes('secret'), false);
+  assert.equal(JSON.stringify([httpAudit.payload, invalidAudit.payload]).includes('raw body'), false);
 });

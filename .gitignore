@@ -16,6 +16,7 @@ mail-intelligence.sqlite-*
 *.sqlite-shm
 /data/
 /backups/
+/artifacts/
 attachment-archive.json
 attachment-archive-meta.json
 accounts.json
@@ -50,3 +51,4 @@ coverage/
 *.temp
 .chatgpt2codex/
 .mail-intelligence-test-*/
+data/tmp/
