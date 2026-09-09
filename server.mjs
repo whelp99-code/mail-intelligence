@@ -24,6 +24,7 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
+import { createMailSendApi } from './src/application/mail-send-api.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
@@ -2004,6 +2005,11 @@ async function handleApi(req, res) {
   try {
     assertAllowedHost(req);
 
+    if (url.pathname.startsWith('/api/mail/send-drafts')) {
+      const result = await mailSendApi(req, url);
+      return json(res, result.status, result.body);
+    }
+
     if (url.pathname === '/api/health') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       return json(res, 200, publicHealthStatus());
@@ -2771,6 +2777,27 @@ mailMemory = new PersistentMailMemoryRuntime({
   ),
 });
 const mailMemoryInitialization = await mailMemory.initialize();
+const draftTokenPath = String(process.env.MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE || '');
+let draftServiceToken = String(process.env.MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN || '');
+if (draftTokenPath) {
+  const metadata = await stat(draftTokenPath);
+  if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error('Draft service token file must be private.');
+  draftServiceToken = (await readFile(draftTokenPath, 'utf8')).trim();
+}
+if (draftServiceToken && draftServiceToken.length < 32) throw new Error('Draft service token must contain at least 32 characters.');
+const mailSendApi = createMailSendApi({
+  getStore: () => requireMailMemory().store,
+  getMailbox: () => {
+    const mailbox = requireMailMemory().ensureMailbox(currentMailboxUser());
+    return { id: mailbox.id, graphUser: currentMailboxUser() || 'me' };
+  },
+  getSession: sessionForRequest,
+  readBody: readJsonBody,
+  getAccessToken: getGraphAccessToken,
+  serviceToken: draftServiceToken,
+  allowSend: safetyPolicy.capabilities.mailSend,
+  accessKeyRequired,
+});
 mailMemoryHealth = {
   ready: mailMemoryInitialization.storage.ready,
   schemaVersion: mailMemoryInitialization.storage.schemaVersion,

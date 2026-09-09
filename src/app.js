@@ -1,3 +1,5 @@
+import { initializeSendReview } from './send-review.js';
+
 let serverCapabilities = { sendMail: false, markRead: false, dataPlane: false };
 let localSessionPromise = null;
 
@@ -1892,3 +1894,5 @@ loadAssistantPersonality();
     if (!event.matches) resetPanelWidths();
   });
 })();
+
+initializeSendReview(apiFetch);

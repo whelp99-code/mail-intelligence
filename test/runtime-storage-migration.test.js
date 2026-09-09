@@ -110,7 +110,7 @@ test('legacy root JSON state migrates into private data storage without persiste
   const health = await waitForHealth(baseUrl, () => log);
   assert.equal(health.ok, true);
   assert.equal(health.storage.authoritativeStore, 'sqlite');
-  assert.equal(health.storage.schemaVersion, 4);
+  assert.equal(health.storage.schemaVersion, 5);
 
   const newConfigPath = join(dataDir, '.outlook-config.json');
   const databasePath = join(dataDir, 'mail-intelligence.sqlite');
@@ -146,7 +146,7 @@ test('legacy root JSON state migrates into private data storage without persiste
   await expectAbsent(join(dataDir, '.mail-cache.json'));
   assert.equal(await readFile(legacyCachePath, 'utf8'), legacyCacheContents);
   assert.match(log, /Migrated legacy configuration/);
-  assert.match(log, /SQLite schema v4 ready/);
+  assert.match(log, /SQLite schema v5 ready/);
 });
 
 test('server refuses an existing runtime data directory that is not owner-only', async () => {

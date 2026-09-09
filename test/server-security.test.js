@@ -72,7 +72,7 @@ test('v1.2.2 server security boundary', async (t) => {
   assert.equal(health.version, '1.2.2');
   assert.equal(health.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');
   assert.equal(health.storage.authoritativeStore, 'sqlite');
-  assert.equal(health.storage.schemaVersion, 4);
+  assert.equal(health.storage.schemaVersion, 5);
   assert.equal(health.externalActionsAllowed, false);
 
   await t.test('root UI serves the read-only v1.2.2 operational-classification application', async () => {

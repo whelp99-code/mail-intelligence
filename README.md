@@ -74,7 +74,8 @@ Mail Intelligence는 OAuth Access Token이나 Refresh Token을 읽거나 복사�
 | Provider 간 자동 폴백 | 하지 않음; Rules만 안전 폴백 |
 | 작업 이력·Dead Letter | 지원 |
 | 검증 백업·오프라인 복원 | 지원 |
-| 메일 발송·원본 변경 | 비활성화 |
+| 승인 후 Graph 발송 | 기본 OFF, 발송 초안 검토·사람 승인·영수증 확인 필수 |
+| 읽음 변경·이동·삭제 | 비활성화 |
 | CRM·Calendar·Data Plane 쓰기 | 비활성화 |
 
 
@@ -160,7 +161,24 @@ POST /api/intelligence/correct
 openid profile offline_access User.Read Mail.Read
 ```
 
-`Mail.Send`와 `Mail.ReadWrite`는 요청하지 않습니다. 환경변수로 쓰기 기능을 요청해도 v1.2.2 안전 정책이 기본적으로 차단합니다.
+기본 설정에서는 `Mail.Send`와 `Mail.ReadWrite`를 요청하지 않습니다. `MAIL_INTELLIGENCE_ALLOW_SEND=1`을 명시적으로 설정한 경우에만 `Mail.Send` 재동의를 요청합니다. `Mail.ReadWrite`는 이번 발송 기능에 필요하지 않습니다. 발송 플래그는 읽음 변경·이동·삭제·Calendar·CRM 쓰기를 활성화하지 않습니다.
+
+### 검토 후 발송 초안
+
+기존 복사 전용 `/api/intelligence/draft`는 유지합니다. 별도 `/api/mail/send-drafts`는 SQLite에 변경 불가능한 검토용 초안을 저장합니다. 수신자·제목·본문이 부족하면 `needs_clarification`으로 남기며 발송하지 않습니다.
+
+웹 화면의 **발송 승인**에서 수신자, 제목, 본문, 원본 메일, 출처를 검토하고 확인 체크 후 한 건씩 승인합니다. 발송 플래그 OFF, Mail.Send 권한 없음, 잘못된 CSRF, 서비스 토큰의 승인 요청은 차단합니다. 승인에는 운영자 접근키로 인증한 세션이 필요합니다.
+
+- `POST /api/mail/send-drafts`: 초안 저장. 세션 또는 제한된 Grok 서비스 토큰.
+- `GET /api/mail/send-drafts/:id`: 초안/영수증 조회. Grok 토큰은 Grok 출처 초안만 조회.
+- `POST /api/mail/send-drafts/:id/approve`: 사람 세션만, 정확한 payload digest 및 명시적 확인 필요.
+- `POST /api/mail/send-drafts/:id/cancel`: 사람 세션만. 이미 발송 중이거나 발송된 초안은 취소할 수 없음.
+
+Grok Gateway에는 초안 생성·조회만 연결합니다. MI 운영자 접근키 대신 별도 `MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE`(0600)을 사용합니다. Grok은 승인·발송·취소 API를 호출하지 않습니다.
+
+Graph의 `202 Accepted`만으로 `sent`를 기록하지 않습니다. 보낸 편지함에서 초안 고유 헤더와 수신자·제목·본문을 대조해 Graph message ID를 확인한 뒤 영수증을 저장합니다. 타임아웃·불확실한 응답은 `sending`으로 남고 조회 시 읽기 전용으로 재확인합니다. 자동 재발송은 없습니다. `sent`는 보낸 편지함 확인이며 수신자의 열람·배달 보장과 다릅니다.
+
+현재 구현 후보의 집중/전체 테스트는 통과했지만, Gateway 배포 및 본인 다른 주소 실발송 수용 검증 전까지 **PILOT SEND READY: NO**입니다. 구현 상태는 [실행 계획](docs/planning/MAIL-SEND-EXECUTION-20260909.md)을 참고하세요.
 
 ### 로컬 전용 서버
 

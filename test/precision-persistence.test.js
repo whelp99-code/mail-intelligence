@@ -95,7 +95,7 @@ test('v1.2.0 SQLite data migrates to schema v4 without losing messages', async (
   });
   const { mailbox } = seed(store);
   const status = store.storageStatus();
-  assert.equal(status.schemaVersion, 4);
+  assert.equal(status.schemaVersion, 5);
   assert.equal(status.ready, true);
   assert.equal(store.countMessages(mailbox.id), 3);
   assert.equal(status.counts.precision_classifications, 0);

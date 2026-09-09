@@ -11,8 +11,8 @@
 - 저장소: `data/mail-intelligence.sqlite`
 - 백업: `data/backups/`
 - 인증: HTTP Basic 사용자 `mailintelligence` + 서버의 0600 접근키
-- Microsoft Graph: `Mail.Read`만 사용
-- 외부 행동: 메일 발송·읽음 변경·이동·삭제·Data Plane 전송 모두 비활성
+- Microsoft Graph: 기본 `Mail.Read`; 승인 발송 파일럿에만 `Mail.Send` 재동의
+- 외부 행동: 기본 모두 비활성. 발송만 별도 플래그와 사람 승인을 요구하며 읽음 변경·이동·삭제·Data Plane 전송은 계속 비활성
 
 ## 최초 배포 또는 재배포
 
@@ -184,6 +184,20 @@ npm run memory:backup
 - Tailnet 프록시는 정확한 Tailscale IPv4와 `100.64.0.0/10`만 허용
 - Tailscale Funnel, 공인 IP NAT, 인터넷 공개 방화벽 규칙 금지
 - Nginx·Caddy를 이용한 공인 외부 공개 금지
-- `Mail.Send`, `Mail.ReadWrite` 권한 추가 금지
+- `Mail.ReadWrite` 권한 추가 금지. `Mail.Send`는 아래 승인 발송 절차에 한해서만 허용
 - `MAIL_INTELLIGENCE_ACTIONS_APPROVED=1` 설정 금지
-- 실제 메일 발송·이동·삭제 테스트 금지
+- 외부 고객 주소 시험 발송·메일 이동·삭제 테스트 금지
+
+## 승인 발송 파일럿 (기본 OFF)
+
+구현 후보의 전체 검증이 통과하고 Gateway draft/status 연동이 배포된 뒤 진행한다. 그 전에는 PILOT SEND READY가 아니다.
+
+1. SQLite 전체 백업과 격리 복원 검증을 수행한다. 신규 마이그레이션은 schema v5이며 기존 메일·분류는 보존한다.
+2. Gateway 서버 전용 MI 초안 토큰을 생성·배치한다. `MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE`은 소유자 전용 0600이어야 한다. 운영자 접근키를 Grok에 전달하지 않는다.
+3. 기본 OFF에서 Gateway 초안 생성/조회, 승인403, bot 승인/발송 차단을 확인한다.
+4. 운영자가 서비스 환경의 `MAIL_INTELLIGENCE_ALLOW_SEND=1`을 설정하고 재시작한다. 다른 쓰기 플래그는 변경하지 않는다.
+5. Outlook 로그인에서 `Mail.Send`만 추가 재동의한다. 기존 scope만 있는 토큰이면 승인 API는 발송 전에403을 반환한다.
+6. 확인된 본인 다른 주소로 시험 초안 한 건을 생성한다. 수신자·제목·본문을 사람이 검토해 승인한 뒤에만 보낸다. 승인 전 보낸 편지함0건, 승인 후 보낸 편지함/수신함 각1건을 확인한다.
+7. 같은 초안 중복 승인이 새 발송을 만들지 않는지 확인한다. `sending`이면 상태 조회로 확인하고, 새 request_id로 임의 재발송하지 않는다.
+
+Grok 역할은 초안 작성·상태 조회뿐이다. `sent` 영수증이 없으면 발송 완료라고 보고하지 않는다. 운영 장애 시 발송 플래그를 OFF로 되돌려 신규 승인을 차단하고 기록을 보존한다. 데이터베이스를 자동으로 되돌리거나 발송을 재시도하지 않는다.

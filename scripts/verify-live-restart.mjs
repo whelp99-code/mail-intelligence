@@ -26,7 +26,7 @@ const storageResponse = await fetch(`${baseUrl}/api/storage/status`, {
 const storage = await storageResponse.json();
 assert.equal(storageResponse.status, 200);
 assert.equal(storage.authoritativeStore, 'sqlite');
-assert.equal(storage.schemaVersion, 4);
+assert.equal(storage.schemaVersion, 5);
 assert.equal(storage.ready, true);
 assert.equal(storage.integrity?.ok, true);
 assert.ok((storage.counts?.backup_manifests || 0) >= 1);

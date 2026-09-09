@@ -89,8 +89,8 @@ try {
 
   assert.equal(backupValidation.ok, true);
   assert.equal(restoreValidation.ok, true);
-  assert.equal(backupValidation.schemaVersion, 4);
-  assert.equal(restoreValidation.schemaVersion, 4);
+  assert.equal(backupValidation.schemaVersion, 5);
+  assert.equal(restoreValidation.schemaVersion, 5);
   assert.deepEqual(restoreCounts, backupCounts);
   assert.equal(restoreChecksum, backupChecksum);
   assert.equal(statSync(runDirectory).mode & 0o777, 0o700);

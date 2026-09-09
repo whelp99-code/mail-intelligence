@@ -20,6 +20,7 @@
         <a href="#persistentMemory">메일 DB</a>
         <a href="#messageDetail">요약</a>
         <a href="#actions">액션</a>
+        <a href="#sendDraftReview">발송 승인</a>
       </nav>
       <div class="connector">
         <span class="dot"></span>
@@ -280,6 +281,27 @@
         </form>
       </details>
 
+      <section id="sendDraftReview" class="send-review" aria-labelledby="sendReviewTitle">
+        <header class="send-review-heading">
+          <div><p class="eyebrow">검토 → 사람 승인 → 발송 영수증</p><h2 id="sendReviewTitle">발송 초안 검토</h2></div>
+          <button id="refreshSendDrafts" type="button">목록 새로고침</button>
+        </header>
+        <p id="sendDraftStatus" role="status">초안 목록을 불러오는 중입니다.</p>
+        <details class="send-compose">
+          <summary>새 발송 초안 작성 · 저장만 하고 보내지 않음</summary>
+          <form id="sendDraftForm">
+            <label>수신자 · 주소를 쉼표로 구분<input id="sendDraftTo" type="text" autocomplete="off" placeholder="직접 확인한 이메일 주소" /></label>
+            <label>참조 · 선택<input id="sendDraftCc" type="text" autocomplete="off" /></label>
+            <label>제목<input id="sendDraftSubject" type="text" maxlength="998" /></label>
+            <label>본문<textarea id="sendDraftBody" rows="7" maxlength="30000"></textarea></label>
+            <button id="saveSendDraft" type="submit">검토용 초안 저장</button>
+          </form>
+        </details>
+        <div class="send-review-layout">
+          <div id="sendDraftList" class="send-draft-list" aria-label="발송 초안 목록"></div>
+          <article id="sendDraftDetail" class="send-draft-detail" aria-label="선택한 발송 초안"><p>초안을 선택하면 수신자와 본문을 검토할 수 있습니다.</p></article>
+        </div>
+      </section>
     </main>
 
     <script type="module" src="./app.js"></script>

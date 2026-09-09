@@ -14,6 +14,36 @@
   --shadow: 0 10px 28px rgb(16 24 40 / 7%);
 }
 
+.send-review { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin-top: 24px; }
+.send-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.send-review-heading h2 { margin-bottom: 8px; }
+.send-review-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr); gap: 24px; margin-top: 24px; }
+.send-draft-list { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; }
+.send-draft-list button { text-align: left; overflow-wrap: anywhere; min-height: 44px; }
+.send-draft-detail { min-width: 0; overflow-wrap: anywhere; }
+.send-draft-detail > label { display: flex; align-items: flex-start; gap: 8px; min-height: 44px; }
+.send-draft-detail input[type="checkbox"] { width: 20px; height: 20px; min-height: 20px; margin: 0; flex: 0 0 20px; }
+.send-draft-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; padding: 16px; background: var(--bg); border-radius: 8px; }
+.send-draft-meta { font-size: 12px; color: var(--muted); }
+.send-draft-warning { color: var(--amber); }
+.send-draft-receipt { color: var(--green); }
+.send-review-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.send-review button { min-height: 44px; }
+.send-review button:disabled { cursor: not-allowed; }
+.send-review button:focus-visible, .send-review input:focus-visible, .send-review textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.send-compose { padding: 16px 0; border-block: 1px solid var(--line); }
+.send-compose summary { cursor: pointer; min-height: 44px; }
+.send-compose form { display: grid; gap: 12px; max-width: 800px; }
+.send-compose label { display: grid; gap: 4px; }
+.send-compose input, .send-compose textarea { width: 100%; padding: 12px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
+
+@media (width <= 720px) {
+  .send-review { padding: 16px; }
+  .send-review-layout { grid-template-columns: 1fr; gap: 16px; }
+  .send-review-heading { align-items: flex-start; flex-direction: column; }
+  .send-draft-list { max-height: 220px; }
+}
+
 * { box-sizing: border-box; }
 html, body { min-height: 100%; }
 
