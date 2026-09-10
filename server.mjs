@@ -24,6 +24,22 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
+import { GraphMailClient } from './src/adapters/microsoft-graph-mail.js';
+import { submitApprovedGraphMail } from './src/adapters/microsoft-graph-send.js';
+import {
+  SERVICE_SCOPES,
+  hasServiceScope,
+  loadServiceTokens,
+  servicePrincipalFromHeaders,
+} from './src/security/service-token.js';
+import {
+  AttachmentAccessError,
+  findMessageAttachment,
+  publicAttachmentMetadata,
+  resolveAttachmentBytes,
+  saveOperatorDownload,
+} from './src/application/attachment-access.js';
+import { SendDraftError, SendDraftService } from './src/application/send-drafts.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
@@ -75,6 +91,9 @@ const safetyPolicy = getSafetyPolicy(process.env);
 const delegatedScopes = delegatedScopesForSafety(safetyPolicy);
 const configuredAccessKey = String(process.env.MAIL_INTELLIGENCE_ACCESS_KEY || '').trim();
 const accessKeyRequired = configuredAccessKey.length > 0;
+const serviceTokenCatalog = loadServiceTokens(process.env);
+const operatorDownloadDirectory = join(dataRoot, 'operator-downloads');
+let sendDraftService = null;
 const AI_OPT_IN_VERSION = 'ai-oauth-opt-in-v1.2.2';
 const AI_PROMPT_VERSION = 'mail-intelligence-v1.2.2-oauth-prompt-1';
 const MAX_JSON_BODY_BYTES = 256 * 1024;
@@ -673,6 +692,90 @@ function requireSessionCookie(req) {
     accessKeyRequired ? 'ACCESS_REQUIRED' : 'SESSION_REQUIRED',
     accessKeyRequired ? 'Mail Intelligence access is required.' : 'A local browser session is required.'
   );
+}
+
+function presentedServicePrincipal(req) {
+  return servicePrincipalFromHeaders(req.headers, serviceTokenCatalog);
+}
+
+function requireReadableAccess(req) {
+  const principal = presentedServicePrincipal(req);
+  if (principal && hasServiceScope(principal, SERVICE_SCOPES.read)) {
+    return { kind: 'service', principal };
+  }
+  return { kind: 'session', session: requireSessionCookie(req) };
+}
+
+function requireDraftCreateAccess(req) {
+  const principal = presentedServicePrincipal(req);
+  if (principal) {
+    if (!hasServiceScope(principal, SERVICE_SCOPES.draftCreate)) {
+      throw new HttpError(403, 'DRAFT_SCOPE_REQUIRED', 'This service token cannot create send drafts.');
+    }
+    return { kind: 'service', principal };
+  }
+  return { kind: 'session', session: requireStateChange(req) };
+}
+
+function requireHumanApproval(req) {
+  if (presentedServicePrincipal(req)) {
+    throw new HttpError(
+      403,
+      'HUMAN_APPROVAL_REQUIRED',
+      'Grok Bot / service tokens cannot approve, cancel, or send mail.',
+    );
+  }
+  return requireStateChange(req);
+}
+
+function requireSendDrafts() {
+  if (!sendDraftService) {
+    throw new HttpError(503, 'STORAGE_NOT_READY', 'Persistent mail memory is not ready.');
+  }
+  return sendDraftService;
+}
+
+function graphMailboxPath() {
+  const mailboxUser = currentMailboxUser();
+  return mailboxUser ? `/users/${encodeURIComponent(mailboxUser)}` : '/me';
+}
+
+async function createGraphMailClient() {
+  const accessToken = await getGraphAccessToken();
+  if (!accessToken) {
+    throw new HttpError(503, 'GRAPH_TOKEN_REQUIRED', 'Microsoft Graph access token is not available.');
+  }
+  return new GraphMailClient({
+    fetchImpl: fetch,
+    accessToken,
+    graphBaseUrl,
+  });
+}
+
+async function downloadAttachmentFromGraph(messageId, attachment) {
+  const client = await createGraphMailClient();
+  return client.fetchAttachmentContent({
+    mailboxPath: graphMailboxPath(),
+    messageId,
+    attachmentId: attachment.graphAttachmentId || attachment.id,
+  });
+}
+
+async function resolveDraftAttachmentContent(ref) {
+  const listed = requireMailMemory().messageAttachments(currentMailboxUser(), ref.messageId);
+  const attachment = findMessageAttachment(listed.attachments, ref.attachmentId);
+  if (!attachment) {
+    throw new AttachmentAccessError('ATTACHMENT_NOT_FOUND', 'Stored attachment metadata was not found.', 404);
+  }
+  const bytes = await resolveAttachmentBytes({
+    attachment,
+    downloadFromGraph: (item) => downloadAttachmentFromGraph(ref.messageId, item),
+  });
+  return {
+    name: attachment.name || ref.name,
+    contentType: attachment.contentType,
+    bytes,
+  };
 }
 
 function sessionCapabilities() {
@@ -2171,7 +2274,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/summary') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       return json(res, 200, {
         version: PRECISION_CLASSIFICATION_VERSION,
         searchVersion: INTELLIGENT_SEARCH_VERSION,
@@ -2183,7 +2286,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/operational-summary') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       return json(res, 200, {
         version: OPERATIONAL_CLASSIFICATION_VERSION,
         ...requireMailMemory().operationalSummary(currentMailboxUser()),
@@ -2192,7 +2295,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/message-summary') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
       if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
       try {
@@ -2207,7 +2310,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/thread-summary') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
       const limit = Number(url.searchParams.get('limit') || 100);
       if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
@@ -2242,7 +2345,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/attachments') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
       if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
       try {
@@ -2364,7 +2467,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/smart-views') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       return json(res, 200, {
         version: INTELLIGENT_SEARCH_VERSION,
         views: requireMailMemory().intelligentSmartViews(),
@@ -2407,7 +2510,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/classification') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
       if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
       try {
@@ -2474,7 +2577,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/intelligence/search') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       const query = validatedText(url.searchParams.get('q') || '', 'q', 500);
       const limit = Number(url.searchParams.get('limit') || 25);
       if (!query) throw new HttpError(400, 'SEARCH_QUERY_REQUIRED', 'q is required.');
@@ -2522,7 +2625,7 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/mail/search') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireSessionCookie(req);
+      requireReadableAccess(req);
       const query = validatedText(url.searchParams.get('q') || '', 'q', 500);
       const limit = Number(url.searchParams.get('limit') || 25);
       if (!query) throw new HttpError(400, 'SEARCH_QUERY_REQUIRED', 'q is required.');
@@ -2533,6 +2636,159 @@ async function handleApi(req, res) {
         query,
         results: requireMailMemory().search(currentMailboxUser(), query, { limit }),
       });
+    }
+
+    if (url.pathname === '/api/mail/lanes') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireReadableAccess(req);
+      const lane = validatedText(url.searchParams.get('lane') || '', 'lane', 40);
+      const limit = Number(url.searchParams.get('limit') || 25);
+      if (!lane) throw new HttpError(400, 'LANE_REQUIRED', 'lane is required.');
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new HttpError(400, 'LANE_LIMIT_INVALID', 'limit must be an integer between 1 and 100.');
+      }
+      try {
+        return json(res, 200, requireMailMemory().listOperationalLane(currentMailboxUser(), lane, { limit }));
+      } catch (error) {
+        if (/Operational lane must/i.test(error?.message || '')) {
+          throw new HttpError(400, 'LANE_INVALID', error.message);
+        }
+        throw error;
+      }
+    }
+
+    const storedMessageMatch = url.pathname.match(/^\/api\/mail\/messages\/([^/]+)$/);
+    if (storedMessageMatch) {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireReadableAccess(req);
+      const messageId = validatedText(decodeURIComponent(storedMessageMatch[1] || ''), 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        const message = requireMailMemory().getStoredMessage(currentMailboxUser(), messageId);
+        return json(res, 200, {
+          messageId: message.id,
+          conversationId: message.conversationId,
+          subject: message.subject,
+          from: message.from,
+          fromName: message.fromName,
+          receivedAt: message.receivedAt,
+          sentAt: message.sentAt,
+          hasAttachments: message.hasAttachments,
+          bodyPreview: message.bodyPreview,
+          body: String(message.body || '').slice(0, 20_000),
+        });
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/mail/attachments') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireReadableAccess(req);
+      const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      try {
+        const listed = requireMailMemory().messageAttachments(currentMailboxUser(), messageId);
+        return json(res, 200, {
+          messageId: listed.messageId,
+          attachments: listed.attachments.map(publicAttachmentMetadata),
+        });
+      } catch (error) {
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    const attachmentContentMatch = url.pathname.match(/^\/api\/mail\/attachments\/([^/]+)\/content$/);
+    if (attachmentContentMatch) {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireReadableAccess(req);
+      const attachmentId = validatedText(decodeURIComponent(attachmentContentMatch[1] || ''), 'attachmentId', 500);
+      const messageId = validatedText(url.searchParams.get('messageId') || '', 'messageId', 500);
+      if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
+      if (!attachmentId) throw new HttpError(400, 'ATTACHMENT_ID_REQUIRED', 'attachmentId is required.');
+      try {
+        const listed = requireMailMemory().messageAttachments(currentMailboxUser(), messageId);
+        const attachment = findMessageAttachment(listed.attachments, attachmentId);
+        const bytes = await resolveAttachmentBytes({
+          attachment,
+          downloadFromGraph: (item) => downloadAttachmentFromGraph(messageId, item),
+        });
+        if (url.searchParams.get('save') === '1') {
+          const saved = await saveOperatorDownload({
+            directory: operatorDownloadDirectory,
+            messageId,
+            attachment,
+            bytes,
+          });
+          return json(res, 200, saved);
+        }
+        const rawName = String(attachment.name || 'attachment').replace(/[\r\n"]/g, '');
+        const asciiName = rawName.replace(/[^\x20-\x7E]+/g, '_') || 'attachment';
+        const disposition = `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(rawName || 'attachment')}`;
+        res.writeHead(200, {
+          ...securityHeaders(),
+          'Content-Type': attachment.contentType || 'application/octet-stream',
+          'Content-Length': bytes.length,
+          'Content-Disposition': disposition,
+        });
+        res.end(bytes);
+        return;
+      } catch (error) {
+        if (error instanceof AttachmentAccessError) {
+          throw new HttpError(error.statusCode, error.code, error.message);
+        }
+        if (/stored message/i.test(error?.message || '')) {
+          throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
+        }
+        throw error;
+      }
+    }
+
+    if (url.pathname === '/api/mail/send-drafts') {
+      if (req.method === 'GET') {
+        requireReadableAccess(req);
+        return json(res, 200, { drafts: requireSendDrafts().list({ limit: 25 }) });
+      }
+      if (req.method === 'POST') {
+        const actor = requireDraftCreateAccess(req);
+        const body = await readJsonBody(req);
+        const created = requireSendDrafts().create(body, {
+          source: actor.kind === 'service' ? 'grok-bot' : 'human',
+        });
+        return json(res, 201, created);
+      }
+      throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+    }
+
+    const sendDraftMatch = url.pathname.match(/^\/api\/mail\/send-drafts\/([^/]+)(?:\/(approve|cancel))?$/);
+    if (sendDraftMatch) {
+      const draftId = validatedText(decodeURIComponent(sendDraftMatch[1] || ''), 'draftId', 80);
+      const action = sendDraftMatch[2] || '';
+      if (!draftId) throw new HttpError(400, 'SEND_DRAFT_ID_REQUIRED', 'Send draft id is required.');
+      if (!action) {
+        if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+        requireReadableAccess(req);
+        return json(res, 200, requireSendDrafts().get(draftId));
+      }
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireHumanApproval(req);
+      await readJsonBody(req);
+      if (action === 'cancel') {
+        return json(res, 200, requireSendDrafts().cancel(draftId));
+      }
+      assertMutationAllowed(safetyPolicy, 'mailSend');
+      const accessToken = await getGraphAccessToken();
+      return json(res, 200, await requireSendDrafts().approve(draftId, {
+        accessToken,
+        mailboxUser: currentMailboxUser(),
+        approvalId: `human:${new Date().toISOString()}`,
+      }));
     }
 
     if (url.pathname === '/api/storage/backup') {
@@ -2555,9 +2811,9 @@ async function handleApi(req, res) {
 
     if (url.pathname === '/api/outlook/send') {
       if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      requireStateChange(req);
+      requireHumanApproval(req);
       assertMutationAllowed(safetyPolicy, 'mailSend');
-      return json(res, 501, { sent: false, code: 'NOT_IMPLEMENTED', message: 'Mail send is not available in v1.1.0.' });
+      return json(res, 501, { sent: false, code: 'NOT_IMPLEMENTED', message: 'Direct mail send is not available. Use human-approved send drafts.' });
     }
 
     if (url.pathname === '/api/outlook/read') {
@@ -2634,9 +2890,14 @@ async function handleApi(req, res) {
 
     return json(res, 404, { code: 'NOT_FOUND', message: 'Not found.' });
   } catch (error) {
-    return json(res, error?.statusCode || 500, {
-      code: error?.code === 'MUTATION_DISABLED' ? 'EXTERNAL_ACTION_DISABLED' : error?.code || 'INTERNAL_ERROR',
-      message: error instanceof Error ? error.message : 'Unexpected server error.'
+    const statusCode = error?.statusCode || 500;
+    const code = error?.code === 'MUTATION_DISABLED'
+      ? 'EXTERNAL_ACTION_DISABLED'
+      : error?.code || 'INTERNAL_ERROR';
+    return json(res, statusCode, {
+      code,
+      message: error instanceof Error ? error.message : 'Unexpected server error.',
+      draft: error instanceof SendDraftError ? error.draft || undefined : undefined,
     });
   }
 }
@@ -2776,6 +3037,17 @@ mailMemoryHealth = {
   schemaVersion: mailMemoryInitialization.storage.schemaVersion,
   sizeBytes: mailMemoryInitialization.storage.sizeBytes,
 };
+sendDraftService = new SendDraftService({
+  store: mailMemory.store,
+  submitApprovedMail: ({ accessToken, mailboxUser, draft }) => submitApprovedGraphMail({
+    fetchImpl: fetch,
+    accessToken,
+    graphBaseUrl,
+    mailboxUser,
+    draft,
+  }),
+  resolveAttachmentBytes: resolveDraftAttachmentContent,
+});
 
 let shutdownStarted = false;
 function closePersistentMailMemory() {

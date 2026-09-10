@@ -186,6 +186,42 @@ export class PersistentMailMemoryRuntime {
     return this.assistant.attachments(mailboxUser, messageId);
   }
 
+  getStoredMessage(mailboxUser = '', messageId) {
+    const mailbox = this.ensureMailbox(mailboxUser);
+    const message = this.store.getMessage(mailbox.id, String(messageId || ''));
+    if (!message) throw new Error('Stored message was not found.');
+    return message;
+  }
+
+  listOperationalLane(mailboxUser = '', lane, { limit = 25 } = {}) {
+    const wanted = String(lane || '').trim().toLowerCase();
+    if (!['do_now', 'waiting', 'review', 'archive'].includes(wanted)) {
+      throw new Error('Operational lane must be do_now, waiting, review, or archive.');
+    }
+    this.precision.classifyStored(mailboxUser);
+    const mailbox = this.ensureMailbox(mailboxUser);
+    const classifications = this.store.getPrecisionClassificationMap(mailbox.id);
+    const messages = this.store.getRecentMessages(mailbox.id, { limit: 500 });
+    const bounded = Math.min(Math.max(Number(limit) || 25, 1), 100);
+    const results = [];
+    for (const message of messages) {
+      const classification = classifications[message.id];
+      if (classification?.operational?.lane !== wanted) continue;
+      results.push({
+        messageId: message.id,
+        subject: message.subject,
+        from: message.from,
+        receivedAt: message.receivedAt,
+        lane: wanted,
+        workState: classification.workState,
+        nextActor: classification.nextActor,
+        priority: classification.priority,
+      });
+      if (results.length >= bounded) break;
+    }
+    return { lane: wanted, count: results.length, results };
+  }
+
   attachmentSummary(mailboxUser = '', messageId, attachmentId, options = {}) {
     return this.assistant.attachmentSummary(mailboxUser, messageId, attachmentId, options);
   }

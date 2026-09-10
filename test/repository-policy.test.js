@@ -48,6 +48,8 @@ test('approved planning baseline, historical release, current release and projec
     'docs/handover/CHATGPT-WORK-INSTRUCTIONS.md',
     'docs/runbooks/PERSISTENT-MAIL-MEMORY.md',
     'docs/runbooks/UBUNTU-DEPLOYMENT.md',
+    'docs/runbooks/GROK-BOT-MAIL-OPERATOR-KO.md',
+    'docs/planning/attachments-drive-v1/README.md',
     'deploy/systemd/mail-intelligence-tailnet.service',
     'src/security/tcp-allowlist-proxy.js',
     'scripts/activate-tailnet-proxy.sh',
@@ -95,6 +97,10 @@ test('package release contract is pinned to v1.2.2 verification', async () => {
   assert.match(packageJson.scripts.check, /mail-assistant-tools\.js/);
   assert.match(packageJson.scripts.check, /mail-assistant\.js/);
   assert.match(packageJson.scripts.check, /verify-v1\.2\.2-operational-safety\.mjs/);
+  assert.match(packageJson.scripts.check, /service-token\.js/);
+  assert.match(packageJson.scripts.check, /send-drafts\.js/);
+  assert.match(packageJson.scripts.check, /attachment-access\.js/);
+  assert.match(packageJson.scripts.check, /microsoft-graph-send\.js/);
   assert.match(packageJson.scripts.check, /tcp-allowlist-proxy\.js/);
   assert.match(packageJson.scripts.check, /verify-tailnet-exposure\.mjs/);
   assert.match(packageJson.scripts.check, /oauth-cli-provider\.js/);

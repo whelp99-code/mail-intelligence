@@ -82,7 +82,9 @@ assert.match(packageJson.scripts['verify:v1.2.2'], /evaluate:precision/);
 assert.match(packageJson.scripts['verify:v1.2.2'], /verify:oauth/);
 assert.match(packageJson.scripts.check, /backup-restore\.js/);
 
-assert.equal(serverSource.includes('/sendMail'), false, 'Graph sendMail implementation must not exist');
+assert.equal(serverSource.includes('/sendMail'), false, 'Graph sendMail implementation must not exist in server.mjs');
+assert.match(serverSource, /HUMAN_APPROVAL_REQUIRED/, 'service tokens must be denied at a human-approval boundary');
+assert.match(serverSource, /requireReadableAccess/, 'bounded service-token read access must exist');
 assert.equal(/method:\s*['"]PATCH['"]/.test(serverSource), false, 'Graph PATCH mutation must not exist');
 assert.equal(serverSource.includes('notifyDataPlaneHook'), false, 'data-plane mutation helper must not exist');
 assert.equal(serverSource.includes('Mail.Send'), false, 'server must not request Mail.Send');

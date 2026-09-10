@@ -162,6 +162,8 @@ openid profile offline_access User.Read Mail.Read
 
 `Mail.Send`와 `Mail.ReadWrite`는 요청하지 않습니다. 환경변수로 쓰기 기능을 요청해도 v1.2.2 안전 정책이 기본적으로 차단합니다.
 
+Grok Bot / 윤비서 SSH 운영은 서비스 토큰으로 검색·메일 읽기·첨부 메타데이터/다운로드·발송 초안 생성만 할 수 있습니다. 승인·실제 Graph 발송은 사람 세션과 `MAIL_INTELLIGENCE_ALLOW_SEND=1`이 있을 때만 가능하며, 기본값은 OFF입니다. 운영 계약은 `docs/runbooks/GROK-BOT-MAIL-OPERATOR-KO.md`를 봅니다.
+
 ### 로컬 전용 서버
 
 기본 주소:

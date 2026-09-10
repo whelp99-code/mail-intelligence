@@ -278,6 +278,55 @@ export class GraphMailClient {
       code: 'GRAPH_MAX_PAGES_EXCEEDED',
     });
   }
+
+  async requestBinary(url) {
+    const target = this.validateContinuationUrl(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImpl(target, {
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          Accept: 'application/octet-stream',
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const statusCode = Number(response.status || 0);
+        const retryable = statusCode === 429 || statusCode >= 500;
+        throw new GraphMailError(`Microsoft Graph binary request failed with HTTP ${statusCode}.`, {
+          code: retryable ? 'GRAPH_TRANSIENT_ERROR' : 'GRAPH_REQUEST_FAILED',
+          statusCode,
+          retryable,
+        });
+      }
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (error instanceof GraphMailError) throw error;
+      if (error?.name === 'AbortError') {
+        throw new GraphMailError(`Microsoft Graph request timed out after ${this.timeoutMs}ms.`, {
+          code: 'GRAPH_TIMEOUT',
+          retryable: true,
+        });
+      }
+      throw new GraphMailError('Microsoft Graph network request failed.', {
+        code: 'GRAPH_NETWORK_ERROR',
+        retryable: true,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async fetchAttachmentContent({ mailboxPath = '/me', messageId, attachmentId }) {
+    const path = safeMailboxPath(mailboxPath);
+    const id = String(messageId || '').trim();
+    const attachment = String(attachmentId || '').trim();
+    if (!id) throw new Error('messageId is required.');
+    if (!attachment) throw new Error('attachmentId is required.');
+    const url = `${this.graphBaseUrl}${path}/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachment)}/$value`;
+    return this.requestBinary(url);
+  }
 }
 
 export const graphMailInternals = {

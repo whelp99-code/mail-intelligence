@@ -164,6 +164,29 @@ function rowToMessage(row, recipients = []) {
   };
 }
 
+function outboxRow(row) {
+  if (!row) return null;
+  const payload = parseJson(row.payload_json, {});
+  const receipt = payload.receipt || null;
+  const draftPayload = { ...payload };
+  delete draftPayload.receipt;
+  return {
+    id: number(row.id),
+    idempotencyKey: row.idempotency_key,
+    actionType: row.action_type,
+    destination: row.destination,
+    payload: draftPayload,
+    receipt,
+    status: row.status,
+    approvalId: row.approval_id,
+    attemptCount: number(row.attempt_count),
+    lastErrorCode: row.last_error_code,
+    lastErrorMessage: row.last_error_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function attachmentRow(row) {
   if (!row) return null;
   return {
@@ -2120,6 +2143,85 @@ export class SQLiteMailStore {
       checkpointedFrames: number(row.checkpointed ?? Object.values(row)[2]),
       ...this.walStatus(),
     };
+  }
+
+  createOutboxItem({
+    idempotencyKey,
+    actionType,
+    destination = '',
+    payload = {},
+    status = 'pending-approval',
+  } = {}) {
+    const key = String(idempotencyKey || '').trim();
+    const type = String(actionType || '').trim();
+    if (!key) throw new Error('idempotencyKey is required.');
+    if (!type) throw new Error('actionType is required.');
+    const allowed = new Set(['disabled', 'pending-approval', 'approved', 'executing', 'completed', 'failed', 'cancelled']);
+    if (!allowed.has(status)) throw new Error('Invalid outbox status.');
+    const now = this.now();
+    const result = this.db.prepare(`
+      INSERT INTO outbox_items(
+        idempotency_key, action_type, destination, payload_json, status,
+        approval_id, attempt_count, last_error_code, last_error_message,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, '', 0, '', '', ?, ?)
+    `).run(key, type, String(destination || ''), jsonText(payload, {}), status, now, now);
+    return this.getOutboxItem(Number(result.lastInsertRowid));
+  }
+
+  getOutboxItem(id) {
+    const row = this.db.prepare('SELECT * FROM outbox_items WHERE id = ?').get(Number(id));
+    return outboxRow(row);
+  }
+
+  getOutboxItemByKey(idempotencyKey) {
+    const row = this.db.prepare('SELECT * FROM outbox_items WHERE idempotency_key = ?')
+      .get(String(idempotencyKey || ''));
+    return outboxRow(row);
+  }
+
+  listOutboxItems({ actionType = '', status = '', limit = 25 } = {}) {
+    const bounded = boundedLimit(limit, 25, 100);
+    const rows = this.db.prepare(`
+      SELECT * FROM outbox_items
+      WHERE (? = '' OR action_type = ?)
+        AND (? = '' OR status = ?)
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `).all(String(actionType || ''), String(actionType || ''), String(status || ''), String(status || ''), bounded);
+    return rows.map(outboxRow);
+  }
+
+  updateOutboxItem(id, patch = {}) {
+    const current = this.getOutboxItem(id);
+    if (!current) return null;
+    const allowed = new Set(['disabled', 'pending-approval', 'approved', 'executing', 'completed', 'failed', 'cancelled']);
+    const nextStatus = patch.status || current.status;
+    if (!allowed.has(nextStatus)) throw new Error('Invalid outbox status.');
+    const payload = { ...current.payload };
+    if (Object.hasOwn(patch, 'receipt')) payload.receipt = patch.receipt;
+    const now = this.now();
+    this.db.prepare(`
+      UPDATE outbox_items
+      SET payload_json = ?,
+          status = ?,
+          approval_id = ?,
+          attempt_count = ?,
+          last_error_code = ?,
+          last_error_message = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      jsonText(payload, {}),
+      nextStatus,
+      String(patch.approvalId ?? current.approvalId ?? ''),
+      Math.max(Number(patch.attemptCount ?? current.attemptCount ?? 0), 0),
+      String(patch.lastErrorCode ?? current.lastErrorCode ?? ''),
+      String(patch.lastErrorMessage ?? current.lastErrorMessage ?? ''),
+      now,
+      Number(id),
+    );
+    return this.getOutboxItem(id);
   }
 
   backupTo(targetPath) {
