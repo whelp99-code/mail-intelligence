@@ -61,7 +61,7 @@ test('verified backup records a manifest and restore atomically replaces the liv
     let mailbox = upsert(store, '백업 기준 상태', 'change-1');
     const backup = await createVerifiedBackup({ store, targetPath: backupPath });
     assert.equal(backup.validation.ok, true);
-    assert.equal(backup.schemaVersion, 5);
+    assert.equal(backup.schemaVersion, 9);
     assert.match(backup.checksumSha256, /^[a-f0-9]{64}$/);
     assert.equal(store.listBackupManifests().length, 1);
     assert.equal(store.listBackupManifests()[0].backupName, 'baseline.sqlite');

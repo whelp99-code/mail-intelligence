@@ -88,7 +88,7 @@ test('migrations create a healthy v4 precision-intelligence database', async (t)
   const { directory, databasePath, store } = await withStore(t);
   const status = store.storageStatus();
   assert.equal(status.ready, true);
-  assert.equal(status.schemaVersion, 5);
+  assert.equal(status.schemaVersion, 9);
   assert.deepEqual(status.integrity.quickCheck, ['ok']);
   assert.equal(status.counts.messages, 0);
   await assertPrivateFile(databasePath);

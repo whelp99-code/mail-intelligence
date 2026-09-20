@@ -31,7 +31,7 @@ test('mail-memory admin CLI supports status, integrity, verified backup and offl
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.equal(result.body.authoritativeStore, 'sqlite');
     assert.equal(result.body.ready, true);
-    assert.equal(result.body.schemaVersion, 5);
+    assert.equal(result.body.schemaVersion, 9);
 
     result = runAdmin(dataDir, ['integrity']);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -42,7 +42,7 @@ test('mail-memory admin CLI supports status, integrity, verified backup and offl
     result = runAdmin(dataDir, ['backup', backupPath]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.equal(result.body.validation.ok, true);
-    assert.equal(result.body.schemaVersion, 5);
+    assert.equal(result.body.schemaVersion, 9);
     assert.match(result.body.checksumSha256, /^[a-f0-9]{64}$/);
     await access(backupPath);
     assert.equal((await stat(backupPath)).mode & 0o777, 0o600);

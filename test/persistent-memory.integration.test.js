@@ -133,7 +133,7 @@ test('SQLite remains authoritative across restart for mail, feedback, FTS, jobs 
     running = startServer(dataDir, port);
     const health = await waitForHealth(baseUrl, running.output);
     assert.equal(health.storage.authoritativeStore, 'sqlite');
-    assert.equal(health.storage.schemaVersion, 5);
+    assert.equal(health.storage.schemaVersion, 9);
 
     let cookie = await sessionCookie(baseUrl);
     let result = await apiJson(baseUrl, '/api/storage/status', { cookie });

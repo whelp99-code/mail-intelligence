@@ -2777,14 +2777,19 @@ mailMemory = new PersistentMailMemoryRuntime({
   ),
 });
 const mailMemoryInitialization = await mailMemory.initialize();
-const draftTokenPath = String(process.env.MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE || '');
-let draftServiceToken = String(process.env.MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN || '');
-if (draftTokenPath) {
-  const metadata = await stat(draftTokenPath);
-  if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error('Draft service token file must be private.');
-  draftServiceToken = (await readFile(draftTokenPath, 'utf8')).trim();
+async function readPrivateToken(envValue, fileEnv, label) {
+  const filePath = String(process.env[fileEnv] || '');
+  let token = String(process.env[envValue] || '');
+  if (filePath) {
+    const metadata = await stat(filePath);
+    if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error(`${label} token file must be private.`);
+    token = (await readFile(filePath, 'utf8')).trim();
+  }
+  if (token && token.length < 32) throw new Error(`${label} token must contain at least 32 characters.`);
+  return token;
 }
-if (draftServiceToken && draftServiceToken.length < 32) throw new Error('Draft service token must contain at least 32 characters.');
+const draftServiceToken = await readPrivateToken('MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE', 'Grok draft');
+const jarvisDraftToken = await readPrivateToken('MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN_FILE', 'JARVIS draft');
 const mailSendApi = createMailSendApi({
   getStore: () => requireMailMemory().store,
   getMailbox: () => {
@@ -2795,6 +2800,7 @@ const mailSendApi = createMailSendApi({
   readBody: readJsonBody,
   getAccessToken: getGraphAccessToken,
   serviceToken: draftServiceToken,
+  agentTokens: { 'grok-bot': draftServiceToken, jarvis: jarvisDraftToken },
   allowSend: safetyPolicy.capabilities.mailSend,
   accessKeyRequired,
 });

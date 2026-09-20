@@ -12,7 +12,13 @@ function equal(value, expected) {
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
 }
 
-export function createMailSendApi({ getStore, getMailbox, getSession, readBody, getAccessToken, serviceToken = '', allowSend = false, accessKeyRequired = false, clientFactory = (options) => new GraphSendClient(options) }) {
+export function createMailSendApi({
+  getStore, getMailbox, getSession, readBody, getAccessToken,
+  serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
+  clientFactory = (options) => new GraphSendClient(options),
+}) {
+  const tokens = { ...agentTokens };
+  if (serviceToken) tokens['grok-bot'] = tokens['grok-bot'] || serviceToken;
   const reconciliation = new Map();
   return async (req, url) => {
     const match = /^\/api\/mail\/send-drafts(?:\/([0-9a-f-]{36})(?:\/(approve|cancel))?)?$/.exec(url.pathname);
@@ -21,8 +27,17 @@ export function createMailSendApi({ getStore, getMailbox, getSession, readBody, 
     const authorization = String(req.headers.authorization || '');
     const bot = authorization.startsWith('Bearer ');
     let session;
+    let agentSource = null;
     if (bot) {
-      if (serviceToken.length < 32 || !equal(authorization.slice(7), serviceToken)) fail(401, 'DRAFT_TOKEN_REQUIRED');
+      const presented = authorization.slice(7);
+      for (const source of ['grok-bot', 'jarvis']) {
+        const token = String(tokens[source] || '');
+        if (token.length >= 32 && equal(presented, token)) {
+          agentSource = source;
+          break;
+        }
+      }
+      if (!agentSource) fail(401, 'DRAFT_TOKEN_REQUIRED');
       if (action) fail(403, 'HUMAN_APPROVAL_REQUIRED');
       if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!id && req.method === 'GET') fail(403, 'DRAFT_LIST_FORBIDDEN');
@@ -42,13 +57,13 @@ export function createMailSendApi({ getStore, getMailbox, getSession, readBody, 
       return { ...draft, original_message: source ? { subject: source.subject, webLink: source.web_link } : null };
     };
     if (!id && req.method === 'POST') {
-      const result = drafts.create(mailbox.id, bot ? 'grok-bot' : 'ui', await readBody(req));
+      const result = drafts.create(mailbox.id, bot ? agentSource : 'ui', await readBody(req));
       return { status: result.replay ? 200 : 201, body: { draft: decorate(result.draft), replay: result.replay } };
     }
     if (!id && req.method === 'GET') return { status: 200, body: { drafts: drafts.list(mailbox.id).map(decorate), send_enabled: allowSend } };
     if (!id) fail(405, 'METHOD_NOT_ALLOWED');
     let draft = drafts.get(mailbox.id, id);
-    if (bot && draft.source !== 'grok-bot') fail(404, 'DRAFT_NOT_FOUND');
+    if (bot && draft.owner_principal !== `agent:${agentSource}`) fail(404, 'DRAFT_NOT_FOUND');
     const reconcile = async () => {
       if (!reconciliation.has(id)) {
         const operation = (async () => {

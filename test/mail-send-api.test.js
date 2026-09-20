@@ -11,6 +11,7 @@ function fixture(t, options = {}) {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE mailboxes(id INTEGER PRIMARY KEY); INSERT INTO mailboxes VALUES(1); CREATE TABLE messages(id INTEGER PRIMARY KEY,mailbox_id INTEGER,deleted_at TEXT,subject TEXT,web_link TEXT);');
   db.exec(readFileSync(new URL('../migrations/005_mail_send_drafts.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/009_mail_send_draft_principals.sql', import.meta.url), 'utf8'));
   t.after(() => db.close());
   let sends = 0;
   const api = createMailSendApi({
@@ -85,4 +86,36 @@ test('unauthenticated operator mode cannot enable approval', async (t) => {
   const f = fixture(t, { accessKeyRequired: false });
   const draft = (await f.call('POST', '', body, f.bot)).body.draft;
   await assert.rejects(f.call('POST', `/${draft.draft_id}/approve`, { confirm: true, payload_digest: draft.payload_digest }, f.human), { code: 'AUTHENTICATED_OPERATOR_REQUIRED' });
+});
+
+const jarvisSecret = 'synthetic-jarvis-draft-token-0123456789ab';
+
+test('jarvis may create and read own draft status only', async (t) => {
+  const f = fixture(t, { agentTokens: { 'grok-bot': secret, jarvis: jarvisSecret } });
+  const jarvis = { authorization: `Bearer ${jarvisSecret}` };
+  const created = await f.call('POST', '', { ...body, request_id: 'jarvis-request-001' }, jarvis);
+  assert.equal(created.status, 201);
+  assert.equal(created.body.draft.source, 'jarvis');
+  assert.equal(created.body.draft.owner_principal, 'agent:jarvis');
+  assert.equal((await f.call('GET', '/' + created.body.draft.draft_id, {}, jarvis)).status, 200);
+  await assert.rejects(f.call('GET', '', {}, jarvis), { code: 'DRAFT_LIST_FORBIDDEN' });
+  await assert.rejects(f.call('POST', `/${created.body.draft.draft_id}/approve`, { confirm: true, payload_digest: created.body.draft.payload_digest }, jarvis), { code: 'HUMAN_APPROVAL_REQUIRED' });
+  await assert.rejects(f.call('POST', `/${created.body.draft.draft_id}/cancel`, {}, jarvis), { code: 'HUMAN_APPROVAL_REQUIRED' });
+  assert.equal(f.sends(), 0);
+});
+
+test('other-agent read, stolen token, and human spoof are rejected', async (t) => {
+  const f = fixture(t, { agentTokens: { 'grok-bot': secret, jarvis: jarvisSecret } });
+  const jarvis = { authorization: `Bearer ${jarvisSecret}` };
+  const grokDraft = (await f.call('POST', '', body, f.bot)).body.draft;
+  const jarvisDraft = (await f.call('POST', '', { ...body, request_id: 'jarvis-request-002' }, jarvis)).body.draft;
+  await assert.rejects(f.call('GET', '/' + grokDraft.draft_id, {}, jarvis), { code: 'DRAFT_NOT_FOUND' });
+  await assert.rejects(f.call('GET', '/' + jarvisDraft.draft_id, {}, f.bot), { code: 'DRAFT_NOT_FOUND' });
+  await assert.rejects(f.call('POST', '', body, { authorization: 'Bearer stolen-token-that-is-long-enough-0123' }), { code: 'DRAFT_TOKEN_REQUIRED' });
+  await assert.rejects(
+    f.call('POST', `/${grokDraft.draft_id}/approve`, { confirm: true, payload_digest: grokDraft.payload_digest }, { ...f.human, authorization: `Bearer ${jarvisSecret}` }),
+    { code: 'HUMAN_APPROVAL_REQUIRED' },
+  );
+  const approved = await f.call('POST', `/${jarvisDraft.draft_id}/approve`, { confirm: true, payload_digest: jarvisDraft.payload_digest }, f.human);
+  assert.equal(approved.body.draft.status, 'sent');
 });

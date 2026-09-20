@@ -61,7 +61,9 @@ export class MailSendDrafts {
   }
 
   create(mailboxId, source, input) {
-    if (!['ui', 'grok-bot'].includes(source)) fail(400, 'INVALID_DRAFT_SOURCE');
+    const principals = { ui: 'human:ui', 'grok-bot': 'agent:grok-bot', jarvis: 'agent:jarvis' };
+    const ownerPrincipal = principals[source];
+    if (!ownerPrincipal) fail(400, 'INVALID_DRAFT_SOURCE');
     const keys = new Set(['request_id', 'to', 'cc', 'subject', 'body_text', 'message_id']);
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !keys.has(key))) {
       fail(400, 'INVALID_DRAFT_FIELDS');
@@ -89,8 +91,8 @@ export class MailSendDrafts {
       const id = randomUUID();
       const status = payload.to.length && payload.subject && payload.body_text ? 'needs_approval' : 'needs_clarification';
       this.db.prepare(`INSERT INTO mail_send_drafts
-        (draft_id,mailbox_id,request_id,source,message_id,to_json,cc_json,subject,body_text,payload_digest,status,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, mailboxId, input.request_id, source, payload.message_id,
+        (draft_id,mailbox_id,request_id,source,owner_principal,message_id,to_json,cc_json,subject,body_text,payload_digest,status,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, mailboxId, input.request_id, source, ownerPrincipal, payload.message_id,
         JSON.stringify(payload.to), JSON.stringify(payload.cc), payload.subject, payload.body_text, digest, status, this.now());
       this.event(id, status, source);
       return { draft: this.get(mailboxId, id), replay: false };

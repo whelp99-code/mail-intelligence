@@ -8,6 +8,7 @@ function fixture(t) {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE mailboxes(id INTEGER PRIMARY KEY); INSERT INTO mailboxes VALUES(1),(2); CREATE TABLE messages(id INTEGER PRIMARY KEY,mailbox_id INTEGER,deleted_at TEXT); INSERT INTO messages VALUES(1,1,NULL),(2,2,NULL);');
   db.exec(readFileSync(new URL('../migrations/005_mail_send_drafts.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/009_mail_send_draft_principals.sql', import.meta.url), 'utf8'));
   t.after(() => db.close());
   return new MailSendDrafts(db);
 }
@@ -89,4 +90,16 @@ test('cancelled and failed drafts cannot be reapproved', (t) => {
   service.approve(1, other.draft_id, approval(other)); service.claim(1, other.draft_id);
   service.recordOutcome(1, other.draft_id, { failureCode: 'GRAPH_REJECTED' });
   assert.throws(() => service.approve(1, other.draft_id, approval(other)), { code: 'DRAFT_NOT_APPROVABLE' });
+});
+
+test('jarvis drafts own a distinct principal from grok-bot and ui', (t) => {
+  const service = fixture(t);
+  const grok = service.create(1, 'grok-bot', input).draft;
+  const jarvis = service.create(1, 'jarvis', { ...input, request_id: 'jarvis-request-001' }).draft;
+  const ui = service.create(1, 'ui', { ...input, request_id: 'ui-request-001' }).draft;
+  assert.equal(grok.owner_principal, 'agent:grok-bot');
+  assert.equal(jarvis.owner_principal, 'agent:jarvis');
+  assert.equal(ui.owner_principal, 'human:ui');
+  assert.notEqual(grok.draft_id, jarvis.draft_id);
+  assert.throws(() => service.create(1, 'other-agent', input), { code: 'INVALID_DRAFT_SOURCE' });
 });
