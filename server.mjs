@@ -25,6 +25,8 @@ import {
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
+import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
+import { createSendReconciliationWorker } from './src/application/send-reconciliation-worker.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
@@ -2809,9 +2811,22 @@ mailMemoryHealth = {
   schemaVersion: mailMemoryInitialization.storage.schemaVersion,
   sizeBytes: mailMemoryInitialization.storage.sizeBytes,
 };
+const reconciliationWorker = createSendReconciliationWorker({
+  db: mailMemory.store.db,
+  getAccessToken: () => getGraphAccessToken(),
+  clientFactory: ({ accessToken, mailboxUser }) => new GraphSendClient({ accessToken, mailboxUser }),
+});
+const reconciliationInterval = setInterval(() => {
+  reconciliationWorker.runOnce().catch((error) => {
+    console.error('[mail-reconciliation] worker run failed:', error);
+  });
+}, Math.max(5_000, Number(process.env.MAIL_SEND_RECONCILIATION_INTERVAL_MS || 30_000)));
+
+reconciliationInterval.unref();
 
 let shutdownStarted = false;
 function closePersistentMailMemory() {
+  clearInterval(reconciliationInterval);
   if (!mailMemory) return;
   mailMemory.close();
   mailMemory = null;

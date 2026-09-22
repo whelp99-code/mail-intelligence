@@ -9,8 +9,17 @@ function digest(value) {
 /** Read-only journey projection; it records evidence and never grants authority. */
 export function buildMailJourney({ request, work, draft, review, provider, followUp } = {}) {
   const sourceText = [request?.subject, request?.body].filter(Boolean).join('\n');
+  const acceptanceEvidence = provider?.acceptanceEvidence || provider?.evidence || [];
+  const acceptanceStatus = provider?.accepted === true || provider?.httpStatus === 202
+    ? 'accepted_202'
+    : 'not_recorded';
   return {
     traceId: String(request?.traceId || digest({ request, work, draft }).slice(0, 32)),
+    agentSummary: {
+      acceptance: { status: acceptanceStatus, evidence: acceptanceEvidence },
+      providerOutcome: { status: provider?.status || 'unknown', evidence: provider?.evidence || [] },
+      businessResolution: { status: followUp?.status || 'unresolved', evidence: followUp?.evidence || [] },
+    },
     stages: [
       { name: 'request', status: request ? 'complete' : 'missing', evidence: request?.evidence || [] },
       { name: 'work', status: work ? 'candidate' : 'unassigned', evidence: work?.evidence || [] },
