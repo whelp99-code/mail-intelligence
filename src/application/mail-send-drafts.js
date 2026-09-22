@@ -48,6 +48,27 @@ export class MailSendDrafts {
       .run(id, status, actor, this.now(), reason);
   }
 
+  hasReconciliationQueue() {
+    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_send_reconciliation_jobs'").get());
+  }
+
+  enqueueReconciliation(draft, { failureCode = '' } = {}) {
+    if (!this.hasReconciliationQueue() || draft.status !== 'sending') return;
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO mail_send_reconciliation_jobs
+        (draft_id, mailbox_id, state, next_attempt_at, last_failure_code, created_at, updated_at)
+      VALUES (?, ?, 'pending', ?, ?, ?, ?)
+      ON CONFLICT(draft_id) DO UPDATE SET
+        state=CASE WHEN mail_send_reconciliation_jobs.state IN ('complete', 'leased') THEN mail_send_reconciliation_jobs.state ELSE 'pending' END,
+        next_attempt_at=CASE WHEN mail_send_reconciliation_jobs.state IN ('complete', 'leased') THEN mail_send_reconciliation_jobs.next_attempt_at ELSE excluded.next_attempt_at END,
+        last_failure_code=CASE WHEN excluded.last_failure_code <> '' THEN excluded.last_failure_code ELSE mail_send_reconciliation_jobs.last_failure_code END,
+        lease_owner=CASE WHEN mail_send_reconciliation_jobs.state IN ('complete', 'leased') THEN mail_send_reconciliation_jobs.lease_owner ELSE '' END,
+        lease_expires_at=CASE WHEN mail_send_reconciliation_jobs.state IN ('complete', 'leased') THEN mail_send_reconciliation_jobs.lease_expires_at ELSE NULL END,
+        updated_at=excluded.updated_at
+    `).run(draft.draft_id, draft.mailbox_id, now, String(failureCode), now, now);
+  }
+
   get(mailboxId, id) {
     const row = this.db.prepare('SELECT * FROM mail_send_drafts WHERE mailbox_id=? AND draft_id=?').get(mailboxId, id);
     if (!row) fail(404, 'DRAFT_NOT_FOUND');
@@ -122,6 +143,7 @@ export class MailSendDrafts {
       const changed = this.db.prepare('UPDATE mail_send_drafts SET status=? WHERE draft_id=? AND status=?').run('sending', id, 'approved');
       if (changed.changes !== 1) return false;
       this.event(id, 'sending', 'mail-intelligence');
+      this.enqueueReconciliation(this.get(mailboxId, id));
       return true;
     });
   }
@@ -148,11 +170,13 @@ export class MailSendDrafts {
         this.db.prepare('UPDATE mail_send_drafts SET status=?,graph_message_id=?,sent_at=?,failure_reason=NULL WHERE draft_id=?')
           .run('sent', graphMessageId, sentAt, id);
         this.event(id, 'sent', 'mail-intelligence');
+        if (this.hasReconciliationQueue()) this.db.prepare("UPDATE mail_send_reconciliation_jobs SET state='complete', lease_owner='', lease_expires_at=NULL, updated_at=? WHERE draft_id=?").run(this.now(), id);
       } else {
         if (!/^[A-Z][A-Z0-9_]{2,79}$/.test(failureCode)) fail(400, 'INVALID_FAILURE_CODE');
         const status = uncertain ? 'sending' : 'failed';
         this.db.prepare('UPDATE mail_send_drafts SET status=?,failure_reason=? WHERE draft_id=?').run(status, failureCode, id);
         this.event(id, status, 'mail-intelligence', failureCode);
+        if (uncertain) this.enqueueReconciliation(this.get(mailboxId, id), { failureCode });
       }
       return this.get(mailboxId, id);
     });

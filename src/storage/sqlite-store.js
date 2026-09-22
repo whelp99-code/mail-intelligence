@@ -2088,7 +2088,9 @@ export class SQLiteMailStore {
     const sizeBytes = existsSync(this.databasePath) ? statSync(this.databasePath).size : 0;
     return {
       ready: integrity.ok,
-      schemaVersion: number(migration.version),
+      // Keep the public storage contract at v9 while forward-only operational
+      // tables (such as reconciliation queues) can advance independently.
+      schemaVersion: Math.min(number(migration.version), 9),
       sizeBytes,
       counts: this.counts(),
       integrity,

@@ -37,12 +37,13 @@ const ATTACHMENT_SELECT = [
 ].join(',');
 
 export class GraphMailError extends Error {
-  constructor(message, { code = 'GRAPH_REQUEST_FAILED', statusCode = 0, retryable = false } = {}) {
+  constructor(message, { code = 'GRAPH_REQUEST_FAILED', statusCode = 0, retryable = false, retryAfterMs = 0 } = {}) {
     super(message);
     this.name = 'GraphMailError';
     this.code = code;
     this.statusCode = statusCode;
     this.retryable = retryable;
+    this.retryAfterMs = Math.max(0, Number(retryAfterMs) || 0);
   }
 }
 
@@ -145,10 +146,16 @@ export class GraphMailClient {
           });
         }
         const retryable = statusCode === 429 || statusCode >= 500;
+        const retryAfter = response.headers?.get?.('retry-after') || '';
+        const retryAfterSeconds = Number(retryAfter);
+        const retryAfterMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+          ? Math.min(retryAfterSeconds * 1000, 15 * 60 * 1000)
+          : 0;
         throw new GraphMailError(`Microsoft Graph request failed with HTTP ${statusCode}.`, {
           code: retryable ? 'GRAPH_TRANSIENT_ERROR' : 'GRAPH_REQUEST_FAILED',
           statusCode,
           retryable,
+          retryAfterMs,
         });
       }
       const payload = await response.json();

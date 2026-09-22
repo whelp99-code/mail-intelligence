@@ -14,7 +14,7 @@ export async function retryOperation(operation, {
     } catch (error) {
       lastError = error;
       if (attempt >= boundedAttempts || !shouldRetry(error)) throw error;
-      await sleep(baseDelayMs * attempt);
+      await sleep(Math.max(baseDelayMs * attempt, Number(error?.retryAfterMs) || 0));
     }
   }
   throw lastError;
