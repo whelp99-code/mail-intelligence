@@ -292,6 +292,26 @@ test('VACUUM INTO backup is independently readable and integrity-checked', async
 });
 
 
+test('BEGIN failure resets tx reentrancy and restores owner-only database files', async (t) => {
+  const { store, databasePath } = await withStore(t);
+  const original = store.db.exec.bind(store.db);
+  store.db.exec = (sql) => {
+    if (/^BEGIN\b/i.test(String(sql))) {
+      throw Object.assign(new Error('injected BEGIN IMMEDIATE failure'), { code: 'TX_BEGIN_FAILED' });
+    }
+    return original(sql);
+  };
+  await chmod(databasePath, 0o644);
+  assert.throws(() => store.transaction(() => store.setMetadata('tx-begin', 'should-not-write')), { code: 'TX_BEGIN_FAILED' });
+  store.db.exec = original;
+  assert.equal(store.txDepth, 0);
+  assert.equal((await stat(databasePath)).mode & 0o777, 0o600);
+  assert.equal(store.getMetadata('tx-begin', null), null);
+  store.transaction(() => store.setMetadata('tx-begin', 'recovered'));
+  assert.equal(store.getMetadata('tx-begin'), 'recovered');
+  assert.equal(store.txDepth, 0);
+});
+
 test('message reads preserve folder direction and lifecycle metadata', async (t) => {
   const { store } = await withStore(t);
   const mailbox = store.ensureMailbox({ key: 'jm@example.com', address: 'jm@example.com' });

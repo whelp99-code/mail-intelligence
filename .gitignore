@@ -17,6 +17,11 @@ mail-intelligence.sqlite-*
 /data/
 /backups/
 /artifacts/
+
+# Phase 1B Notion read-only collect (untracked live artifacts / operator secrets)
+data/notion-readonly/
+**/notion-readonly*.token
+**/notion-database-map.local.json
 attachment-archive.json
 attachment-archive-meta.json
 accounts.json

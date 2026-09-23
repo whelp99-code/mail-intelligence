@@ -11,6 +11,14 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
+import {
+  WORKLINK_PROJECTION_PROVIDER,
+  WORKLINK_PROJECTION_VERSION,
+  classificationWritePayload,
+  isProtectedWorkLinkProjection,
+  isWorkLinkDerivedClassification,
+  workLinkCandidateProjection,
+} from '../domain/work-link-projection.js';
 
 const STATUS_VALUES = new Set(['urgent', 'active', 'waiting', 'done', 'reference']);
 const FEEDBACK_VALUES = new Set(['urgent', 'active', 'waiting', 'done', 'reference']);
@@ -93,6 +101,21 @@ function ensurePrivateDirectorySync(directoryPath) {
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function workLinkSourceSnapshot(messages, toMessage = (value) => value) {
+  const hash = createHash('sha256').update('worklink-source-v1\n');
+  let count = 0;
+  for (const value of messages) {
+    const message = toMessage(value);
+    hash.update(JSON.stringify([
+      message.databaseId, message.id, message.changeKey, message.conversationId,
+      message.subject, message.from, message.fromName, message.body, message.bodyPreview,
+      message.parentFolderId, message.receivedAt, message.sentAt, message.deletedAt,
+    ])).update('\n');
+    count += 1;
+  }
+  return { count, hash: hash.digest('hex') };
 }
 
 const SENT_FOLDER_PATTERN = /^(?:sent|sentitems|sent items|sent mail|보낸 편지함|보낸메일함|보낸 메일함)$/i;
@@ -260,6 +283,7 @@ export class SQLiteMailStore {
     this.migrationsDir = resolve(migrationsDir);
     this.now = now;
     this.closed = false;
+    this.txDepth = 0;
     const databaseDirectory = dirname(this.databasePath);
     ensurePrivateDirectorySync(databaseDirectory);
     this.db = new DatabaseSync(this.databasePath);
@@ -320,16 +344,31 @@ export class SQLiteMailStore {
   }
 
   transaction(operation) {
-    this.db.exec('BEGIN IMMEDIATE;');
+    if (this.txDepth > 0) return operation();
+    this.txDepth += 1;
+    let began = false;
     try {
+      try {
+        this.db.exec('BEGIN IMMEDIATE;');
+        began = true;
+      } catch (error) {
+        throw Object.assign(error, { code: error?.code || 'TX_BEGIN_FAILED' });
+      }
       const result = operation();
       this.db.exec('COMMIT;');
-      this.protectDatabaseFiles();
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK;');
-      this.protectDatabaseFiles();
+      if (began) {
+        try {
+          this.db.exec('ROLLBACK;');
+        } catch {
+          // Keep the original commit/operation error.
+        }
+      }
       throw error;
+    } finally {
+      this.txDepth = 0;
+      this.protectDatabaseFiles();
     }
   }
 
@@ -848,6 +887,13 @@ export class SQLiteMailStore {
       SELECT * FROM message_recipients WHERE message_id = ? ORDER BY recipient_type, ordinal, id
     `);
     return rows.map((row) => rowToMessage(row, recipientQuery.all(row.id)));
+  }
+
+  getWorkLinkSourceSnapshot(mailboxId) {
+    const rows = this.db.prepare(`
+      SELECT * FROM messages WHERE mailbox_id = ? AND deleted_at IS NULL ORDER BY id ASC
+    `).iterate(mailboxId);
+    return workLinkSourceSnapshot(rows, rowToMessage);
   }
 
   getMessagesNeedingPrecision(mailboxId, { limit = 250 } = {}) {
@@ -2048,6 +2094,251 @@ export class SQLiteMailStore {
     }));
   }
 
+  saveWorkLink(mailboxId, link) {
+    if (link.status && link.status !== 'candidate') {
+      throw Object.assign(new Error('Phase 1 persists candidate WorkLinks only.'), { code: 'WORK_LINK_AUTO_CONFIRM_FORBIDDEN' });
+    }
+    const now = this.now();
+    const row = this.db.prepare(`
+      INSERT INTO work_links(
+        mailbox_id, message_id, graph_id, object_type, system, external_id,
+        name, confidence, evidence_json, status, corrected_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate', NULL, ?, ?)
+      ON CONFLICT(mailbox_id, message_id, system, object_type, external_id) DO UPDATE SET
+        name = excluded.name,
+        confidence = excluded.confidence,
+        evidence_json = excluded.evidence_json,
+        status = 'candidate',
+        corrected_by = NULL,
+        updated_at = excluded.updated_at
+      RETURNING *
+    `).get(
+      mailboxId,
+      Number(link.messageDatabaseId),
+      String(link.graphId || ''),
+      link.objectType,
+      link.system || 'notion',
+      String(link.externalId || ''),
+      String(link.name || ''),
+      Number(link.confidence),
+      jsonText(link.evidence || [], []),
+      now,
+      now,
+    );
+    return this.workLinkRow(row);
+  }
+
+  supersedeWorkLinks(mailboxId) {
+    this.db.prepare(`
+      UPDATE work_links
+      SET status = 'superseded', updated_at = ?
+      WHERE mailbox_id = ? AND status = 'candidate'
+    `).run(this.now(), mailboxId);
+  }
+
+  listWorkLinks(mailboxId, { includeSuperseded = false } = {}) {
+    const rows = this.db.prepare(`
+      SELECT * FROM work_links
+      WHERE mailbox_id = ? AND (? = 1 OR status = 'candidate')
+      ORDER BY updated_at DESC, id DESC
+    `).all(mailboxId, includeSuperseded ? 1 : 0);
+    return rows.map((row) => this.workLinkRow(row));
+  }
+
+  workLinkRow(row) {
+    if (!row) return null;
+    return {
+      id: number(row.id),
+      mailboxId: number(row.mailbox_id),
+      messageId: number(row.message_id),
+      graphId: row.graph_id,
+      objectType: row.object_type,
+      system: row.system,
+      externalId: row.external_id,
+      name: row.name,
+      confidence: Number(row.confidence),
+      evidence: parseJson(row.evidence_json, []),
+      status: row.status,
+      correctedBy: row.corrected_by || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  workLinkStats(mailboxId) {
+    const active = this.countMessages(mailboxId);
+    const linkedRow = this.db.prepare(`
+      SELECT COUNT(DISTINCT message_id) AS count
+      FROM work_links
+      WHERE mailbox_id = ? AND status = 'candidate'
+    `).get(mailboxId);
+    const linkedCandidate = number(linkedRow?.count);
+    const byTypeRows = this.db.prepare(`
+      SELECT object_type, COUNT(*) AS count
+      FROM work_links
+      WHERE mailbox_id = ? AND status = 'candidate'
+      GROUP BY object_type
+    `).all(mailboxId);
+    const byObjectType = Object.fromEntries(byTypeRows.map((row) => [row.object_type, number(row.count)]));
+    return {
+      active,
+      linkedCandidate,
+      unassigned: Math.max(active - linkedCandidate, 0),
+      byObjectType,
+    };
+  }
+
+  isProtectedWorkLinkProjection(classification) {
+    return isProtectedWorkLinkProjection(classification);
+  }
+
+  isWorkLinkDerivedClassification(classification) {
+    return isWorkLinkDerivedClassification(classification);
+  }
+
+  getWorkLinkRefreshState(mailboxId) {
+    const stored = this.getMetadata(`work_link_refresh:${mailboxId}`, null);
+    if (!stored || typeof stored !== 'object') {
+      return {
+        status: 'none',
+        completeness: 'none',
+        stale: false,
+        messagesSeen: 0,
+        messagesTotal: 0,
+        pages: 0,
+        revision: null,
+        watermarks: {
+          source: { at: null, count: 0 },
+          analysisComplete: { at: null, count: 0 },
+        },
+      };
+    }
+    return stored;
+  }
+
+  recordWorkLinkRefreshState(mailboxId, state) {
+    const previous = this.getWorkLinkRefreshState(mailboxId);
+    const next = {
+      ...previous,
+      ...state,
+      watermarks: {
+        source: {
+          at: state.watermarks?.source?.at ?? state.refreshedAt ?? this.now(),
+          count: state.watermarks?.source?.count ?? state.messagesSeen ?? 0,
+        },
+        analysisComplete: state.completeness === 'complete'
+          ? {
+            at: state.refreshedAt ?? this.now(),
+            count: state.watermarks?.analysisComplete?.count ?? state.created ?? 0,
+          }
+          : (previous.watermarks?.analysisComplete || { at: null, count: 0 }),
+      },
+    };
+    this.setMetadata(`work_link_refresh:${mailboxId}`, next);
+    return next;
+  }
+
+  applyWorkLinkCandidateResolution(mailboxId, graphId, link, { revision = null } = {}) {
+    const current = this.getPrecisionClassification(mailboxId, graphId);
+    if (isProtectedWorkLinkProjection(current)) return current;
+    const message = this.getMessageRecord(mailboxId, graphId);
+    if (!message) return current;
+    if (!link && !current) return null;
+
+    const candidate = workLinkCandidateProjection(link, revision);
+    if (!current) {
+      return this.savePrecisionClassification(mailboxId, graphId, {
+        workState: 'reference',
+        nextActor: 'unknown',
+        priority: 'normal',
+        projectResolution: 'candidate',
+        projectCandidate: candidate,
+        signals: [],
+        evidence: {},
+        confidence: { project: link.confidence },
+        reviewReasons: [],
+        source: 'rules',
+        provider: WORKLINK_PROJECTION_PROVIDER,
+        model: '',
+        promptVersion: WORKLINK_PROJECTION_VERSION,
+        reviewStatus: 'auto',
+      });
+    }
+
+    return this.savePrecisionClassification(mailboxId, graphId, classificationWritePayload(current, {
+      projectResolution: link ? 'candidate' : 'unassigned',
+      projectCandidate: link ? candidate : workLinkCandidateProjection(null, revision),
+      provider: WORKLINK_PROJECTION_PROVIDER,
+      promptVersion: WORKLINK_PROJECTION_VERSION,
+      confidence: {
+        ...(current.confidence && typeof current.confidence === 'object' ? current.confidence : {}),
+        project: link ? link.confidence : 0,
+      },
+    }));
+  }
+
+  commitWorkLinkRefresh(mailboxId, collected, { revision, sourceSnapshot, messagesTotal = collected.length, pages = 1 } = {}) {
+    return this.transaction(() => {
+      if (!sourceSnapshot?.hash || !Number.isInteger(sourceSnapshot.count)) {
+        throw Object.assign(new Error('WorkLink refresh requires a source snapshot.'), { code: 'WORKLINK_SOURCE_SNAPSHOT_REQUIRED' });
+      }
+      // Check inside BEGIN IMMEDIATE so a concurrent writer cannot race the swap.
+      const currentSource = this.getWorkLinkSourceSnapshot(mailboxId);
+      const collectedSource = workLinkSourceSnapshot(collected, (item) => item.message);
+      if ([currentSource, collectedSource].some((source) => (
+        source.hash !== sourceSnapshot.hash || source.count !== sourceSnapshot.count
+      ))) {
+        throw Object.assign(new Error('Mailbox source changed during WorkLink collection; retry refresh.'), { code: 'WORKLINK_SOURCE_CHANGED' });
+      }
+      this.supersedeWorkLinks(mailboxId);
+      const created = [];
+      const linkedGraphIds = new Set();
+      for (const { message, matches } of collected) {
+        if (!matches.length) {
+          this.applyWorkLinkCandidateResolution(mailboxId, message.id, null, { revision });
+          continue;
+        }
+        for (const match of matches) {
+          const saved = this.saveWorkLink(mailboxId, {
+            ...match,
+            messageDatabaseId: message.databaseId,
+            status: 'candidate',
+          });
+          created.push(saved);
+          linkedGraphIds.add(message.id);
+          this.applyWorkLinkCandidateResolution(mailboxId, message.id, saved, { revision });
+        }
+      }
+      const classifications = this.getPrecisionClassificationMap(mailboxId);
+      for (const [graphId, classification] of Object.entries(classifications)) {
+        if (linkedGraphIds.has(graphId)) continue;
+        if (isProtectedWorkLinkProjection(classification)) continue;
+        if (!isWorkLinkDerivedClassification(classification) && classification.projectResolution !== 'unassigned') {
+          continue;
+        }
+        this.applyWorkLinkCandidateResolution(mailboxId, graphId, null, { revision });
+      }
+      const refreshedAt = this.now();
+      const refresh = this.recordWorkLinkRefreshState(mailboxId, {
+        status: 'complete',
+        completeness: 'complete',
+        stale: false,
+        revision,
+        messagesSeen: collected.length,
+        messagesTotal,
+        pages,
+        created: created.length,
+        refreshedAt,
+        error: null,
+        watermarks: {
+          source: { at: refreshedAt, count: collected.length },
+          analysisComplete: { at: refreshedAt, count: created.length },
+        },
+      });
+      return { created, revision, refresh };
+    });
+  }
+
   counts() {
     const tables = [
       'mailboxes',
@@ -2068,6 +2359,7 @@ export class SQLiteMailStore {
       'precision_classification_events',
       'precision_corrections',
       'precision_correction_events',
+      'work_links',
     ];
     return Object.fromEntries(tables.map((table) => [
       table,

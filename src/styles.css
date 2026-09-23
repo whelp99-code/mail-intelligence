@@ -1163,6 +1163,30 @@ textarea {
   margin: 8px 0;
 }
 
+.work-link-stats {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.work-link-stats > p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 8px;
+}
+
+.work-link-stats dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+}
+
+.work-link-stats dd {
+  font-weight: 800;
+  margin: 0;
+}
+
 .project-form {
   align-items: end;
   display: grid;

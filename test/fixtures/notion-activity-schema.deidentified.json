@@ -1,0 +1,21 @@
+{
+  "schemaId": "syn-activity-schema",
+  "schemaHash": "sha256:778407843c4321c9e48c4ed661bfc11be4eaabaea3cc2e4bea4be38e6bdd6015",
+  "logicalDatabase": "활동·히스토리",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "source": "logical-names-from-crm-docs-and-review",
+  "operationalMapping": "unverified",
+  "properties": [
+    { "name": "활동명", "type": "title" },
+    { "name": "유형", "type": "select", "options": ["메일 수신", "메일 발신", "미팅", "메모"] },
+    { "name": "활동일", "type": "date" },
+    { "name": "요약", "type": "rich_text" },
+    { "name": "출처 ID/경로", "type": "rich_text" },
+    { "name": "근거등급", "type": "select", "options": ["확인된 사실", "AI 추론", "사용자 제안", "가정", "기각", "이전 버전"] },
+    { "name": "확신도", "type": "select", "options": ["높음", "보통", "낮음"] },
+    { "name": "검토상태", "type": "select", "options": ["검증완료", "연결검토", "제외"] },
+    { "name": "자연키", "type": "rich_text" },
+    { "name": "프로젝트", "type": "relation" },
+    { "name": "고객·파트너", "type": "relation" }
+  ]
+}

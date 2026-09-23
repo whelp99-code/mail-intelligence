@@ -100,6 +100,9 @@ let searchQuery = '';
 let selectedMessageId = '';
 let precisionProjects = [];
 let precisionSmartViews = [];
+let workLinksByGraphId = {};
+let workLinkStats = { active: 0, linkedCandidate: 0, unassigned: 0 };
+let workLinkError = '';
 let assistantRequestSequence = 0;
 let searchRequestSequence = 0;
 
@@ -423,10 +426,21 @@ function confidencePercent(value) {
   return Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 100)}%` : '미측정';
 }
 
-function projectDisplay(classification) {
+function notionCandidateFor(messageId) {
+  const links = workLinksByGraphId[String(messageId)] || [];
+  return links.find((item) => item.status === 'candidate') || null;
+}
+
+function projectDisplay(classification, messageId) {
+  if (classification?.projectResolution === 'confirmed') return classification.projectName || classification.projectKey || '확정 프로젝트';
+  const notion = messageId ? notionCandidateFor(messageId) : null;
+  if (notion) return `후보 프로젝트 (Notion) · ${notion.name}`;
   if (!classification) return '미분류';
-  if (classification.projectResolution === 'confirmed') return classification.projectName || classification.projectKey || '확정 프로젝트';
-  if (classification.projectResolution === 'candidate') return classification.projectCandidate?.label || '프로젝트 후보';
+  if (classification.projectResolution === 'candidate') {
+    return classification.projectCandidate?.label
+      ? `프로젝트 후보 · ${classification.projectCandidate.label}`
+      : '프로젝트 후보';
+  }
   if (classification.projectResolution === 'review_required') return '프로젝트 충돌 검토';
   return '미분류';
 }
@@ -437,7 +451,7 @@ function precisionSummaryLine(classification) {
     operationalLaneLabel(classification.operational?.lane),
     nextActorLabel(classification.nextActor),
     priorityLabel(classification.priority),
-    projectDisplay(classification)
+    projectDisplay(classification, classification?.messageId)
   ];
   if (classification.dueText) parts.push(`기한 ${classification.dueText}`);
   return parts.join(' · ');
@@ -672,7 +686,7 @@ function precisionCorrectionPanel(message, classification) {
       <dl class="precision-facts">
         <div><dt>다음 행동</dt><dd>${escapeHtml(nextActorLabel(classification.nextActor))}</dd></div>
         <div><dt>우선순위</dt><dd>${escapeHtml(priorityLabel(classification.priority))}</dd></div>
-        <div><dt>프로젝트</dt><dd>${escapeHtml(projectDisplay(classification))}<small>${escapeHtml(projectResolutionLabel(classification.projectResolution))}</small></dd></div>
+        <div><dt>프로젝트</dt><dd>${escapeHtml(projectDisplay(classification, message.id))}<small>${escapeHtml(classification.projectResolution !== 'confirmed' && notionCandidateFor(message.id) ? 'Notion 후보 · 자동 확정 없음' : projectResolutionLabel(classification.projectResolution))}</small></dd></div>
         <div><dt>기한</dt><dd>${escapeHtml(classification.dueText || '없음')}<small>${classification.dueAt ? escapeHtml(new Date(classification.dueAt).toLocaleString('ko-KR')) : ''}</small></dd></div>
       </dl>
       <div class="signal-row">${(classification.signals || []).map((signal) => `<span>${escapeHtml(signalLabel(signal))}</span>`).join('') || '<span>보조 신호 없음</span>'}</div>
@@ -1327,6 +1341,37 @@ async function loadPrecisionProjects() {
   }
 }
 
+function renderWorkLinkStats() {
+  const linked = document.querySelector('#workLinkLinkedCount');
+  const unassigned = document.querySelector('#workLinkUnassignedCount');
+  const summary = document.querySelector('#workLinkSummary');
+  if (linked) linked.textContent = String(workLinkStats.linkedCandidate || 0);
+  if (unassigned) unassigned.textContent = String(workLinkStats.unassigned || 0);
+  if (summary) {
+    summary.textContent = workLinkError || `Notion 후보 ${workLinkStats.linkedCandidate || 0} · 미연결 ${workLinkStats.unassigned || 0} · 자동 확정 없음`;
+  }
+}
+
+async function loadWorkLinks() {
+  workLinksByGraphId = {};
+  try {
+    const response = await apiFetch('/api/work-links');
+    const payload = await readApiPayload(response);
+    if (!response.ok) throw new Error(payload.message || 'WorkLink 확인 실패');
+    workLinkError = '';
+    workLinkStats = payload.stats || { active: 0, linkedCandidate: 0, unassigned: 0 };
+    for (const link of payload.links || []) {
+      const key = String(link.graphId || '');
+      if (!workLinksByGraphId[key]) workLinksByGraphId[key] = [];
+      workLinksByGraphId[key].push(link);
+    }
+  } catch {
+    workLinkStats = { active: 0, linkedCandidate: 0, unassigned: 0 };
+    workLinkError = 'Notion 후보 확인 실패 · 연결 상태 미확인';
+  }
+  renderWorkLinkStats();
+}
+
 function renderSmartViews() {
   clear(smartViews);
   precisionSmartViews.forEach((view) => {
@@ -1372,6 +1417,7 @@ async function loadPrecisionOverview({ classify = true, force = false } = {}) {
     if (!response.ok) throw new Error(payload.message || '정밀 분류 상태 확인 실패');
     renderPrecisionOverview(payload);
     await loadPrecisionProjects();
+    await loadWorkLinks();
   } catch (error) {
     precisionStatus.textContent = '정밀 분류 확인 실패';
     precisionSummaryNode.textContent = error instanceof Error ? error.message : '정밀 분류 상태 확인 실패';
@@ -1486,7 +1532,7 @@ function renderDatabaseSearchResults(results, query, parsedQuery = null) {
     const metadata = document.createElement('span');
     subject.textContent = message.subject || '(제목 없음)';
     metadata.textContent = classification
-      ? `${precisionStateLabel(classification.workState)} · ${nextActorLabel(classification.nextActor)} · ${priorityLabel(classification.priority)} · ${projectDisplay(classification)}${classification.dueText ? ` · ${classification.dueText}` : ''}`
+      ? `${precisionStateLabel(classification.workState)} · ${nextActorLabel(classification.nextActor)} · ${priorityLabel(classification.priority)} · ${projectDisplay(classification, classification.messageId)}${classification.dueText ? ` · ${classification.dueText}` : ''}`
       : `${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}`;
     content.append(subject, metadata);
     if (result.matchedBecause?.length) {
@@ -1732,6 +1778,7 @@ async function loadOutlookMessages() {
       authMode: payload.mode,
       safety: { mode: 'read-only' },
     });
+    await loadWorkLinks();
     render(payload.result, payload.messages);
     if (payload.precision?.summary) renderPrecisionOverview(payload.precision.summary);
     await loadPrecisionProjects();

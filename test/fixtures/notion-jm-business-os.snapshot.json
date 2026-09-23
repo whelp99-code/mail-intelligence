@@ -1,0 +1,48 @@
+{
+  "workspaceId": "syn-workspace-jm-business-os",
+  "snapshotId": "syn-snapshot-phase1",
+  "snapshotHash": "sha256:synthetic-not-production",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "readOnlySource": true,
+  "accounts": [
+    {
+      "sourceId": "syn-account-sunjin",
+      "sourceUrl": "https://example.invalid/notion/syn-account-sunjin",
+      "properties": {
+        "회사/조직명": "선진엔지니어링",
+        "구분": "고객",
+        "관계상태": "활성",
+        "담당자": "홍길동",
+        "대표 이메일": "hong@example.com"
+      }
+    },
+    {
+      "sourceId": "syn-account-partner",
+      "sourceUrl": "https://example.invalid/notion/syn-account-partner",
+      "properties": {
+        "회사/조직명": "총판 A",
+        "구분": "파트너",
+        "관계상태": "활성"
+      }
+    }
+  ],
+  "projects": [
+    {
+      "sourceId": "syn-project-sunjin-hci",
+      "sourceUrl": "https://example.invalid/notion/syn-project-sunjin-hci",
+      "properties": {
+        "프로젝트명(Title)": "선진엔지니어링 HCI 구축",
+        "프로젝트ID": "PRJ-2026-001",
+        "상태": "진행",
+        "중요도": "높음",
+        "고객·파트너": ["syn-account-sunjin"],
+        "파트너": ["syn-account-partner"],
+        "다음 행동": "수정 견적 전달",
+        "제안제품": "HCI",
+        "별칭": "선진 HCI"
+      }
+    }
+  ],
+  "activities": [],
+  "finance": []
+}

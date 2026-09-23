@@ -32,6 +32,7 @@ import {
   loadCompanyMemoryDonorBind,
   runBoundCompanyMemoryDonorTick,
 } from './src/application/company-memory-donor-bind.js';
+import { createWorkLinksApi } from './src/application/work-links-api.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
@@ -2018,6 +2019,11 @@ async function handleApi(req, res) {
       return json(res, result.status, result.body);
     }
 
+    if (url.pathname.startsWith('/api/work-links')) {
+      const result = await workLinksApi(req, url);
+      return json(res, result.status, result.body);
+    }
+
     if (url.pathname === '/api/health') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       return json(res, 200, publicHealthStatus());
@@ -2817,6 +2823,14 @@ const mailSendApi = createMailSendApi({
   accessKeyRequired,
   recipientAllowlist: mailSendRecipientAllowlist,
   companyMemory,
+});
+const workLinksSnapshotPath = String(process.env.MAIL_INTELLIGENCE_NOTION_SNAPSHOT || '')
+  .trim() || join(appRoot, 'test/fixtures/notion-jm-business-os.snapshot.json');
+const workLinksApi = createWorkLinksApi({
+  getStore: () => requireMailMemory().store,
+  getMailboxUser: () => currentMailboxUser() || 'me',
+  getSession: sessionForRequest,
+  snapshotPath: workLinksSnapshotPath,
 });
 mailMemoryHealth = {
   ready: mailMemoryInitialization.storage.ready,
