@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 
 import { classifyMessage, PRECISION_CLASSIFICATION_VERSION } from '../src/domain/precision-classifier.js';
 
-const fixtureUrl = new URL('../test/fixtures/precision-evaluation.json', import.meta.url);
+const fixtureUrl = new URL('../test/fixtures/precision-evaluation-v2.json', import.meta.url);
 const fixtures = JSON.parse(await readFile(fixtureUrl, 'utf8'));
 assert.ok(Array.isArray(fixtures) && fixtures.length >= 20, 'precision evaluation requires at least 20 fixtures');
 
@@ -49,7 +49,7 @@ const fields = Object.fromEntries([...fieldTotals].map(([field, total]) => {
 const totalAssertions = [...fieldTotals.values()].reduce((sum, value) => sum + value, 0);
 const passedAssertions = [...fieldPasses.values()].reduce((sum, value) => sum + value, 0);
 const summary = {
-  evaluation: 'precision-classification-fixture-v1',
+  evaluation: 'precision-classification-fixture-v2',
   classifierVersion: PRECISION_CLASSIFICATION_VERSION,
   fixtures: fixtures.length,
   assertions: totalAssertions,

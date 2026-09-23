@@ -100,9 +100,12 @@ the downloaded bytes, and asserts both document width and element bounds at
 
 Known pre-existing limits:
 
-- Precision diagnostics retain one explicitly report-only canonical conflict;
-  this is not a claim that strict precision acceptance passes.
-- The high-severity audit gate reports one moderate `colord` advisory.
+- The precision conflict present at integration was resolved in the subsequent
+  versioned synthetic evaluation v2; see `docs/product/PRECISION-EVALUATION-V2.md`.
+  Both strict evaluation and the diagnostic now pass 77/77 with zero exceptions.
+- The moderate `colord` advisory present at integration was resolved by locking
+  2.9.4 (GHSA-2wm5-q62r-hmrv). A clean install and unrestricted `npm audit --json`
+  report zero vulnerabilities; the existing high-severity gate was not relaxed.
 - The workstation's global npm configuration can cause `EALLOWSCRIPTS`.
   The audit was rerun with separate empty user/global config paths, without
   changing project policy or the workstation configuration.

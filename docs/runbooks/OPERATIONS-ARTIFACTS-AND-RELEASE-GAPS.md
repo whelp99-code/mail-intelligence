@@ -24,6 +24,11 @@ It fails on offline cache, disconnected Outlook, failed folders, incomplete fold
 
 ## Current v1.2.2 release gaps
 
-The strict precision evaluator still has one approved report-only canonical conflict; CI runs `evaluate:precision:diagnostic` to verify that exact conflict without changing the strict evaluator. Final Production GO remains blocked on independently labelled unseen real mail, search relevance, correction persistence, backup/restore rehearsal, and live stability evidence described in the v1.2.2 independent QA instructions.
+The synthetic precision conflict was resolved in the versioned v2 fixture set
+(see `docs/product/PRECISION-EVALUATION-V2.md`). Strict evaluation and the CI
+diagnostic now require all 77 assertions to pass, with no report-only exceptions.
+Final Production GO remains blocked on independently labelled unseen real mail,
+search relevance, correction persistence, backup/restore rehearsal, and live
+stability evidence described in the v1.2.2 independent QA instructions.
 
 Current corrections persist and override automatic classification when the same message is reclassified. Registered project alias changes can trigger mailbox reclassification. Generalized future-case learning is not implemented or proven: do not claim continuous learning until ACCEPT-133 and ACCEPT-134 pass.

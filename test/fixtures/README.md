@@ -1,5 +1,17 @@
 # Test fixtures
 
+## Precision evaluation versions
+
+`precision-evaluation-v2.json` is the active synthetic evaluator input: 20 cases,
+77 assertions, zero permitted failures. It corrects only the priority expectation
+for `high-importance-reference` to match the existing current-content policy.
+The messages and all other assertions are unchanged.
+
+`precision-evaluation.json` (v1) and
+`precision-report-only-conflicts-v1.2.2.json` are retained historical artifacts,
+not active inputs or an exception mechanism. The revision rationale and validation
+contract are in `docs/product/PRECISION-EVALUATION-V2.md`.
+
 ## `aside-round3-fixed-50.json`
 
 This file contains only the frozen 12-character message hash prefixes and expected labels used by the Aside Round 3 independent QA. It does not contain mail subjects, bodies, sender addresses, credentials, or tokens.
