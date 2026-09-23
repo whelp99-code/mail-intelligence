@@ -34,4 +34,10 @@ export class CwosWorkSystemAdapter {
     error.code = 'CWOS_WRITE_DISABLED';
     throw error;
   }
+
+  createMailProductDonorPort() {
+    const error = new Error('Mail company-memory donor is not bound on CwosWorkSystemAdapter; CRM must use the Mail outbox port with a Mail database');
+    error.code = 'MAIL_ADAPTER_NOT_IMPLEMENTED';
+    throw error;
+  }
 }

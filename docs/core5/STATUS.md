@@ -22,6 +22,18 @@ Named tests passed: `test/send-reconciliation-worker.test.js`, `test/mail-send-d
 
 Named tests passed: `test/attachment-pipeline.test.js`, `test/cwos-work-system.test.js`, `test/mail-journey.test.js`.
 
+## Company-memory donor (2026-09-23)
+
+Mail-only `sb-company` donor publisher is in
+`src/application/company-memory-donor.js` with focused unit tests. Durable
+keys-only outbox is migration `013_mail_company_memory_outbox.sql`.
+Acknowledgement is fail-closed (matching receipt required).
+`CwosWorkSystemAdapter.createMailProductDonorPort()` and the zero-argument
+`createMailProductDonorPort()` remain `MAIL_ADAPTER_NOT_IMPLEMENTED` so CRM
+cannot invent a Mail database. No server production bind, live company writes,
+personal `sb remember`, or shared signing key. Tests use ephemeral Ed25519
+keypairs; operator pairing is documented in `docs/core5/COMPANY-MEMORY-DONOR.md`.
+
 ## Local checkpoint verification
 
 Reran successfully: `node --test test/attachment-pipeline.test.js test/cwos-work-system.test.js test/mail-journey.test.js test/send-reconciliation-worker.test.js test/graph-mail-sync.test.js test/sqlite-store.test.js test/mail-send-drafts.test.js test/mail-send-api.test.js test/microsoft-graph-send.test.js test/resilience.test.js` (10 test files passed).
