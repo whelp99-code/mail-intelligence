@@ -316,7 +316,7 @@ test('SQLiteMailStore applies the company-memory outbox migration', async () => 
     });
     const version = Number(store.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version);
     assert.equal(version >= 13, true);
-    const table = store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mail_company_memory_outbox'").get();
+    const table = store.db.prepare('SELECT name FROM sqlite_master WHERE type=\'table\' AND name=\'mail_company_memory_outbox\'').get();
     assert.equal(table.name, 'mail_company_memory_outbox');
   } finally {
     store?.close?.();

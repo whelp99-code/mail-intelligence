@@ -44,7 +44,7 @@ export class SendReconciliationWorker {
   }
 
   hasQueue() {
-    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_send_reconciliation_jobs'").get());
+    return Boolean(this.db.prepare('SELECT 1 FROM sqlite_master WHERE type=\'table\' AND name=\'mail_send_reconciliation_jobs\'').get());
   }
 
   enqueue(draft, { nextAttemptAt = this.now(), failureCode = '' } = {}) {
@@ -104,7 +104,7 @@ export class SendReconciliationWorker {
     const now = this.now();
     if (outcome?.graphMessageId && outcome?.sentAt) {
       this.drafts.recordOutcome(job.mailbox_id, job.draft_id, outcome);
-      this.db.prepare(`UPDATE mail_send_reconciliation_jobs SET state='complete', lease_owner='', lease_expires_at=NULL, updated_at=? WHERE draft_id=? AND lease_owner=?`)
+      this.db.prepare('UPDATE mail_send_reconciliation_jobs SET state=\'complete\', lease_owner=\'\', lease_expires_at=NULL, updated_at=? WHERE draft_id=? AND lease_owner=?')
         .run(iso(now), job.draft_id, this.workerId);
       return { status: 'sent', draftId: job.draft_id };
     }
@@ -112,7 +112,7 @@ export class SendReconciliationWorker {
     const attempt = Number(job.attempt_count) || 1;
     const delay = Math.min(this.maxBackoffMs, this.baseBackoffMs * (2 ** Math.min(attempt - 1, 10)));
     this.drafts.recordOutcome(job.mailbox_id, job.draft_id, { uncertain: true, failureCode: code });
-    this.db.prepare(`UPDATE mail_send_reconciliation_jobs SET state='pending', lease_owner='', lease_expires_at=NULL, next_attempt_at=?, last_failure_code=?, updated_at=? WHERE draft_id=? AND lease_owner=?`)
+    this.db.prepare('UPDATE mail_send_reconciliation_jobs SET state=\'pending\', lease_owner=\'\', lease_expires_at=NULL, next_attempt_at=?, last_failure_code=?, updated_at=? WHERE draft_id=? AND lease_owner=?')
       .run(iso(new Date(now.getTime() + delay)), code, iso(now), job.draft_id, this.workerId);
     return { status: 'pending', draftId: job.draft_id, failureCode: code, nextAttemptAt: iso(new Date(now.getTime() + delay)) };
   }

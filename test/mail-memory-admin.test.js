@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { access, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+const latestMigrationVersion = Math.max(...readdirSync('migrations')
+  .map((name) => /^(\d+)_.*\.sql$/.exec(name))
+  .filter(Boolean)
+  .map((match) => Number(match[1])));
 
 function runAdmin(dataDir, args) {
   const result = spawnSync(process.execPath, ['scripts/mail-memory-admin.mjs', ...args], {
@@ -42,7 +48,8 @@ test('mail-memory admin CLI supports status, integrity, verified backup and offl
     result = runAdmin(dataDir, ['backup', backupPath]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.equal(result.body.validation.ok, true);
-    assert.equal(result.body.schemaVersion, 9);
+    assert.equal(result.body.schemaVersion, latestMigrationVersion);
+    assert.equal(result.body.validation.schemaVersion, latestMigrationVersion);
     assert.match(result.body.checksumSha256, /^[a-f0-9]{64}$/);
     await access(backupPath);
     assert.equal((await stat(backupPath)).mode & 0o777, 0o600);

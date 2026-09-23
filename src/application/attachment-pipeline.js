@@ -45,7 +45,7 @@ export class AttachmentPipeline {
     const row = this.status(attachmentId, mailboxId);
     if (!row) fail('ATTACHMENT_NOT_FOUND');
     if (row.quarantine_state !== 'quarantined' || !SAFE_SCAN_STATES.has(row.scan_state)) fail('ATTACHMENT_SCAN_REQUIRED');
-    this.db.prepare("UPDATE mail_attachment_processing SET extraction_state='authorized', parser=?, parser_version=?, updated_at=? WHERE attachment_id=? AND mailbox_id=?")
+    this.db.prepare('UPDATE mail_attachment_processing SET extraction_state=\'authorized\', parser=?, parser_version=?, updated_at=? WHERE attachment_id=? AND mailbox_id=?')
       .run(String(parser), String(version), this.now(), attachmentId, mailboxId);
     return this.status(attachmentId, mailboxId);
   }

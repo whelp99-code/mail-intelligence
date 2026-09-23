@@ -238,7 +238,7 @@ function assertMailCompanyMemoryOutbox(db) {
   let row;
   try {
     row = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='mail_company_memory_outbox'",
+      'SELECT name FROM sqlite_master WHERE type=\'table\' AND name=\'mail_company_memory_outbox\'',
     ).get();
   } catch {
     throw new CompanyMemoryDonorError('COMPANY_MEMORY_OUTBOX_UNAVAILABLE', 'mail company-memory outbox schema is unavailable');

@@ -60,7 +60,7 @@ export class MailSendDrafts {
   }
 
   hasReconciliationQueue() {
-    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_send_reconciliation_jobs'").get());
+    return Boolean(this.db.prepare('SELECT 1 FROM sqlite_master WHERE type=\'table\' AND name=\'mail_send_reconciliation_jobs\'').get());
   }
 
   enqueueReconciliation(draft, { failureCode = '' } = {}) {
@@ -186,7 +186,7 @@ export class MailSendDrafts {
         this.db.prepare('UPDATE mail_send_drafts SET status=?,graph_message_id=?,sent_at=?,failure_reason=NULL WHERE draft_id=?')
           .run('sent', graphMessageId, sentAt, id);
         this.event(id, 'sent', 'mail-intelligence');
-        if (this.hasReconciliationQueue()) this.db.prepare("UPDATE mail_send_reconciliation_jobs SET state='complete', lease_owner='', lease_expires_at=NULL, updated_at=? WHERE draft_id=?").run(this.now(), id);
+        if (this.hasReconciliationQueue()) this.db.prepare('UPDATE mail_send_reconciliation_jobs SET state=\'complete\', lease_owner=\'\', lease_expires_at=NULL, updated_at=? WHERE draft_id=?').run(this.now(), id);
         const sent = this.get(mailboxId, id);
         this.enqueueCompanyMemoryReceipt(sent);
         return sent;
