@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveStaticFile } from './src/security/static-path.js';
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
+import { mailSendRecipientAllowlistFromEnvironment } from './src/security/mail-send-recipient-policy.js';
 import {
   AI_PIPELINE_VERSION,
   buildAnalysisCacheKey,
@@ -76,6 +77,7 @@ const allowedProxyHosts = new Set(parseTailnetAllowedHosts(
 const graphBaseUrl = String(process.env.MAIL_INTELLIGENCE_GRAPH_BASE_URL || 'https://graph.microsoft.com/v1.0').replace(/\/$/, '');
 const safetyPolicy = getSafetyPolicy(process.env);
 const delegatedScopes = delegatedScopesForSafety(safetyPolicy);
+const mailSendRecipientAllowlist = mailSendRecipientAllowlistFromEnvironment(process.env);
 const configuredAccessKey = String(process.env.MAIL_INTELLIGENCE_ACCESS_KEY || '').trim();
 const accessKeyRequired = configuredAccessKey.length > 0;
 const AI_OPT_IN_VERSION = 'ai-oauth-opt-in-v1.2.2';
@@ -2805,6 +2807,7 @@ const mailSendApi = createMailSendApi({
   agentTokens: { 'grok-bot': draftServiceToken, jarvis: jarvisDraftToken },
   allowSend: safetyPolicy.capabilities.mailSend,
   accessKeyRequired,
+  recipientAllowlist: mailSendRecipientAllowlist,
 });
 mailMemoryHealth = {
   ready: mailMemoryInitialization.storage.ready,

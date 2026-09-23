@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createMailSendApi } from '../src/application/mail-send-api.js';
+import { MailSendDrafts } from '../src/application/mail-send-drafts.js';
 
 const secret = 'synthetic-restricted-draft-token-0123456789';
 const body = { request_id: 'api-request-001', to: ['self@example.com'], subject: 'Fixture', body_text: 'Synthetic only.' };
@@ -80,6 +81,21 @@ test('simultaneous and repeated human approvals send once and persist receipt', 
   assert.equal(result.body.draft.graph_message_id, 'fixture-sent');
   assert.equal(f.sends(), 1);
   assert.equal(f.db.prepare('SELECT count(*) n FROM mail_send_draft_events WHERE status=?').get('approved').n, 1);
+});
+
+test('configured allowlist blocks a pre-existing pending draft before provider dispatch', async (t) => {
+  const f = fixture(t, { recipientAllowlist: ['allowed@example.com'] });
+  const draft = new MailSendDrafts(f.db).create(1, 'ui', {
+    ...body,
+    request_id: 'pre-policy-request-001',
+    to: ['blocked@example.com'],
+  }).draft;
+  await assert.rejects(
+    f.call('POST', `/${draft.draft_id}/approve`, { confirm: true, payload_digest: draft.payload_digest }, f.human),
+    { code: 'RECIPIENT_NOT_ALLOWED' },
+  );
+  assert.equal(f.sends(), 0);
+  assert.equal(new MailSendDrafts(f.db).get(1, draft.draft_id).status, 'needs_approval');
 });
 
 test('unauthenticated operator mode cannot enable approval', async (t) => {

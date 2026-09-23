@@ -1,3 +1,8 @@
+import {
+  assertMailSendRecipientsAllowed,
+  normalizeMailSendRecipientAllowlist,
+} from '../security/mail-send-recipient-policy.js';
+
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const CORRELATION_HEADER = 'x-mi-draft-id';
 
@@ -42,12 +47,16 @@ function sameBody(actual, expected) {
 }
 
 export class GraphSendClient {
-  constructor({ accessToken, mailboxUser = 'me', fetchImpl = globalThis.fetch, timeoutMs = 20000, maxPages = 20 }) {
+  constructor({
+    accessToken, mailboxUser = 'me', fetchImpl = globalThis.fetch, timeoutMs = 20000, maxPages = 20,
+    recipientAllowlist = null,
+  }) {
     this.accessToken = accessToken;
     this.path = mailboxPath(mailboxUser);
     this.fetchImpl = fetchImpl;
     this.timeoutMs = Math.max(10, Math.min(Number(timeoutMs) || 20000, 60000));
     this.maxPages = Math.max(1, Math.min(Number(maxPages) || 20, 100));
+    this.recipientAllowlist = normalizeMailSendRecipientAllowlist(recipientAllowlist);
   }
 
   async request(url, { method = 'GET', body } = {}) {
@@ -92,6 +101,7 @@ export class GraphSendClient {
     if (!hasMailSendScope(this.accessToken)) fail('MAIL_SEND_SCOPE_REQUIRED');
     if (draft.status !== 'sending' || !draft.approved_at || !draft.approved_by?.startsWith('session:')) fail('HUMAN_APPROVAL_REQUIRED');
     if (!/^[0-9a-f-]{36}$/.test(draft.draft_id) || !draft.to?.length || !draft.subject || !draft.body_text) fail('INVALID_SEND_DRAFT', 400);
+    assertMailSendRecipientsAllowed(this.recipientAllowlist, draft);
     const message = {
       subject: draft.subject,
       body: { contentType: 'Text', content: draft.body_text },

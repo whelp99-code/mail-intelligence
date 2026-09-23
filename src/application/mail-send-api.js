@@ -15,6 +15,7 @@ function equal(value, expected) {
 export function createMailSendApi({
   getStore, getMailbox, getSession, readBody, getAccessToken,
   serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
+  recipientAllowlist = null,
   clientFactory = (options) => new GraphSendClient(options),
 }) {
   const tokens = { ...agentTokens };
@@ -50,7 +51,7 @@ export function createMailSendApi({
       }
     }
     const store = getStore();
-    const drafts = new MailSendDrafts(store.db);
+    const drafts = new MailSendDrafts(store.db, { recipientAllowlist });
     const mailbox = getMailbox();
     const decorate = (draft) => {
       const source = draft.message_id === null ? null : store.db.prepare('SELECT subject,web_link FROM messages WHERE id=? AND mailbox_id=?').get(draft.message_id, mailbox.id);
@@ -68,7 +69,7 @@ export function createMailSendApi({
       if (!reconciliation.has(id)) {
         const operation = (async () => {
           try {
-            const client = clientFactory({ accessToken: await getAccessToken(), mailboxUser: mailbox.graphUser });
+            const client = clientFactory({ accessToken: await getAccessToken(), mailboxUser: mailbox.graphUser, recipientAllowlist });
             const outcome = await client.reconcile(drafts.get(mailbox.id, id));
             return drafts.recordOutcome(mailbox.id, id, outcome);
           } catch {
@@ -93,10 +94,11 @@ export function createMailSendApi({
     if (!allowSend) fail(403, 'MAIL_SEND_DISABLED');
     if (!accessKeyRequired) fail(403, 'AUTHENTICATED_OPERATOR_REQUIRED');
     if (Object.keys(body).some((key) => !['payload_digest', 'confirm'].includes(key)) || body.confirm !== true) fail(400, 'EXPLICIT_CONFIRMATION_REQUIRED');
+    drafts.assertRecipientsAllowed(draft);
     const token = await getAccessToken();
     draft = drafts.approve(mailbox.id, id, { actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token) });
     if (drafts.claim(mailbox.id, id)) {
-      const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser });
+      const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist });
       let outcome;
       try {
         outcome = await client.sendOnce(drafts.get(mailbox.id, id), { allowSend });

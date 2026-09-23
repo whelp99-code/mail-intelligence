@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -16,6 +16,11 @@ import { PRECISION_CLASSIFICATION_VERSION } from '../src/domain/precision-classi
 
 const databasePath = resolve(process.env.MAIL_INTELLIGENCE_DB_PATH || 'data/mail-intelligence.sqlite');
 const dataDirectory = resolve(process.env.MAIL_INTELLIGENCE_DATA_DIR || 'data');
+const migrationsDirectory = resolve('migrations');
+const latestMigrationVersion = Math.max(...readdirSync(migrationsDirectory)
+  .map((name) => /^(\d+)_.*\.sql$/.exec(name))
+  .filter(Boolean)
+  .map((match) => Number(match[1])));
 const backupDirectory = join(dataDirectory, 'backups');
 const qaFixTag = PRECISION_CLASSIFICATION_VERSION.match(/qa-fix\d+$/)?.[0] || 'qa-candidate';
 const verificationRoot = join(dataDirectory, `${qaFixTag}-isolated-restore`);
@@ -69,7 +74,7 @@ function counts(path) {
 
 let store;
 try {
-  store = new SQLiteMailStore({ databasePath, migrationsDir: resolve('migrations') });
+  store = new SQLiteMailStore({ databasePath, migrationsDir: migrationsDirectory });
   const backup = await createVerifiedBackup({ store, targetPath: backupPath });
   store.close();
   store = null;
@@ -89,8 +94,8 @@ try {
 
   assert.equal(backupValidation.ok, true);
   assert.equal(restoreValidation.ok, true);
-  assert.equal(backupValidation.schemaVersion, 5);
-  assert.equal(restoreValidation.schemaVersion, 5);
+  assert.equal(backupValidation.schemaVersion, latestMigrationVersion);
+  assert.equal(restoreValidation.schemaVersion, latestMigrationVersion);
   assert.deepEqual(restoreCounts, backupCounts);
   assert.equal(restoreChecksum, backupChecksum);
   assert.equal(statSync(runDirectory).mode & 0o777, 0o700);

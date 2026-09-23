@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
 import { access, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -7,6 +8,7 @@ import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import {
   createVerifiedBackup,
   restoreDatabaseFromBackup,
+  sha256File,
   validateSqliteDatabase,
 } from '../src/storage/backup-restore.js';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
@@ -26,10 +28,16 @@ function graphMessage(subject, changeKey) {
   });
 }
 
+const migrationsDirectory = resolve('migrations');
+const latestMigrationVersion = Math.max(...readdirSync(migrationsDirectory)
+  .map((name) => /^(\d+)_.*\.sql$/.exec(name))
+  .filter(Boolean)
+  .map((match) => Number(match[1])));
+
 function openStore(databasePath) {
   return new SQLiteMailStore({
     databasePath,
-    migrationsDir: resolve('migrations'),
+    migrationsDir: migrationsDirectory,
   });
 }
 
@@ -59,12 +67,15 @@ test('verified backup records a manifest and restore atomically replaces the liv
 
   try {
     let mailbox = upsert(store, '백업 기준 상태', 'change-1');
+    const appliedMigrationVersion = Number(store.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version);
+    assert.equal(appliedMigrationVersion, latestMigrationVersion);
     const backup = await createVerifiedBackup({ store, targetPath: backupPath });
     assert.equal(backup.validation.ok, true);
-    assert.equal(backup.schemaVersion, 9);
+    assert.equal(backup.schemaVersion, appliedMigrationVersion);
     assert.match(backup.checksumSha256, /^[a-f0-9]{64}$/);
     assert.equal(store.listBackupManifests().length, 1);
     assert.equal(store.listBackupManifests()[0].backupName, 'baseline.sqlite');
+    assert.equal(store.listBackupManifests()[0].schemaVersion, appliedMigrationVersion);
 
     mailbox = upsert(store, '백업 이후 변경 상태', 'change-2');
     assert.equal(store.getRecentMessages(mailbox.id)[0].subject, '백업 이후 변경 상태');
@@ -88,8 +99,11 @@ test('verified backup records a manifest and restore atomically replaces the liv
     await access(restored.rollbackPath);
     assert.equal((await stat(databasePath)).mode & 0o777, 0o600);
     assert.equal((await stat(restored.rollbackPath)).mode & 0o777, 0o600);
-    assert.equal(validateSqliteDatabase(databasePath).ok, true);
+    const restoredValidation = validateSqliteDatabase(databasePath);
+    assert.equal(restoredValidation.ok, true);
+    assert.equal(restoredValidation.schemaVersion, appliedMigrationVersion);
     assert.equal(validateSqliteDatabase(restored.rollbackPath).ok, true);
+    assert.equal(await sha256File(databasePath), await sha256File(backupPath));
 
     store = openStore(databasePath);
     mailbox = store.getMailbox('me');

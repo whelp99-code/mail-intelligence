@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import {
+  assertMailSendRecipientsAllowed,
+  normalizeMailSendRecipientAllowlist,
+} from '../security/mail-send-recipient-policy.js';
 
 function fail(statusCode, code) {
   const error = new Error(code);
@@ -26,9 +30,14 @@ function text(value, max, singleLine = false) {
 }
 
 export class MailSendDrafts {
-  constructor(db, { now = () => new Date().toISOString() } = {}) {
+  constructor(db, { now = () => new Date().toISOString(), recipientAllowlist = null } = {}) {
     this.db = db;
     this.now = now;
+    this.recipientAllowlist = normalizeMailSendRecipientAllowlist(recipientAllowlist);
+  }
+
+  assertRecipientsAllowed(draft) {
+    assertMailSendRecipientsAllowed(this.recipientAllowlist, draft);
   }
 
   transaction(operation) {
@@ -98,6 +107,7 @@ export class MailSendDrafts {
       message_id: input.message_id ?? null,
     };
     if (payload.message_id !== null && (!Number.isSafeInteger(payload.message_id) || payload.message_id < 1)) fail(400, 'INVALID_SOURCE_MESSAGE');
+    this.assertRecipientsAllowed(payload);
     const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
     return this.transaction(() => {
       if (payload.message_id !== null && !this.db.prepare('SELECT id FROM messages WHERE id=? AND mailbox_id=? AND deleted_at IS NULL').get(payload.message_id, mailboxId)) {
@@ -127,6 +137,7 @@ export class MailSendDrafts {
     return this.transaction(() => {
       const draft = this.get(mailboxId, id);
       if (digest !== draft.payload_digest) fail(409, 'DRAFT_DIGEST_MISMATCH');
+      this.assertRecipientsAllowed(draft);
       if (['approved', 'sending', 'sent'].includes(draft.status)) return draft;
       if (draft.status !== 'needs_approval') fail(409, 'DRAFT_NOT_APPROVABLE');
       this.db.prepare('UPDATE mail_send_drafts SET status=?,approved_at=?,approved_by=? WHERE draft_id=?')

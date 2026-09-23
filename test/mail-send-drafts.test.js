@@ -4,13 +4,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { MailSendDrafts } from '../src/application/mail-send-drafts.js';
 
-function fixture(t) {
+function fixture(t, options = {}) {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE mailboxes(id INTEGER PRIMARY KEY); INSERT INTO mailboxes VALUES(1),(2); CREATE TABLE messages(id INTEGER PRIMARY KEY,mailbox_id INTEGER,deleted_at TEXT); INSERT INTO messages VALUES(1,1,NULL),(2,2,NULL);');
   db.exec(readFileSync(new URL('../migrations/005_mail_send_drafts.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/009_mail_send_draft_principals.sql', import.meta.url), 'utf8'));
   t.after(() => db.close());
-  return new MailSendDrafts(db);
+  return new MailSendDrafts(db, options);
 }
 const input = { request_id: 'request-001', to: ['test@example.com'], subject: 'Self test', body_text: 'Synthetic fixture only.' };
 const approval = (draft) => ({ actor: 'session:owner', digest: draft.payload_digest, allowSend: true, hasSendScope: true });
@@ -38,6 +38,14 @@ test('unknown fields, header injection and fabricated address syntax rejected', 
   for (const bad of [{ approved: true }, { subject: 'x\r\nBcc: other@example.com' }, { to: ['김대리'] }, { to: ['a@example.com\n'] }]) {
     assert.throws(() => service.create(1, 'grok-bot', { ...input, ...bad }));
   }
+});
+
+test('configured recipient allowlist rejects disallowed to and cc at creation', (t) => {
+  const service = fixture(t, { recipientAllowlist: ['allowed@example.com'] });
+  assert.throws(() => service.create(1, 'ui', { ...input, to: ['blocked@example.com'] }), { code: 'RECIPIENT_NOT_ALLOWED' });
+  assert.throws(() => service.create(1, 'ui', { ...input, to: ['allowed@example.com'], cc: ['blocked@example.com'] }), { code: 'RECIPIENT_NOT_ALLOWED' });
+  const created = service.create(1, 'ui', { ...input, to: ['ALLOWED@example.com'] }).draft;
+  assert.deepEqual(created.to, ['allowed@example.com']);
 });
 
 test('mailbox isolation and reply source ownership', (t) => {

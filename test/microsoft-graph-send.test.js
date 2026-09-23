@@ -32,6 +32,22 @@ test('flag OFF, no scope or unapproved draft causes zero HTTP calls', async () =
   assert.equal(calls, 0);
 });
 
+test('configured recipient allowlist rejects disallowed to and cc with zero HTTP calls', async () => {
+  for (const changed of [
+    { to: ['blocked@example.com'] },
+    { cc: ['blocked@example.com'] },
+  ]) {
+    let calls = 0;
+    const client = new GraphSendClient({
+      accessToken: token(),
+      recipientAllowlist: ['test@example.com'],
+      fetchImpl: async () => { calls++; throw new Error('must not call'); },
+    });
+    await assert.rejects(client.sendOnce({ ...draft, ...changed }, { allowSend: true }), { code: 'RECIPIENT_NOT_ALLOWED' });
+    assert.equal(calls, 0);
+  }
+});
+
 test('one approved POST then matching Sent Items receipt', async () => {
   const calls = [];
   const client = new GraphSendClient({ accessToken: token(), fetchImpl: async (url, options) => {
