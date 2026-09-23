@@ -1,0 +1,8 @@
+{
+  "workspaceId": "REPLACE_WITH_OPERATOR_WORKSPACE_LABEL_NOT_A_SECRET",
+  "accountsDatabaseId": "REPLACE_UNTRACKED",
+  "projectsDatabaseId": "REPLACE_UNTRACKED",
+  "activitiesDatabaseId": "REPLACE_UNTRACKED",
+  "financeDatabaseId": "OPTIONAL_REPLACE_UNTRACKED",
+  "_comment": "Copy to an untracked path (e.g. notion-database-map.local.json mode 600). Never commit real Notion database/page IDs."
+}
