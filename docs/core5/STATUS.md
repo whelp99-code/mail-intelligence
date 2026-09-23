@@ -30,9 +30,12 @@ keys-only outbox is migration `013_mail_company_memory_outbox.sql`.
 Acknowledgement is fail-closed (matching receipt required).
 `CwosWorkSystemAdapter.createMailProductDonorPort()` and the zero-argument
 `createMailProductDonorPort()` remain `MAIL_ADAPTER_NOT_IMPLEMENTED` so CRM
-cannot invent a Mail database. No server production bind, live company writes,
-personal `sb remember`, or shared signing key. Tests use ephemeral Ed25519
-keypairs; operator pairing is documented in `docs/core5/COMPANY-MEMORY-DONOR.md`.
+cannot invent a Mail database. Server bind is env-gated in
+`src/application/company-memory-donor-bind.js`: absent `COMPANY_MEMORY_*`
+skips; incomplete/unknown/missing files fail closed at boot; personal `sb`
+is rejected. No personal `sb remember` or shared signing key. Tests use
+ephemeral Ed25519 keypairs; operator pairing is documented in
+`docs/core5/COMPANY-MEMORY-DONOR.md`.
 
 ## Local checkpoint verification
 

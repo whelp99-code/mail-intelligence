@@ -1,8 +1,9 @@
 # Mail company-memory donor
 
 Status: Mail-side publisher and CRM-consumable outbox implemented in-process.
-Not deployed. No live company-memory writes. No production bind. Server ingest
-and send paths are unchanged.
+Server tick is env-gated and off by default. No live company-memory writes
+unless the four `COMPANY_MEMORY_*` files are set. Ingest and send paths are
+otherwise unchanged.
 
 This repository publishes toward the Second Brain `sb-company` contract
 (`second-brain-app/docs/core5/COMPANY-MEMORY-DONOR-CONTRACT.md`). The donor
@@ -34,7 +35,22 @@ Entry points:
 The publisher never calls `sb remember`, `/api/remember`, `sb_remember`,
 personal search, or a personal vault. Transport is an injected
 `CompanyMemoryCliTransport` (`sb-company` stdin/stdout shape only).
-`server.mjs` does not invoke this tick.
+
+Server bind (`src/application/company-memory-donor-bind.js`) is explicit-env
+only: `COMPANY_MEMORY_SB_COMPANY`, `COMPANY_MEMORY_SB_COMPANY_CONFIG`,
+`COMPANY_MEMORY_SIGNING_KEY_FILE`, `COMPANY_MEMORY_AUTHORITY_FILE`. Absent =
+skipped. Incomplete, unknown, or missing files fail closed at server boot.
+The command must be an absolute `sb-company` path; personal `sb` is rejected.
+When a Mail sqlite db is bound, the tick reads pending rows from
+`mail_company_memory_outbox` and fails closed if that schema is unavailable.
+Empty outbox is used only when no db is passed. Tests may still inject a
+synthetic outbox. Spawned `sb-company` gets `SB_CONFIG` pointed at a
+non-existent sibling of the company config so the live launcher cannot fall
+back to personal `~/.config/second-brain/config.toml`.
+
+This is Mail → `sb-company`, not a CRM ingest adapter. Mail does not insert
+into CRM `cwos_v2_mail_outbox`. CRM still consumes Mail by calling the Mail
+port against Mail's outbox once it has a Mail database.
 
 CRM `4df9f80` still documents `createMailProductDonorPort()` as unimplemented
 in the CRM repository. That stub must not be replaced by this Mail publisher.
@@ -63,6 +79,7 @@ database path is read by this increment.
 3. Inject the matching private signer into Mail at process composition time.
 4. Inject the current trusted context (canonical workspace UUID, provider,
    principal/agent/session, projects, policy revision, deletion high-water).
-5. Leave `server.mjs` unbound until that pairing exists.
+5. Set the four `COMPANY_MEMORY_*` env vars to the absolute `sb-company`
+   command, company-memory config, signing key PEM, and authority JSON.
 
-Ephemeral test keys are not that pairing.
+Ephemeral test keys are not that pairing. Absent env keeps the tick skipped.

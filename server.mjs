@@ -28,6 +28,10 @@ import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-m
 import { createMailSendApi } from './src/application/mail-send-api.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
 import { createSendReconciliationWorker } from './src/application/send-reconciliation-worker.js';
+import {
+  loadCompanyMemoryDonorBind,
+  runBoundCompanyMemoryDonorTick,
+} from './src/application/company-memory-donor-bind.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
@@ -2827,9 +2831,36 @@ const reconciliationInterval = setInterval(() => {
 
 reconciliationInterval.unref();
 
+const companyMemoryDonorBind = loadCompanyMemoryDonorBind(process.env);
+let companyMemoryDonorInterval = null;
+if (companyMemoryDonorBind.enabled) {
+  const runDonor = () => {
+    const db = mailMemory?.store?.db;
+    runBoundCompanyMemoryDonorTick(process.env, db ? { db } : {}).then((donor) => {
+      if (!donor.skipped) {
+        console.log('[mail-company-memory] donor tick', JSON.stringify({
+          attempted: donor.result.attempted,
+          emitted: donor.result.emitted.length,
+          pending: donor.result.pending.length,
+          rejected: donor.result.rejected.length,
+        }));
+      }
+    }).catch((error) => {
+      console.error('[mail-company-memory] donor tick failed:', error);
+    });
+  };
+  runDonor();
+  companyMemoryDonorInterval = setInterval(
+    runDonor,
+    Math.max(5_000, Number(process.env.MAIL_COMPANY_MEMORY_TICK_INTERVAL_MS || 30_000)),
+  );
+  companyMemoryDonorInterval.unref();
+}
+
 let shutdownStarted = false;
 function closePersistentMailMemory() {
   clearInterval(reconciliationInterval);
+  if (companyMemoryDonorInterval) clearInterval(companyMemoryDonorInterval);
   if (!mailMemory) return;
   mailMemory.close();
   mailMemory = null;
