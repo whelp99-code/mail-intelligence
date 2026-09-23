@@ -145,7 +145,7 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   });
 
   const health = await waitForHealth(baseUrl, child, logs);
-  assert.equal(health.storage.schemaVersion, 5);
+  assert.equal(health.storage.schemaVersion, 7);
   assert.equal(health.safety.mode, 'read-only');
   assert.equal(health.graphConsent.includes('Mail.Send'), false);
   assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix11');

@@ -12,7 +12,7 @@ function equal(value, expected) {
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
 }
 
-export function createMailSendApi({ getStore, getMailbox, getSession, readBody, getAccessToken, serviceToken = '', allowSend = false, accessKeyRequired = false, clientFactory = (options) => new GraphSendClient(options) }) {
+export function createMailSendApi({ getStore, getMailbox, getSession, readBody, getAccessToken, serviceToken = '', allowSend = false, accessKeyRequired = false, getAttachmentKey, recheckDrive = async () => {}, clientFactory = (options) => new GraphSendClient(options) }) {
   const reconciliation = new Map();
   return async (req, url) => {
     const match = /^\/api\/mail\/send-drafts(?:\/([0-9a-f-]{36})(?:\/(approve|cancel))?)?$/.exec(url.pathname);
@@ -79,12 +79,18 @@ export function createMailSendApi({ getStore, getMailbox, getSession, readBody, 
     if (!accessKeyRequired) fail(403, 'AUTHENTICATED_OPERATOR_REQUIRED');
     if (Object.keys(body).some((key) => !['payload_digest', 'confirm'].includes(key)) || body.confirm !== true) fail(400, 'EXPLICIT_CONFIRMATION_REQUIRED');
     const token = await getAccessToken();
+    const verified = await drafts.verifySendBuffers(mailbox.id, id, {
+      getKey: getAttachmentKey || (async () => {
+        fail(503, 'ATTACHMENTS_DISABLED');
+      }),
+    });
+    await recheckDrive(drafts.get(mailbox.id, id));
     draft = drafts.approve(mailbox.id, id, { actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token) });
     if (drafts.claim(mailbox.id, id)) {
       const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser });
       let outcome;
       try {
-        outcome = await client.sendOnce(drafts.get(mailbox.id, id), { allowSend });
+        outcome = await client.sendOnce(drafts.get(mailbox.id, id), { allowSend, attachments: verified });
       } catch {
         outcome = { uncertain: true, failureCode: 'GRAPH_ACCEPTANCE_UNKNOWN' };
       }

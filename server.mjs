@@ -25,6 +25,12 @@ import {
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
+import { createMailAttachmentApi } from './src/application/mail-attachment-api.js';
+import { completeGoogleDriveCallback, createMailDriveApi } from './src/application/mail-drive-api.js';
+import { createDriveConnectionService } from './src/application/mail-drive-connections.js';
+import { createConfiguredScanner } from './src/adapters/attachment-scanner.js';
+import { createGoogleDriveClient } from './src/adapters/google-drive-client.js';
+import { parseAttachmentKey } from './src/storage/mail-attachment-crypto.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
@@ -79,6 +85,16 @@ const accessKeyRequired = configuredAccessKey.length > 0;
 const AI_OPT_IN_VERSION = 'ai-oauth-opt-in-v1.2.2';
 const AI_PROMPT_VERSION = 'mail-intelligence-v1.2.2-oauth-prompt-1';
 const MAX_JSON_BODY_BYTES = 256 * 1024;
+const attachmentsEnabled = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.MAIL_ATTACHMENTS_ENABLED || '').trim().toLowerCase(),
+);
+const attachmentKey = parseAttachmentKey(process.env.MAIL_ATTACHMENT_KEY);
+const driveEnabled = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.MAIL_DRIVE_ENABLED || '').trim().toLowerCase(),
+);
+const googleDriveClientId = String(process.env.GOOGLE_DRIVE_CLIENT_ID || '').trim();
+const googleDriveClientSecret = String(process.env.GOOGLE_DRIVE_CLIENT_SECRET || '').trim();
+const googleDriveRedirectUri = String(process.env.GOOGLE_DRIVE_REDIRECT_URI || '').trim();
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const MAX_LOCAL_SESSIONS = 128;
@@ -540,9 +556,12 @@ class HttpError extends Error {
 }
 
 function securityHeaders() {
+  const pickerCsp = driveEnabled
+    ? 'script-src \'self\' https://apis.google.com; frame-src https://docs.google.com https://drive.google.com; connect-src \'self\' https://www.googleapis.com https://accounts.google.com'
+    : 'script-src \'self\'; connect-src \'self\'';
   return {
     'Cache-Control': 'no-store',
-    'Content-Security-Policy': 'default-src \'self\'; base-uri \'none\'; frame-ancestors \'none\'; form-action \'self\'; object-src \'none\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data:; connect-src \'self\'',
+    'Content-Security-Policy': `default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; ${pickerCsp}; style-src 'self' 'unsafe-inline'; img-src 'self' data:`,
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
@@ -2005,9 +2024,48 @@ async function handleApi(req, res) {
   try {
     assertAllowedHost(req);
 
+    if (url.pathname.startsWith('/api/mail/attachment-assets')) {
+      try {
+        const result = await mailAttachmentApi(req, url);
+        if (result.raw) {
+          res.writeHead(result.status, {
+            ...securityHeaders(),
+            ...result.headers,
+            'Content-Length': result.body.length,
+          });
+          res.end(result.body);
+          return;
+        }
+        return json(res, result.status, result.body);
+      } catch (error) {
+        return json(res, error?.statusCode || 500, error?.body || {
+          error: {
+            code: error?.code || 'INTERNAL_ERROR',
+            message: '첨부 요청을 처리할 수 없습니다.',
+            request_id: String(req.headers['x-upload-request-id'] || req.headers['x-request-id'] || ''),
+          },
+        });
+      }
+    }
+
     if (url.pathname.startsWith('/api/mail/send-drafts')) {
       const result = await mailSendApi(req, url);
       return json(res, result.status, result.body);
+    }
+
+    if (url.pathname.startsWith('/api/mail/drive/')) {
+      try {
+        const result = await mailDriveApi(req, url);
+        return json(res, result.status, result.body, result.headers || {});
+      } catch (error) {
+        return json(res, error?.statusCode || 500, error?.body || {
+          error: {
+            code: error?.code || 'INTERNAL_ERROR',
+            message: 'Drive 요청을 처리할 수 없습니다.',
+            request_id: String(req.headers['x-request-id'] || ''),
+          },
+        });
+      }
     }
 
     if (url.pathname === '/api/health') {
@@ -2658,6 +2716,27 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if ((req.url || '').startsWith('/auth/google-drive/callback')) {
+    const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+    try {
+      const session = sessionForRequest(req);
+      const mailbox = requireMailMemory().ensureMailbox(currentMailboxUser());
+      const result = await completeGoogleDriveCallback({
+        connections: driveConnections,
+        session,
+        mailboxId: mailbox.id,
+        code: url.searchParams.get('code') || '',
+        state: url.searchParams.get('state') || '',
+      });
+      res.writeHead(302, { ...securityHeaders(), Location: result.returnPath || '/' });
+      res.end();
+    } catch (error) {
+      res.writeHead(error?.statusCode || 403, { ...securityHeaders(), 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<h1>Google Drive login failed</h1><p>${escapeHtmlServer(error?.code || 'FORBIDDEN')}</p>`);
+    }
+    return;
+  }
+
   if ((req.url || '').startsWith('/auth/callback')) {
     const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
     const state = url.searchParams.get('state') || '';
@@ -2797,6 +2876,79 @@ const mailSendApi = createMailSendApi({
   serviceToken: draftServiceToken,
   allowSend: safetyPolicy.capabilities.mailSend,
   accessKeyRequired,
+  getAttachmentKey: async () => {
+    if (!attachmentKey) {
+      const error = new Error('ENCRYPTION_KEY_MISSING');
+      error.code = 'ENCRYPTION_KEY_MISSING';
+      throw error;
+    }
+    return attachmentKey;
+  },
+  recheckDrive: async (draft) => {
+    for (const item of draft.attachments || []) {
+      await driveConnections.recheckAsset(draft.mailbox_id, item);
+    }
+  },
+});
+const mailAttachmentApi = createMailAttachmentApi({
+  getStore: () => requireMailMemory().store,
+  getMailbox: () => {
+    const mailbox = requireMailMemory().ensureMailbox(currentMailboxUser());
+    return { id: mailbox.id, graphUser: currentMailboxUser() || 'me' };
+  },
+  getSession: sessionForRequest,
+  serviceToken: draftServiceToken,
+  attachmentsEnabled,
+  getAttachmentKey: async () => {
+    if (!attachmentKey) {
+      const error = new Error('ENCRYPTION_KEY_MISSING');
+      error.code = 'ENCRYPTION_KEY_MISSING';
+      throw error;
+    }
+    return attachmentKey;
+  },
+  scanner: createConfiguredScanner(process.env),
+});
+const googleDriveClient = createGoogleDriveClient();
+const driveConnections = createDriveConnectionService({
+  db: requireMailMemory().store.db,
+  getKey: async () => {
+    if (!attachmentKey) {
+      const error = new Error('DRIVE_RECHECK_UNAVAILABLE');
+      error.code = 'DRIVE_RECHECK_UNAVAILABLE';
+      error.statusCode = 503;
+      throw error;
+    }
+    return attachmentKey;
+  },
+  client: googleDriveClient,
+  driveEnabled,
+  clientId: googleDriveClientId,
+  clientSecret: googleDriveClientSecret,
+  redirectUri: googleDriveRedirectUri,
+});
+const mailDriveApi = createMailDriveApi({
+  getStore: () => requireMailMemory().store,
+  getMailbox: () => {
+    const mailbox = requireMailMemory().ensureMailbox(currentMailboxUser());
+    return { id: mailbox.id, graphUser: currentMailboxUser() || 'me' };
+  },
+  getSession: sessionForRequest,
+  readBody: readJsonBody,
+  serviceToken: draftServiceToken,
+  attachmentsEnabled,
+  driveEnabled,
+  getAttachmentKey: async () => {
+    if (!attachmentKey) {
+      const error = new Error('ENCRYPTION_KEY_MISSING');
+      error.code = 'ENCRYPTION_KEY_MISSING';
+      throw error;
+    }
+    return attachmentKey;
+  },
+  scanner: createConfiguredScanner(process.env),
+  connections: driveConnections,
+  client: googleDriveClient,
 });
 mailMemoryHealth = {
   ready: mailMemoryInitialization.storage.ready,
