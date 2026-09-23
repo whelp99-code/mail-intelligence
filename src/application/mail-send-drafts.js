@@ -3,6 +3,7 @@ import {
   assertMailSendRecipientsAllowed,
   normalizeMailSendRecipientAllowlist,
 } from '../security/mail-send-recipient-policy.js';
+import { enqueueSentDraftCompanyMemoryOutbox } from './company-memory-donor.js';
 
 function fail(statusCode, code) {
   const error = new Error(code);
@@ -30,10 +31,11 @@ function text(value, max, singleLine = false) {
 }
 
 export class MailSendDrafts {
-  constructor(db, { now = () => new Date().toISOString(), recipientAllowlist = null } = {}) {
+  constructor(db, { now = () => new Date().toISOString(), recipientAllowlist = null, companyMemory = null } = {}) {
     this.db = db;
     this.now = now;
     this.recipientAllowlist = normalizeMailSendRecipientAllowlist(recipientAllowlist);
+    this.companyMemory = companyMemory && typeof companyMemory === 'object' ? companyMemory : null;
   }
 
   assertRecipientsAllowed(draft) {
@@ -174,7 +176,10 @@ export class MailSendDrafts {
   recordOutcome(mailboxId, id, { graphMessageId = '', sentAt = '', failureCode = '', uncertain = false }) {
     return this.transaction(() => {
       const draft = this.get(mailboxId, id);
-      if (draft.status === 'sent') return draft;
+      if (draft.status === 'sent') {
+        this.enqueueCompanyMemoryReceipt(draft);
+        return draft;
+      }
       if (draft.status !== 'sending') fail(409, 'DRAFT_NOT_SENDING');
       if (graphMessageId && sentAt) {
         if (typeof graphMessageId !== 'string' || graphMessageId.length > 2048 || !Number.isFinite(Date.parse(sentAt))) fail(400, 'INVALID_RECEIPT');
@@ -182,14 +187,26 @@ export class MailSendDrafts {
           .run('sent', graphMessageId, sentAt, id);
         this.event(id, 'sent', 'mail-intelligence');
         if (this.hasReconciliationQueue()) this.db.prepare("UPDATE mail_send_reconciliation_jobs SET state='complete', lease_owner='', lease_expires_at=NULL, updated_at=? WHERE draft_id=?").run(this.now(), id);
-      } else {
-        if (!/^[A-Z][A-Z0-9_]{2,79}$/.test(failureCode)) fail(400, 'INVALID_FAILURE_CODE');
-        const status = uncertain ? 'sending' : 'failed';
-        this.db.prepare('UPDATE mail_send_drafts SET status=?,failure_reason=? WHERE draft_id=?').run(status, failureCode, id);
-        this.event(id, status, 'mail-intelligence', failureCode);
-        if (uncertain) this.enqueueReconciliation(this.get(mailboxId, id), { failureCode });
+        const sent = this.get(mailboxId, id);
+        this.enqueueCompanyMemoryReceipt(sent);
+        return sent;
       }
+      if (!/^[A-Z][A-Z0-9_]{2,79}$/.test(failureCode)) fail(400, 'INVALID_FAILURE_CODE');
+      const status = uncertain ? 'sending' : 'failed';
+      this.db.prepare('UPDATE mail_send_drafts SET status=?,failure_reason=? WHERE draft_id=?').run(status, failureCode, id);
+      this.event(id, status, 'mail-intelligence', failureCode);
+      if (uncertain) this.enqueueReconciliation(this.get(mailboxId, id), { failureCode });
       return this.get(mailboxId, id);
     });
+  }
+
+  enqueueCompanyMemoryReceipt(draft) {
+    const workspaceId = this.companyMemory?.workspaceId;
+    if (!workspaceId) return;
+    enqueueSentDraftCompanyMemoryOutbox(this.db, {
+      workspaceId,
+      provider: this.companyMemory.provider || 'outlook',
+      draft,
+    }, this.now());
   }
 }

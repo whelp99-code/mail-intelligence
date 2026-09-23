@@ -19,7 +19,8 @@ function iso(value) {
 export class SendReconciliationWorker {
   constructor({
     db,
-    drafts = new MailSendDrafts(db),
+    drafts,
+    companyMemory = null,
     clientFactory,
     getAccessToken,
     now = () => new Date(),
@@ -32,7 +33,7 @@ export class SendReconciliationWorker {
     if (typeof clientFactory !== 'function') throw new Error('clientFactory is required.');
     if (typeof getAccessToken !== 'function') throw new Error('getAccessToken is required.');
     this.db = db;
-    this.drafts = drafts;
+    this.drafts = drafts || new MailSendDrafts(db, { companyMemory });
     this.clientFactory = clientFactory;
     this.getAccessToken = getAccessToken;
     this.now = now;

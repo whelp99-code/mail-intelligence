@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import {
   createMailProductDonorPort,
+  mailSentDraftSourceLocator,
   publishCompanyMemoryDonor,
 } from './company-memory-donor.js';
 
@@ -67,6 +68,7 @@ export function loadCompanyMemoryDonorBind(env) {
     configPath,
     signingKeyFile,
     authorityFile,
+    workspaceId: authority.context.workspaceId,
   };
 }
 
@@ -99,6 +101,16 @@ export function resolveMailCompanyMemorySource(db, event) {
   const provider = String(event.provider || '').normalize('NFC').trim();
   const workspaceId = String(event.workspaceId || '').normalize('NFC').trim();
   if (!locator || !sourceEventId || !mailbox || !provider || !workspaceId) return null;
+  const fromMessage = resolveMessageCompanyMemorySource(db, {
+    locator, sourceEventId, mailbox, provider, workspaceId, kind: event.kind,
+  });
+  if (fromMessage) return fromMessage;
+  return resolveSentDraftCompanyMemorySource(db, {
+    locator, sourceEventId, mailbox, provider, workspaceId,
+  });
+}
+
+function resolveMessageCompanyMemorySource(db, input) {
   let row;
   try {
     row = db.prepare(
@@ -109,7 +121,7 @@ export function resolveMailCompanyMemorySource(db, event) {
          AND (m.graph_id = ? OR m.graph_id = ? OR m.internet_message_id = ?)
          AND (mb.address = ? OR mb.graph_user = ? OR mb.mailbox_key = ?)
        LIMIT 1`,
-    ).get(locator, sourceEventId, sourceEventId, mailbox, mailbox, mailbox);
+    ).get(input.locator, input.sourceEventId, input.sourceEventId, input.mailbox, input.mailbox, input.mailbox);
   } catch {
     return null;
   }
@@ -117,16 +129,53 @@ export function resolveMailCompanyMemorySource(db, event) {
   const content = String(row.body_text || row.body_preview || '').normalize('NFC').trim();
   if (!content) return null;
   return {
-    workspaceId,
-    provider,
-    mailbox,
-    sourceLocator: locator,
-    sourceEventId,
+    workspaceId: input.workspaceId,
+    provider: input.provider,
+    mailbox: input.mailbox,
+    sourceLocator: input.locator,
+    sourceEventId: input.sourceEventId,
     content,
     parserVersion: 'mail:company-memory:1',
     locator: {
-      kind: event.kind === 'INBOX_RECEIVED' ? 'mail_message' : 'mail_work',
+      kind: input.kind === 'INBOX_RECEIVED' ? 'mail_message' : 'mail_work',
       graph_id: row.graph_id,
+    },
+  };
+}
+
+function resolveSentDraftCompanyMemorySource(db, input) {
+  if (input.locator !== mailSentDraftSourceLocator(input.sourceEventId)) return null;
+  let row;
+  try {
+    row = db.prepare(
+      `SELECT d.draft_id, d.graph_message_id, d.sent_at
+       FROM mail_send_drafts d
+       JOIN mailboxes mb ON mb.id = d.mailbox_id
+       WHERE d.draft_id = ?
+         AND d.status = 'sent'
+         AND (mb.address = ? OR mb.graph_user = ? OR mb.mailbox_key = ?)
+       LIMIT 1`,
+    ).get(input.sourceEventId, input.mailbox, input.mailbox, input.mailbox);
+  } catch {
+    return null;
+  }
+  if (!row) return null;
+  const draftId = String(row.draft_id || '').normalize('NFC').trim();
+  const graphId = String(row.graph_message_id || '').normalize('NFC').trim();
+  const sentAt = String(row.sent_at || '').normalize('NFC').trim();
+  if (!draftId || !graphId || !sentAt) return null;
+  return {
+    workspaceId: input.workspaceId,
+    provider: input.provider,
+    mailbox: input.mailbox,
+    sourceLocator: input.locator,
+    sourceEventId: input.sourceEventId,
+    content: `mail-send-receipt:v1:draft_id=${draftId}:graph_message_id=${graphId}:sent_at=${sentAt}`,
+    parserVersion: 'mail:company-memory:1',
+    locator: {
+      kind: 'mail_send_draft',
+      draft_id: draftId,
+      graph_id: graphId,
     },
   };
 }

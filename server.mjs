@@ -2798,6 +2798,10 @@ async function readPrivateToken(envValue, fileEnv, label) {
 }
 const draftServiceToken = await readPrivateToken('MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE', 'Grok draft');
 const jarvisDraftToken = await readPrivateToken('MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN_FILE', 'JARVIS draft');
+const companyMemoryDonorBind = loadCompanyMemoryDonorBind(process.env);
+const companyMemory = companyMemoryDonorBind.enabled
+  ? { workspaceId: companyMemoryDonorBind.workspaceId, provider: 'outlook' }
+  : null;
 const mailSendApi = createMailSendApi({
   getStore: () => requireMailMemory().store,
   getMailbox: () => {
@@ -2812,6 +2816,7 @@ const mailSendApi = createMailSendApi({
   allowSend: safetyPolicy.capabilities.mailSend,
   accessKeyRequired,
   recipientAllowlist: mailSendRecipientAllowlist,
+  companyMemory,
 });
 mailMemoryHealth = {
   ready: mailMemoryInitialization.storage.ready,
@@ -2820,6 +2825,7 @@ mailMemoryHealth = {
 };
 const reconciliationWorker = createSendReconciliationWorker({
   db: mailMemory.store.db,
+  companyMemory,
   getAccessToken: () => getGraphAccessToken(),
   clientFactory: ({ accessToken, mailboxUser }) => new GraphSendClient({ accessToken, mailboxUser }),
 });
@@ -2831,7 +2837,6 @@ const reconciliationInterval = setInterval(() => {
 
 reconciliationInterval.unref();
 
-const companyMemoryDonorBind = loadCompanyMemoryDonorBind(process.env);
 let companyMemoryDonorInterval = null;
 if (companyMemoryDonorBind.enabled) {
   const runDonor = () => {

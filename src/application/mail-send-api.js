@@ -16,6 +16,7 @@ export function createMailSendApi({
   getStore, getMailbox, getSession, readBody, getAccessToken,
   serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
   recipientAllowlist = null,
+  companyMemory = null,
   clientFactory = (options) => new GraphSendClient(options),
 }) {
   const tokens = { ...agentTokens };
@@ -51,7 +52,7 @@ export function createMailSendApi({
       }
     }
     const store = getStore();
-    const drafts = new MailSendDrafts(store.db, { recipientAllowlist });
+    const drafts = new MailSendDrafts(store.db, { recipientAllowlist, companyMemory });
     const mailbox = getMailbox();
     const decorate = (draft) => {
       const source = draft.message_id === null ? null : store.db.prepare('SELECT subject,web_link FROM messages WHERE id=? AND mailbox_id=?').get(draft.message_id, mailbox.id);

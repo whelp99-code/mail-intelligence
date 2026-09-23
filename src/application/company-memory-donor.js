@@ -7,7 +7,9 @@
  * request-digest / operation / candidate / state receipt.
  *
  * Signing material is operator-injected. This module does not invent a shared
- * key with Second Brain or CRM. Live Mail ingest/send is not bound here.
+ * key with Second Brain or CRM. Live Mail ingest is not bound here. A send
+ * draft that reaches status `sent` enqueues one keys-only INBOX_RECEIVED row
+ * keyed by draft_id.
  */
 import { createHash } from 'node:crypto';
 
@@ -62,6 +64,37 @@ export function createMailProductDonorPort(options) {
       markMailCompanyMemoryEmitted(options.db, workspaceId, id);
     },
   };
+}
+
+export function mailSentDraftSourceLocator(draftId) {
+  return `mail-send-draft:${requiredText(draftId, 'draft_id')}`;
+}
+
+export function enqueueSentDraftCompanyMemoryOutbox(db, input, now) {
+  if (!db) {
+    throw new CompanyMemoryDonorError(
+      'MAIL_ADAPTER_NOT_IMPLEMENTED',
+      'Mail company-memory outbox requires a Mail database',
+    );
+  }
+  assertMailCompanyMemoryOutbox(db);
+  const draftId = requiredText(input?.draftId ?? input?.draft?.draft_id, 'draft_id');
+  const draft = sameDraft(input?.draft, draftId) ? input.draft : loadSendDraft(db, draftId);
+  if (!draft) {
+    throw new CompanyMemoryDonorError('DRAFT_NOT_FOUND', 'send draft not found');
+  }
+  if (String(draft.status || '').normalize('NFC').trim() !== 'sent') {
+    throw new CompanyMemoryDonorError('DRAFT_NOT_SENT', 'send draft is not sent');
+  }
+  requiredText(draft.graph_message_id, 'graph_message_id');
+  return enqueueMailCompanyMemoryOutbox(db, {
+    workspaceId: input?.workspaceId,
+    kind: 'INBOX_RECEIVED',
+    provider: input?.provider || 'outlook',
+    mailbox: resolveDraftMailbox(db, draft, input?.mailbox),
+    sourceLocator: mailSentDraftSourceLocator(draftId),
+    sourceEventId: draftId,
+  }, now);
 }
 
 export function enqueueMailCompanyMemoryOutbox(db, input, now) {
@@ -171,6 +204,48 @@ function optionalText(value) {
   if (value == null) return null;
   const normalized = String(value).normalize('NFC').trim();
   return normalized || null;
+}
+
+function sameDraft(draft, draftId) {
+  if (!draft || typeof draft !== 'object') return false;
+  return String(draft.draft_id || '').normalize('NFC').trim() === draftId;
+}
+
+function loadSendDraft(db, draftId) {
+  try {
+    return db.prepare('SELECT * FROM mail_send_drafts WHERE draft_id = ?').get(draftId) || null;
+  } catch {
+    throw new CompanyMemoryDonorError('DRAFT_NOT_FOUND', 'send draft not found');
+  }
+}
+
+function resolveDraftMailbox(db, draft, fallback) {
+  const provided = optionalText(fallback);
+  if (provided) return provided;
+  let row;
+  try {
+    row = db.prepare('SELECT * FROM mailboxes WHERE id = ?').get(draft.mailbox_id);
+  } catch {
+    row = null;
+  }
+  return requiredText(
+    optionalText(row?.address) || optionalText(row?.graph_user) || optionalText(row?.mailbox_key),
+    'mailbox',
+  );
+}
+
+function assertMailCompanyMemoryOutbox(db) {
+  let row;
+  try {
+    row = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='mail_company_memory_outbox'",
+    ).get();
+  } catch {
+    throw new CompanyMemoryDonorError('COMPANY_MEMORY_OUTBOX_UNAVAILABLE', 'mail company-memory outbox schema is unavailable');
+  }
+  if (!row || typeof row.name !== 'string' || !row.name.trim()) {
+    throw new CompanyMemoryDonorError('COMPANY_MEMORY_OUTBOX_UNAVAILABLE', 'mail company-memory outbox schema is unavailable');
+  }
 }
 
 function formatInstant(value) {

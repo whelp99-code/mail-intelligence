@@ -33,9 +33,11 @@ Acknowledgement is fail-closed (matching receipt required).
 cannot invent a Mail database. Server bind is env-gated in
 `src/application/company-memory-donor-bind.js`: absent `COMPANY_MEMORY_*`
 skips; incomplete/unknown/missing files fail closed at boot; personal `sb`
-is rejected. No personal `sb remember` or shared signing key. Tests use
-ephemeral Ed25519 keypairs; operator pairing is documented in
-`docs/core5/COMPANY-MEMORY-DONOR.md`.
+is rejected. A send draft that reaches `sent` enqueues one keys-only
+`INBOX_RECEIVED` row keyed by `draft_id`. Source resolve can use that sent
+draft without inbox ingest or mail bodies. No personal `sb remember` or
+shared signing key. Tests use ephemeral Ed25519 keypairs; operator pairing
+is documented in `docs/core5/COMPANY-MEMORY-DONOR.md`.
 
 ## Local checkpoint verification
 

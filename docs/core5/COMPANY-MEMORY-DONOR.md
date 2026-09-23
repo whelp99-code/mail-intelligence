@@ -2,8 +2,9 @@
 
 Status: Mail-side publisher and CRM-consumable outbox implemented in-process.
 Server tick is env-gated and off by default. No live company-memory writes
-unless the four `COMPANY_MEMORY_*` files are set. Ingest and send paths are
-otherwise unchanged.
+unless the four `COMPANY_MEMORY_*` files are set. Inbox ingest still does not
+enqueue. A send draft that reaches status `sent` inserts one keys-only
+`INBOX_RECEIVED` outbox row keyed by `draft_id` (idempotent).
 
 This repository publishes toward the Second Brain `sb-company` contract
 (`second-brain-app/docs/core5/COMPANY-MEMORY-DONOR-CONTRACT.md`). The donor
@@ -27,6 +28,7 @@ outbox row. Mail text is evidence, not mutation authority.
 Entry points:
 
 - `enqueueMailCompanyMemoryOutbox` — durable Mail-side emission into the CRM-consumable outbox
+- `enqueueSentDraftCompanyMemoryOutbox` — fail-closed send-receipt enqueue keyed by `draft_id`
 - `publishCompanyMemoryDonor` — one tick over pending Mail outbox rows
 - `createMailProductDonorPort({ db, resolveSource })` — adapter CRM can call once it has a Mail database
 - `createMailProductDonorPort()` — fail-closed `MAIL_ADAPTER_NOT_IMPLEMENTED`
