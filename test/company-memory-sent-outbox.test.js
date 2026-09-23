@@ -58,6 +58,7 @@ function openDb({ outbox = true } = {}) {
   `);
   db.exec(DRAFTS);
   db.exec(PRINCIPALS);
+  db.exec(readFileSync(new URL('../migrations/006_mail_attachments.sql', import.meta.url), 'utf8'));
   if (outbox) db.exec(OUTBOX);
   return db;
 }

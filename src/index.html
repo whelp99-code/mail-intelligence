@@ -302,6 +302,34 @@
             <label>참조 · 선택<input id="sendDraftCc" type="text" autocomplete="off" /></label>
             <label>제목<input id="sendDraftSubject" type="text" maxlength="998" /></label>
             <label>본문<textarea id="sendDraftBody" rows="7" maxlength="30000"></textarea></label>
+            <div class="attachment-actions">
+              <button id="attachLocalFiles" type="button">PC 파일 첨부</button>
+              <button id="attachDriveFiles" type="button">Google Drive에서 선택</button>
+              <button id="attachDriveLink" type="button">Drive 링크 추가</button>
+              <input id="attachmentFileInput" type="file" multiple hidden accept=".pdf,.docx,.xlsx,.pptx,.hwp,.hwpx,.txt,.csv,.png,.jpeg,.jpg" />
+            </div>
+            <div id="driveFileComposer" class="drive-link-composer" hidden>
+              <p id="driveConnectionStatus" class="attachment-live">Google Drive 연결 상태를 확인하는 중입니다.</p>
+              <label>선택한 파일 ID<input id="driveFileId" type="text" autocomplete="off" /></label>
+              <label>문서 변환
+                <select id="driveExportMime">
+                  <option value="application/pdf">PDF</option>
+                  <option value="application/vnd.openxmlformats-officedocument.wordprocessingml.document">DOCX</option>
+                  <option value="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">XLSX</option>
+                  <option value="application/vnd.openxmlformats-officedocument.presentationml.presentation">PPTX</option>
+                </select>
+              </label>
+              <button id="confirmDriveImport" type="button">선택한 Drive 파일 가져오기</button>
+              <button id="connectGoogleDrive" type="button">Google 계정 연결</button>
+            </div>
+            <div id="driveLinkComposer" class="drive-link-composer" hidden>
+              <label>Drive 링크<input id="driveLinkUrl" type="url" autocomplete="off" placeholder="https://drive.google.com/file/d/…/view" /></label>
+              <label>표시 이름 · 선택<input id="driveLinkLabel" type="text" maxlength="180" autocomplete="off" /></label>
+              <label class="drive-link-ack"><input id="driveLinkAck" type="checkbox" /> 파일 첨부가 아닌 링크이며 수신자의 접근 권한은 확인되지 않았습니다.</label>
+              <button id="confirmDriveLink" type="button">확인한 링크 추가</button>
+            </div>
+            <p id="attachmentLive" class="attachment-live" aria-live="polite">첨부를 선택하지 않았습니다.</p>
+            <ul id="composeAttachmentList" class="attachment-list" aria-label="작성 중 첨부 파일"></ul>
             <button id="saveSendDraft" type="submit">검토용 초안 저장</button>
           </form>
         </details>

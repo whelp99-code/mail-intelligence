@@ -17,6 +17,7 @@ export function createMailSendApi({
   serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
   recipientAllowlist = null,
   companyMemory = null,
+  getAttachmentKey, recheckDrive = async () => {},
   clientFactory = (options) => new GraphSendClient(options),
 }) {
   const tokens = { ...agentTokens };
@@ -97,12 +98,18 @@ export function createMailSendApi({
     if (Object.keys(body).some((key) => !['payload_digest', 'confirm'].includes(key)) || body.confirm !== true) fail(400, 'EXPLICIT_CONFIRMATION_REQUIRED');
     drafts.assertRecipientsAllowed(draft);
     const token = await getAccessToken();
+    const verified = await drafts.verifySendBuffers(mailbox.id, id, {
+      getKey: getAttachmentKey || (async () => {
+        fail(503, 'ATTACHMENTS_DISABLED');
+      }),
+    });
+    await recheckDrive(drafts.get(mailbox.id, id));
     draft = drafts.approve(mailbox.id, id, { actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token) });
     if (drafts.claim(mailbox.id, id)) {
       const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist });
       let outcome;
       try {
-        outcome = await client.sendOnce(drafts.get(mailbox.id, id), { allowSend });
+        outcome = await client.sendOnce(drafts.get(mailbox.id, id), { allowSend, attachments: verified });
       } catch {
         outcome = { uncertain: true, failureCode: 'GRAPH_ACCEPTANCE_UNKNOWN' };
       }

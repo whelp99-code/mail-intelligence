@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { decryptAttachment } from './mail-attachment-crypto.js';
 
 function ensurePrivateDirectorySync(directoryPath) {
   if (!existsSync(directoryPath)) {
@@ -173,5 +174,44 @@ export async function restoreDatabaseFromBackup({
       chmodSync(target, 0o600);
     }
     throw error;
+  }
+}
+
+export function verifyRestoredAttachmentAssets({ databasePath, getKey }) {
+  const target = resolve(databasePath);
+  assertRegularDatabaseFile(target, 'SQLite database');
+  const database = new DatabaseSync(target, { readOnly: true });
+  try {
+    const rows = database.prepare(`
+      SELECT id, mailbox_id, sha256, ciphertext, nonce, auth_tag, key_version,
+             encryption_aad_version, encryption_policy_version, state
+      FROM mail_attachment_assets
+      WHERE state='ready'
+    `).all();
+    return rows.map((row) => {
+      if (!row.ciphertext) {
+        return { id: row.id, ok: false, reason: 'MISSING_CIPHERTEXT' };
+      }
+      try {
+        const key = getKey(row);
+        if (!key) return { id: row.id, ok: false, reason: 'KEY_MISSING' };
+        const bytes = decryptAttachment({
+          ciphertext: row.ciphertext,
+          nonce: row.nonce,
+          authTag: row.auth_tag,
+          key,
+          assetId: row.id,
+          mailboxId: row.mailbox_id,
+          encryptionAadVersion: row.encryption_aad_version,
+          encryptionPolicyVersion: row.encryption_policy_version,
+        });
+        const digest = createHash('sha256').update(bytes).digest('hex');
+        return { id: row.id, ok: digest === row.sha256, sha256: digest, reason: digest === row.sha256 ? 'MATCH' : 'HASH_MISMATCH' };
+      } catch (error) {
+        return { id: row.id, ok: false, reason: error?.code || 'DECRYPT_FAILED' };
+      }
+    });
+  } finally {
+    database.close();
   }
 }

@@ -10,6 +10,8 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { bridgeAttachmentDraftPrincipals } from './attachment-migration-bridge.js';
+
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
 import {
   WORKLINK_PROJECTION_PROVIDER,
@@ -325,19 +327,29 @@ export class SQLiteMailStore {
       'INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
     );
 
-    for (const name of files) {
+    // Validate all existing history before filling lower-numbered migration gaps.
+    const migrations = files.map((name) => {
       const version = migrationVersion(name);
       const source = readFileSync(join(this.migrationsDir, name), 'utf8');
       const checksum = digest(source);
       const applied = getApplied.get(version);
-      if (applied) {
-        if (applied.name !== name || applied.checksum !== checksum) {
-          throw new Error(`Migration ${version} checksum or name changed after application.`);
-        }
-        continue;
+      if (applied && (applied.name !== name || applied.checksum !== checksum)) {
+        throw new Error(`Migration ${version} checksum or name changed after application.`);
       }
+      return { version, name, source, checksum };
+    });
+
+    for (const { version, name, source, checksum } of migrations) {
+      if (getApplied.get(version)) continue;
       this.transaction(() => {
-        this.db.exec(source);
+        const attachments = getApplied.get(6);
+        if (name === '009_mail_send_draft_principals.sql'
+          && attachments?.name === '006_mail_attachments.sql'
+          && attachments.checksum === '8b81b2bab51ac5853eb2c37737a9cc1bfd7b2111dd8fe52d4913a892d47cc0df') {
+          bridgeAttachmentDraftPrincipals(this.db, source);
+        } else {
+          this.db.exec(source);
+        }
         insertApplied.run(version, name, checksum, this.now());
       });
     }

@@ -10,6 +10,7 @@ function fixture(t) {
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE mailboxes(id INTEGER PRIMARY KEY, graph_user TEXT); INSERT INTO mailboxes VALUES(1,\'me\'); CREATE TABLE messages(id INTEGER PRIMARY KEY,mailbox_id INTEGER,deleted_at TEXT);');
   db.exec(readFileSync(new URL('../migrations/005_mail_send_drafts.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/009_mail_send_draft_principals.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/006_mail_attachments.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/010_mail_send_reconciliation.sql', import.meta.url), 'utf8'));
   t.after(() => db.close());
   return db;

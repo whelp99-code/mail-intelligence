@@ -1,33 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createMailSendApi } from '../src/application/mail-send-api.js';
 import { MailSendDrafts } from '../src/application/mail-send-drafts.js';
+import {
+  createAttachmentAssetService,
+  createSyntheticPassScanner,
+} from '../src/application/mail-attachment-assets.js';
 
 const secret = 'synthetic-restricted-draft-token-0123456789';
 const body = { request_id: 'api-request-001', to: ['self@example.com'], subject: 'Fixture', body_text: 'Synthetic only.' };
 const claims = Buffer.from(JSON.stringify({ scp: 'Mail.Read Mail.Send', exp: Date.now() / 1000 + 3600 })).toString('base64url');
-function fixture(t, options = {}) {
+function fixture(t, options = {}, onSend = async () => {}) {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE mailboxes(id INTEGER PRIMARY KEY); INSERT INTO mailboxes VALUES(1); CREATE TABLE messages(id INTEGER PRIMARY KEY,mailbox_id INTEGER,deleted_at TEXT,subject TEXT,web_link TEXT);');
   db.exec(readFileSync(new URL('../migrations/005_mail_send_drafts.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/009_mail_send_draft_principals.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/006_mail_attachments.sql', import.meta.url), 'utf8'));
   t.after(() => db.close());
   let sends = 0;
+  const sentAttachments = [];
+  const ATTACH_KEY = Buffer.alloc(32, 17);
   const api = createMailSendApi({
     getStore: () => ({ db }), getMailbox: () => ({ id: 1, graphUser: 'me' }),
     getSession: (req) => req.headers.cookie === 'fixture-session' ? { token: 'fixture-session', csrfToken: 'fixture-csrf' } : null,
     readBody: async (req) => req.body,
     getAccessToken: async () => `fixture.${claims}.fixture`,
     serviceToken: secret, allowSend: true, accessKeyRequired: true,
-    clientFactory: () => ({ sendOnce: async () => { sends++; await new Promise((resolve) => setTimeout(resolve, 10)); return { graphMessageId: 'fixture-sent', sentAt: '2026-09-09T01:00:00Z' }; }, reconcile: async () => ({ uncertain: true, failureCode: 'GRAPH_RECEIPT_PENDING' }) }),
+    getAttachmentKey: async () => ATTACH_KEY,
+    clientFactory: () => ({
+      sendOnce: async (_draft, sendOptions = {}) => {
+        sends++;
+        sentAttachments.push(sendOptions.attachments || []);
+        await onSend();
+        return { graphMessageId: 'fixture-sent', sentAt: '2026-09-09T01:00:00Z' };
+      },
+      reconcile: async () => ({ uncertain: true, failureCode: 'GRAPH_RECEIPT_PENDING' }),
+    }),
     ...options,
   });
   const call = (method, path, payload = {}, headers = {}) => api({ method, body: payload, headers }, new URL('http://127.0.0.1:3010/api/mail/send-drafts' + path));
   const human = { cookie: 'fixture-session', origin: 'http://127.0.0.1:3010', 'x-csrf-token': 'fixture-csrf' };
   const bot = { authorization: `Bearer ${secret}` };
-  return { db, call, human, bot, sends: () => sends };
+  return { db, call, human, bot, sends: () => sends, sentAttachments, ATTACH_KEY };
 }
 
 test('bot creates needs_approval and reads only its drafts, never sends', async (t) => {
@@ -71,11 +89,23 @@ test('human approval enforces csrf, origin and explicit confirmation', async (t)
   assert.equal(f.sends(), 0);
 });
 
-test('simultaneous and repeated human approvals send once and persist receipt', async (t) => {
-  const f = fixture(t);
+test('simultaneous and repeated human approvals send once and persist receipt', { timeout: 5000 }, async (t) => {
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(() => release.resolve());
+  const f = fixture(t, {}, async () => {
+    started.resolve();
+    await release.promise;
+  });
   const draft = (await f.call('POST', '', body, f.bot)).body.draft;
   const approve = () => f.call('POST', `/${draft.draft_id}/approve`, { confirm: true, payload_digest: draft.payload_digest }, f.human);
-  await Promise.all([approve(), approve()]);
+  const first = approve();
+  await started.promise;
+  const concurrent = await approve();
+  assert.equal(concurrent.body.draft.status, 'sending');
+  assert.equal(f.sends(), 1);
+  release.resolve();
+  await first;
   const result = await approve();
   assert.equal(result.body.draft.status, 'sent');
   assert.equal(result.body.draft.graph_message_id, 'fixture-sent');
@@ -134,4 +164,45 @@ test('other-agent read, stolen token, and human spoof are rejected', async (t) =
   );
   const approved = await f.call('POST', `/${jarvisDraft.draft_id}/approve`, { confirm: true, payload_digest: jarvisDraft.payload_digest }, f.human);
   assert.equal(approved.body.draft.status, 'sent');
+});
+
+async function uploadUiAsset(f, bytes = Buffer.from('api-attached', 'utf8'), name = 'note.txt') {
+  const assets = createAttachmentAssetService({
+    db: f.db,
+    getKey: async () => f.ATTACH_KEY,
+    scanner: createSyntheticPassScanner(),
+    attachmentsEnabled: true,
+  });
+  const result = await assets.upload({
+    mailboxId: 1,
+    source: 'ui',
+    requestId: randomUUID(),
+    displayName: name,
+    declaredMime: 'text/plain',
+    origin: 'local',
+    contentLength: bytes.length,
+    body: Readable.from(bytes),
+  });
+  return { asset: result.asset, bytes };
+}
+
+test('approved attachment draft sends the verified buffer once and rejects tamper', async (t) => {
+  const f = fixture(t);
+  const { asset, bytes } = await uploadUiAsset(f);
+  const created = await f.call('POST', '', { ...body, request_id: 'api-request-attach', attachment_ids: [asset.id] }, f.human);
+  assert.equal(created.body.draft.digest_version, 2);
+  assert.equal(created.body.draft.attachments[0].sha256, createHash('sha256').update(bytes).digest('hex'));
+  const approved = await f.call('POST', `/${created.body.draft.draft_id}/approve`, { confirm: true, payload_digest: created.body.draft.payload_digest }, f.human);
+  assert.equal(approved.body.draft.status, 'sent');
+  assert.equal(f.sends(), 1);
+  assert.deepEqual(f.sentAttachments[0][0].bytes, bytes);
+
+  const again = await uploadUiAsset(f, Buffer.from('second'), 'two.txt');
+  const other = await f.call('POST', '', { ...body, request_id: 'api-request-tamper', attachment_ids: [again.asset.id] }, f.human);
+  f.db.prepare('UPDATE mail_attachment_assets SET sha256=? WHERE id=?').run('11'.repeat(32), again.asset.id);
+  await assert.rejects(
+    f.call('POST', `/${other.body.draft.draft_id}/approve`, { confirm: true, payload_digest: other.body.draft.payload_digest }, f.human),
+    { code: 'ASSET_CHANGED' },
+  );
+  assert.equal(f.sends(), 1);
 });

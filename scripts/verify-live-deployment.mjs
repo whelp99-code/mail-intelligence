@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
+
+const latestMigrationVersion = Math.max(...(await readdir(new URL('../migrations/', import.meta.url)))
+  .map((name) => /^(\d+)_.*\.sql$/.exec(name))
+  .filter(Boolean)
+  .map((match) => Number(match[1])));
 
 const baseUrl = String(process.env.MAIL_INTELLIGENCE_BASE_URL || 'http://127.0.0.1:3010').replace(/\/$/, '');
 const accessKeyPath = process.env.MAIL_INTELLIGENCE_ACCESS_KEY_FILE
@@ -30,7 +35,7 @@ assert.equal(health.body.listenHost, '127.0.0.1');
 assert.equal(health.body.safety?.mode, 'read-only');
 assert.equal(health.body.externalActionsAllowed, false);
 assert.equal(health.body.storage?.authoritativeStore, 'sqlite');
-assert.equal(health.body.storage?.schemaVersion, 5);
+assert.equal(health.body.storage?.schemaVersion, 9);
 assert.equal(health.body.storage?.ready, true);
 assert.ok(health.body.graphConsent?.includes('Mail.Read'));
 assert.equal(health.body.graphConsent?.includes('Mail.Send'), false);
@@ -128,7 +133,7 @@ assert.equal(configSave.body.aiProvider, config.body.aiProvider || 'rules');
 const storage = await jsonResponse('/api/storage/status', { headers: readHeaders });
 assert.equal(storage.response.status, 200);
 assert.equal(storage.body.authoritativeStore, 'sqlite');
-assert.equal(storage.body.schemaVersion, 5);
+assert.equal(storage.body.schemaVersion, 9);
 assert.equal(storage.body.ready, true);
 
 const oauthProviders = await jsonResponse('/api/ai/oauth/status', { headers: readHeaders });
@@ -185,7 +190,7 @@ const backup = await jsonResponse('/api/storage/backup', {
 });
 assert.equal(backup.response.status, 201, JSON.stringify(backup.body));
 assert.equal(backup.body.created, true);
-assert.equal(backup.body.backup?.schemaVersion, 5);
+assert.equal(backup.body.backup?.schemaVersion, latestMigrationVersion);
 assert.equal(backup.body.backup?.integrity, true);
 assert.match(backup.body.backup?.checksumSha256 || '', /^[a-f0-9]{64}$/);
 
