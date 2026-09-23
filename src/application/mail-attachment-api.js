@@ -135,7 +135,7 @@ export function createMailAttachmentApi({
 
       if (!id) fail(405, 'METHOD_NOT_ALLOWED');
       if (action === 'content' && req.method === 'GET') {
-        const content = await service.getContent(mailbox.id, id, { source, actor: 'human' });
+        const content = await service.getContent(mailbox.id, id, { actor: 'human' });
         const encoded = encodeURIComponent(content.name);
         return {
           status: 200,

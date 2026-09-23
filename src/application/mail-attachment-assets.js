@@ -337,11 +337,14 @@ export function createAttachmentAssetService({
       return publicAsset(visibleRow(mailboxId, id, source));
     },
 
-    async getContent(mailboxId, id, { source, actor } = {}) {
+    async getContent(mailboxId, id, { actor } = {}) {
       assertEnabled();
-      assertSource(source);
       if (actor !== 'human') fail(403, 'FORBIDDEN');
-      const row = visibleRow(mailboxId, id, source);
+      const row = db.prepare(`
+        SELECT * FROM mail_attachment_assets
+        WHERE mailbox_id=? AND id=? AND state <> 'expired'
+      `).get(mailboxId, id);
+      if (!row) fail(404, 'ASSET_NOT_FOUND');
       if (row.state !== 'ready') fail(409, 'ASSET_CHANGED');
       const key = await requireKey();
       const bytes = decryptAttachment({

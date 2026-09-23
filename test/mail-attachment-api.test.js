@@ -93,14 +93,31 @@ test('identical request_id replays and different bytes conflict', async (t) => {
   );
 });
 
-test('bot can upload its own source but cannot download bytes', async (t) => {
+test('human can review bot-uploaded bytes in the same mailbox, but bearer access stays denied', async (t) => {
   const f = fixture(t);
   const { bytes, headers } = uploadHeaders(f.bot);
   const created = await f.call('POST', '', { body: Readable.from(bytes), headers });
   assert.equal(created.status, 201);
   await assert.rejects(f.call('GET', `/${created.body.id}/content`, { headers: f.bot }), { code: 'FORBIDDEN' });
-  const humanHeaders = { ...f.human };
-  await assert.rejects(f.call('GET', `/${created.body.id}/content`, { headers: humanHeaders }), { code: 'ASSET_NOT_FOUND' });
+  await assert.rejects(f.call('GET', `/${created.body.id}/content`, { headers: { ...f.human, ...f.bot } }), { code: 'FORBIDDEN' });
+  const downloaded = await f.call('GET', `/${created.body.id}/content`, { headers: f.human });
+  assert.equal(downloaded.status, 200);
+  assert.deepEqual(downloaded.body, bytes);
+  assert.match(downloaded.headers['Content-Disposition'], /attachment/);
+  assert.equal(downloaded.headers['X-Content-Type-Options'], 'nosniff');
+  await assert.rejects(
+    f.call('GET', `/${created.body.id}/content`, { headers: f.human, mailboxId: 2 }),
+    { code: 'ASSET_NOT_FOUND' },
+  );
+  await assert.rejects(
+    f.call('POST', `/${created.body.id}/discard`, { headers: f.human, body: {} }),
+    { code: 'ASSET_NOT_FOUND' },
+  );
+  f.db.prepare('UPDATE mail_attachment_assets SET state=? WHERE id=?').run('staged', created.body.id);
+  await assert.rejects(
+    f.call('GET', `/${created.body.id}/content`, { headers: f.human }),
+    { code: 'ASSET_CHANGED' },
+  );
 });
 
 test('human download is attachment/nosniff and foreign mailbox is hidden', async (t) => {

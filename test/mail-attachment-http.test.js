@@ -139,3 +139,51 @@ test('isolated unused-port server uploads a synthetic file when attachments are 
   assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(Buffer.from(await download.arrayBuffer()).toString('utf8'), '한글본문');
 });
+
+test('human reviews a Grok draft attachment over HTTP without granting bearer download or send', { timeout: 15000 }, async (t) => {
+  const { base, cookie } = await startIsolated(t, {
+    MAIL_ATTACHMENTS_ENABLED: '1',
+    MAIL_DRIVE_ENABLED: '0',
+    MAIL_ATTACHMENT_KEY: '11'.repeat(32),
+    MAIL_ATTACHMENT_SCANNER_COMMAND: '/bin/true',
+  });
+  const authorization = 'Bearer fixture-service-key-012345678901234567890123';
+  const bytes = Buffer.from('synthetic bot draft attachment');
+  const upload = await fetch(`${base}/api/mail/attachment-assets`, {
+    method: 'POST',
+    headers: {
+      Authorization: authorization,
+      'X-Upload-Request-Id': randomUUID(),
+      'X-File-Name': encodeUploadFileName('bot-review.txt'),
+      'Content-Type': 'application/octet-stream',
+    },
+    body: bytes,
+  });
+  assert.equal(upload.status, 201);
+  const asset = await upload.json();
+  const created = await fetch(`${base}/api/mail/send-drafts`, {
+    method: 'POST',
+    headers: { Authorization: authorization, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      request_id: randomUUID(), to: ['review@example.test'],
+      subject: 'Synthetic review', body_text: 'Review before approval.',
+      attachment_ids: [asset.id],
+    }),
+  });
+  assert.equal(created.status, 201);
+  const { draft } = await created.json();
+  assert.equal(draft.status, 'needs_approval');
+  const review = await fetch(`${base}/api/mail/send-drafts/${draft.draft_id}`, { headers: { Cookie: cookie } });
+  assert.equal(review.status, 200);
+  const reviewed = await review.json();
+  assert.equal(reviewed.send_enabled, false);
+  assert.equal(reviewed.draft.attachments[0].id, asset.id);
+  const contentUrl = `${base}/api/mail/attachment-assets/${asset.id}/content`;
+  const denied = await fetch(contentUrl, { headers: { Authorization: authorization, Cookie: cookie } });
+  assert.equal(denied.status, 403);
+  const downloaded = await fetch(contentUrl, { headers: { Cookie: cookie } });
+  assert.equal(downloaded.status, 200);
+  assert.match(downloaded.headers.get('content-disposition'), /^attachment;/);
+  assert.equal(downloaded.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
+});

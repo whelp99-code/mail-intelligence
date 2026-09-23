@@ -68,7 +68,7 @@ unauthenticated rejection and candidate-only refresh. Chrome renders at 1280,
 768, and 390 CSS pixels had no horizontal overflow or JavaScript page errors;
 the candidate counts remained visible.
 
-Final combined tree: `npm run verify:v1.2.2` exited 0 with 563 tests,
+Combined tree before gate-review remediation: `npm run verify:v1.2.2` exited 0 with 563 tests,
 9 OAuth tests, syntax, lint, HTML/CSS, precision diagnostics, isolated health,
 safety, operational-safety, browser acceptance, and the high-severity audit gate.
 The 13 migration-bridge tests are included in the 563 tests. Backup/restore is
@@ -81,6 +81,22 @@ access, CJK labels, and disabled send controls. Desktop width was explicitly
 Screenshots remain local under `artifacts/attachments-acceptance/`; no runtime
 database or image artifact is included in the commit. The independent WorkLink
 Chrome check was repeated on the combined tree at 1280/768/390 widths.
+
+Gate review found an R04 defect: human review could see a Grok-created draft but
+could not download its ready attachment. Content reads now require a human actor
+and current-mailbox ownership, independent of the upload source. Bearer content
+access, foreign-mailbox access, non-ready content, and cross-source discard remain
+denied. The corrected API regression failed first with `ASSET_NOT_FOUND`; the
+full release verifier then passed 564 tests, including an actual HTTP
+bot-upload -> bot-draft -> human-download regression. Chrome also verified
+downloaded bytes from the bot draft with send disabled.
+
+That populated-browser check also exposed intrinsic grid overflow after mail
+content loaded. The main column and responsive top bar now use a zero-minimum
+grid track rather than growing beyond their available width. No visual design
+or feature was changed. The browser check waits for a real message card, verifies
+the downloaded bytes, and asserts both document width and element bounds at
+1280/768/390 pixels. All three widths and CSS validation passed after the fix.
 
 Known pre-existing limits:
 
