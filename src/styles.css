@@ -44,6 +44,8 @@
 .attachment-row-name { font-weight: 600; overflow-wrap: anywhere; }
 .attachment-row-meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .attachment-row-error { color: var(--red); overflow-wrap: anywhere; }
+.received-attachments .attachment-list { padding-left: 0; }
+.received-attachments .attachment-live, .received-attachments .attachment-row-error { font-size: 12px; margin: 8px 0 0; }
 .drive-link-composer { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; }
 .drive-link-composer[hidden] { display: none; }
 .drive-link-ack { display: flex; align-items: flex-start; gap: 8px; }

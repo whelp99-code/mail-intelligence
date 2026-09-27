@@ -1,4 +1,5 @@
 import { initializeSendReview } from './send-review.js';
+import { renderReceivedAttachments } from './received-attachments.js';
 
 let serverCapabilities = { sendMail: false, markRead: false, dataPlane: false };
 let localSessionPromise = null;
@@ -104,6 +105,7 @@ let workLinksByGraphId = {};
 let workLinkStats = { active: 0, linkedCandidate: 0, unassigned: 0 };
 let workLinkError = '';
 let assistantRequestSequence = 0;
+let receivedAttachmentSequence = 0;
 let searchRequestSequence = 0;
 
 let latestOutlookStatus = {};
@@ -809,6 +811,22 @@ function mountAssistantDraft(draft) {
   renderAssistantOutput('초안을 만들었습니다. 내용을 직접 확인한 뒤 클립보드로 복사하세요. 자동 발송은 차단되어 있습니다.');
 }
 
+async function loadReceivedAttachments(messageId, expectFiles) {
+  const requestSequence = ++receivedAttachmentSequence;
+  const container = () => messageDetail.querySelector('#receivedAttachments');
+  if (expectFiles) renderReceivedAttachments(container(), { status: 'loading' });
+  try {
+    const response = await apiFetch(`/api/intelligence/attachments?messageId=${encodeURIComponent(messageId)}`);
+    const payload = await readApiPayload(response);
+    if (requestSequence !== receivedAttachmentSequence || messageId !== selectedMessageId) return;
+    if (!response.ok) throw new Error(payload.code || payload.message || `HTTP ${response.status}`);
+    renderReceivedAttachments(container(), { status: 'ready', payload });
+  } catch (error) {
+    if (requestSequence !== receivedAttachmentSequence || messageId !== selectedMessageId) return;
+    renderReceivedAttachments(container(), { status: 'error', message: error?.message || '' });
+  }
+}
+
 async function runAssistantTool(action, messageId) {
   const requestSequence = ++assistantRequestSequence;
   renderAssistantOutput('처리 중입니다.');
@@ -976,6 +994,7 @@ function selectMessage(messageId) {
         <h4>메일 내용</h4>
         <p class="detail-body">${escapeHtml(fullBody).slice(0, 5000)}</p>
       </section>
+      <section class="detail-block received-attachments" id="receivedAttachments" aria-live="polite" hidden></section>
       ${operationalDetail(precision)}
       ${precisionCorrectionPanel(message, precision)}
       ${assistantToolPanel(message, precision)}
@@ -995,6 +1014,7 @@ function selectMessage(messageId) {
   messageDetail.querySelectorAll('[data-assistant-action]').forEach((button) => {
     button.addEventListener('click', () => runAssistantTool(button.dataset.assistantAction, messageId));
   });
+  loadReceivedAttachments(messageId, Boolean(message?.hasAttachments));
 
   messageList.querySelectorAll('.message-card').forEach((node) => {
     node.classList.remove('selected');
