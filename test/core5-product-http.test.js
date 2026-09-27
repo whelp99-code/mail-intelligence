@@ -44,8 +44,9 @@ test('Core5 actual Mail HTTP: draft, denial, cancellation and restart persistenc
     assert.equal((await list.json()).drafts.filter(row => row.draft_id === draft.draft_id).length, 1);
     const db = new DatabaseSync(join(product.directory, 'mail-intelligence.sqlite'), { readOnly: true });
     try {
-      assert.equal(db.prepare("SELECT count(*) AS n FROM mail_send_draft_events WHERE status='cancelled'").get().n, 1);
-      assert.equal(db.prepare("SELECT count(*) AS n FROM mail_send_draft_events WHERE status='sent'").get().n, 0);
+      const countByStatus = db.prepare('SELECT count(*) AS n FROM mail_send_draft_events WHERE status = ?');
+      assert.equal(countByStatus.get('cancelled').n, 1);
+      assert.equal(countByStatus.get('sent').n, 0);
     } finally { db.close(); }
     assert.equal(product.secretsLeaked(), false);
   } finally { await product.close(); }
