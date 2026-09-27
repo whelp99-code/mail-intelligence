@@ -12,9 +12,21 @@ export class CwosWorkSystemAdapter {
   }
 
   async readMasters({ workspaceId = '', cursor = '' } = {}) {
-    if (this.cwosClient?.readMasters) return this.cwosClient.readMasters({ workspaceId, cursor });
-    if (this.notionReader?.readMasters) return this.notionReader.readMasters({ workspaceId, cursor });
-    return { system: 'cwos', workspaceId, cursor, items: [] };
+    if (typeof workspaceId !== 'string' || !workspaceId.trim()) {
+      throw Object.assign(new Error('A verified workspace is required'), { code: 'CWOS_WORKSPACE_REQUIRED' });
+    }
+    const reader = this.cwosClient ?? this.notionReader;
+    if (typeof reader?.readMasters === 'function') {
+      const result = await reader.readMasters({ workspaceId, cursor });
+      if (!result || !Array.isArray(result.items) || typeof result.workspaceId !== 'string') {
+        throw Object.assign(new Error('Invalid work-system response'), { code: 'CWOS_RESPONSE_INVALID' });
+      }
+      if (result.workspaceId !== workspaceId) {
+        throw Object.assign(new Error('Work-system response has a different workspace'), { code: 'CWOS_RESPONSE_SCOPE_MISMATCH' });
+      }
+      return result;
+    }
+    throw Object.assign(new Error('No work-system reader is connected'), { code: 'CWOS_CLIENT_UNAVAILABLE' });
   }
 
   candidate({ mailboxId, messageId, graphId, objectType, externalId, name = '', confidence = 0, evidence = [] }) {
