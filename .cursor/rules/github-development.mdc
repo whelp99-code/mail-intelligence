@@ -1,5 +1,7 @@
-이 리포의 에이전트 규칙은 [AGENTS.md](AGENTS.md) 를 따른다. 리포 간 결정·관례는 `../dev-wiki` 를 본다.
-
+---
+description: GitHub issue and verification workflow for development requests
+alwaysApply: true
+---
 
 <!-- github-development-management:v1:start -->
 ## GitHub 기반 개발 작업 관리 (사용자 지정 기본 흐름)

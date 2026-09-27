@@ -1,6 +1,3 @@
-이 리포의 에이전트 규칙은 [AGENTS.md](AGENTS.md) 를 따른다. 리포 간 결정·관례는 `../dev-wiki` 를 본다.
-
-
 <!-- github-development-management:v1:start -->
 ## GitHub 기반 개발 작업 관리 (사용자 지정 기본 흐름)
 개발·수정·개선·고도화 요청을 받으면 `~/ops/github-development-management/WORKFLOW.md`를 읽고 자동 적용한다. 이 섹션은 같은 작업을 Linear/별도 보드에 중복 관리하라는 기존 안내보다 우선한다. 모델·권한·전문 검증 지침은 바꾸지 않는다.
