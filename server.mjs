@@ -2049,7 +2049,7 @@ function scheduleLlmForNewMail() {
     });
 }
 
-async function classifyLatestWithLlm({ limit = 8, force = false } = {}) {
+async function classifyLatestWithLlm({ limit = 8, force = false, messageIds = [] } = {}) {
   assertCapability(safetyPolicy, 'externalAi');
   if (runtimeConfig.aiOptInVersion !== AI_OPT_IN_VERSION) {
     throw new HttpError(403, 'EXTERNAL_AI_OPT_IN_REQUIRED', 'OAuth LLM data-policy acceptance is required.');
@@ -2061,12 +2061,14 @@ async function classifyLatestWithLlm({ limit = 8, force = false } = {}) {
   const mailboxUser = currentMailboxUser();
   const provider = runtimeConfig.aiProvider;
   const model = providerModel(provider, runtimeConfig);
-  const messages = memory.listLlmCandidates(mailboxUser, {
-    limit,
-    provider,
-    promptVersion: PRECISION_LLM_PROMPT_VERSION,
-    force,
-  });
+  const messages = messageIds.length
+    ? messageIds.map((messageId) => memory.store.getMessage(memory.ensureMailbox(mailboxUser).id, messageId)).filter(Boolean)
+    : memory.listLlmCandidates(mailboxUser, {
+      limit,
+      provider,
+      promptVersion: PRECISION_LLM_PROMPT_VERSION,
+      force,
+    });
   if (!messages.length) {
     return {
       provider,
@@ -2615,9 +2617,16 @@ async function handleApi(req, res) {
       if (body.force != null && typeof body.force !== 'boolean') {
         throw new HttpError(400, 'FORCE_INVALID', 'force must be a boolean.');
       }
+      const messageIds = Array.isArray(body.messageIds)
+        ? body.messageIds.map((item) => validatedText(item, 'messageId', 500)).filter(Boolean)
+        : [];
+      if (messageIds.length > 30) {
+        throw new HttpError(400, 'LIMIT_INVALID', 'messageIds cannot exceed 30.');
+      }
       return json(res, 200, await classifyLatestWithLlm({
         limit,
         force: body.force === true,
+        messageIds,
       }));
     }
 
