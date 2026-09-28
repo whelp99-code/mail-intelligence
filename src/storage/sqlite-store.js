@@ -237,6 +237,26 @@ function projectRow(row) {
   };
 }
 
+function learningPolicyRow(row) {
+  if (!row) return null;
+  return {
+    id: number(row.id),
+    policyKey: row.policy_key,
+    senderEmail: row.sender_email,
+    conversationId: row.conversation_id || '',
+    subjectTemplate: row.subject_template || '',
+    subjectTokens: parseJson(row.subject_tokens_json, []),
+    overrides: parseJson(row.overrides_json, {}),
+    reasonCode: row.reason_code || '',
+    note: row.note || '',
+    sourceGraphId: row.source_graph_id || '',
+    policyVersion: number(row.policy_version),
+    active: number(row.active) === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function precisionRow(row) {
   if (!row) return null;
   const classification = {
@@ -945,6 +965,198 @@ export class SQLiteMailStore {
       WHERE message_id = ? ORDER BY recipient_type, ordinal, id
     `).all(row.id);
     return rowToMessage(row, recipients);
+  }
+
+  listMessagesBySender(mailboxId, senderEmail, { limit = 200 } = {}) {
+    const sender = normalizeEmail(senderEmail);
+    if (!sender) return [];
+    const rows = this.db.prepare(`
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ?
+        AND m.deleted_at IS NULL
+        AND lower(m.sender_email) = ?
+      ORDER BY COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC, m.id DESC
+      LIMIT ?
+    `).all(mailboxId, sender, boundedLimit(limit, 200, 500));
+    return rows.map((row) => rowToMessage(row, this.recipientsFor(row.id)));
+  }
+
+  listLatestSyncedMessages(mailboxId, { limit = 30 } = {}) {
+    const rows = this.db.prepare(`
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ? AND m.deleted_at IS NULL
+      ORDER BY m.first_seen_at DESC, m.id DESC
+      LIMIT ?
+    `).all(mailboxId, boundedLimit(limit, 30, 50));
+    return rows.map((row) => rowToMessage(row, this.recipientsFor(row.id)));
+  }
+
+  listLlmCandidates(mailboxId, {
+    limit = 8,
+    provider = '',
+    promptVersion = '',
+    force = false,
+  } = {}) {
+    const rows = this.db.prepare(`
+      SELECT m.graph_id
+      FROM messages m
+      LEFT JOIN precision_classifications pc ON pc.message_id = m.id
+      LEFT JOIN precision_corrections c ON c.message_id = m.id
+      WHERE m.mailbox_id = ?
+        AND m.deleted_at IS NULL
+        AND c.message_id IS NULL
+        AND (pc.review_status IS NULL OR pc.review_status NOT IN ('corrected', 'confirmed'))
+        AND (
+          ? = 1
+          OR NOT EXISTS (
+            SELECT 1 FROM message_analysis a
+            WHERE a.message_id = m.id
+              AND a.provider = ?
+              AND a.prompt_version = ?
+              AND a.source = 'ai'
+              AND a.error_code = ''
+          )
+        )
+      ORDER BY m.first_seen_at DESC, m.id DESC
+      LIMIT ?
+    `).all(
+      mailboxId,
+      force ? 1 : 0,
+      provider,
+      promptVersion,
+      boundedLimit(limit, 8, 30),
+    );
+    return rows.map((row) => this.getMessage(mailboxId, row.graph_id)).filter(Boolean);
+  }
+
+  recipientsFor(messageId) {
+    return this.db.prepare(`
+      SELECT * FROM message_recipients
+      WHERE message_id = ? ORDER BY recipient_type, ordinal, id
+    `).all(messageId);
+  }
+
+  saveLearningPolicy(mailboxId, policy) {
+    if (!policy?.policyKey || !policy.senderEmail) throw new Error('Learning policy requires a sender and template key.');
+    if (!policy.overrides || !Object.keys(policy.overrides).length) {
+      throw new Error('Learning policy requires at least one override.');
+    }
+    const now = policy.savedAt || this.now();
+    let savedId = 0;
+    this.transaction(() => {
+      const existing = this.db.prepare(`
+        SELECT id, policy_version FROM precision_learning_policies
+        WHERE mailbox_id = ? AND policy_key = ?
+      `).get(mailboxId, policy.policyKey);
+      const version = existing ? Number(existing.policy_version) + 1 : 1;
+      this.db.prepare(`
+        INSERT INTO precision_learning_policies(
+          mailbox_id, policy_key, sender_email, conversation_id, subject_template,
+          subject_tokens_json, overrides_json, reason_code, note, source_graph_id,
+          policy_version, active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(mailbox_id, policy_key) DO UPDATE SET
+          sender_email = excluded.sender_email,
+          conversation_id = excluded.conversation_id,
+          subject_template = excluded.subject_template,
+          subject_tokens_json = excluded.subject_tokens_json,
+          overrides_json = excluded.overrides_json,
+          reason_code = excluded.reason_code,
+          note = excluded.note,
+          source_graph_id = excluded.source_graph_id,
+          policy_version = excluded.policy_version,
+          active = 1,
+          updated_at = excluded.updated_at
+      `).run(
+        mailboxId,
+        policy.policyKey,
+        policy.senderEmail,
+        policy.conversationId || '',
+        policy.subjectTemplate || '',
+        jsonText(policy.subjectTokens, []),
+        jsonText(policy.overrides, {}),
+        policy.reasonCode || '',
+        policy.note || '',
+        policy.sourceGraphId || '',
+        version,
+        now,
+        now,
+      );
+      const row = this.db.prepare(`
+        SELECT id FROM precision_learning_policies WHERE mailbox_id = ? AND policy_key = ?
+      `).get(mailboxId, policy.policyKey);
+      savedId = row.id;
+      this.db.prepare(`
+        INSERT INTO precision_learning_policy_events(
+          policy_id, mailbox_id, policy_version, overrides_json, source_graph_id, saved_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        savedId,
+        mailboxId,
+        version,
+        jsonText(policy.overrides, {}),
+        policy.sourceGraphId || '',
+        now,
+      );
+      this.audit('precision.learning_policy.saved', {
+        entityType: 'learning_policy',
+        entityId: savedId,
+        payload: {
+          policyKey: policy.policyKey,
+          version,
+          sourceGraphId: policy.sourceGraphId || '',
+        },
+      });
+    });
+    return this.getLearningPolicy(mailboxId, savedId);
+  }
+
+  getLearningPolicy(mailboxId, policyId) {
+    const row = this.db.prepare(`
+      SELECT * FROM precision_learning_policies WHERE mailbox_id = ? AND id = ?
+    `).get(mailboxId, policyId);
+    return learningPolicyRow(row);
+  }
+
+  listLearningPolicies(mailboxId) {
+    return this.db.prepare(`
+      SELECT * FROM precision_learning_policies
+      WHERE mailbox_id = ? AND active = 1
+      ORDER BY updated_at DESC, id DESC
+    `).all(mailboxId).map(learningPolicyRow);
+  }
+
+  saveObservation(mailboxId, graphId, observation = {}) {
+    const message = this.getMessageRecord(mailboxId, graphId);
+    if (!message) throw new Error(`Cannot save observation for unknown message: ${graphId}.`);
+    const now = observation.createdAt || this.now();
+    const reviewStatus = ['candidate', 'accepted', 'rejected', 'superseded'].includes(observation.reviewStatus)
+      ? observation.reviewStatus
+      : 'candidate';
+    this.db.prepare(`
+      INSERT INTO observations(
+        message_id, observation_type, value_json, evidence_json, source, provider, model,
+        prompt_version, confidence, review_status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      message.id,
+      observation.observationType || 'precision-classification',
+      jsonText(observation.value, {}),
+      jsonText(observation.evidence, []),
+      observation.source || 'ai',
+      observation.provider || '',
+      observation.model || '',
+      observation.promptVersion || '',
+      Number.isFinite(Number(observation.confidence)) ? Number(observation.confidence) : null,
+      reviewStatus,
+      now,
+      now,
+    );
+    return true;
   }
 
   getAttachments(messageId) {

@@ -382,6 +382,15 @@ function precisionStateLabel(value) {
   }[value] || value || '검토 필요';
 }
 
+function precisionReviewLabel(classification = {}) {
+  const learned = (classification.reviewReasons || []).some((reason) => String(reason).startsWith('learned-policy:'));
+  if (classification.reviewStatus === 'corrected') return '사용자 보정';
+  if (learned) return '유사 보정 적용';
+  if (classification.reviewStatus === 'review_required') return '검토 필요';
+  if (classification.source === 'ai') return 'AI 분류';
+  return '자동 분류';
+}
+
 function nextActorLabel(value) {
   return {
     me: '내 차례',
@@ -420,7 +429,8 @@ function signalLabel(value) {
     attachment_missing: '첨부 누락 가능',
     schedule: '일정',
     approval: '승인',
-    incident_security: '장애·보안'
+    incident_security: '장애·보안',
+    learned_correction: '유사 보정'
   }[value] || value;
 }
 
@@ -683,11 +693,12 @@ function precisionCorrectionPanel(message, classification) {
           <span class="memory-label">정밀 분류</span>
           <strong>${escapeHtml(precisionStateLabel(classification.workState))}</strong>
         </div>
-        <span class="precision-review ${escapeHtml(classification.reviewStatus.replaceAll('_', '-'))}">${escapeHtml(classification.reviewStatus === 'corrected' ? '사용자 보정' : classification.reviewStatus === 'review_required' ? '검토 필요' : '자동 분류')}</span>
+        <span class="precision-review ${escapeHtml(classification.reviewStatus.replaceAll('_', '-'))}">${escapeHtml(precisionReviewLabel(classification))}</span>
       </div>
       <dl class="precision-facts">
         <div><dt>다음 행동</dt><dd>${escapeHtml(nextActorLabel(classification.nextActor))}</dd></div>
         <div><dt>우선순위</dt><dd>${escapeHtml(priorityLabel(classification.priority))}</dd></div>
+        <div><dt>분류 출처</dt><dd>${escapeHtml(classification.provider || classification.source || 'rules')}${classification.model ? ` · ${escapeHtml(classification.model)}` : ''}</dd></div>
         <div><dt>프로젝트</dt><dd>${escapeHtml(projectDisplay(classification, message.id))}<small>${escapeHtml(classification.projectResolution !== 'confirmed' && notionCandidateFor(message.id) ? 'Notion 후보 · 자동 확정 없음' : projectResolutionLabel(classification.projectResolution))}</small></dd></div>
         <div><dt>기한</dt><dd>${escapeHtml(classification.dueText || '없음')}<small>${classification.dueAt ? escapeHtml(new Date(classification.dueAt).toLocaleString('ko-KR')) : ''}</small></dd></div>
       </dl>
@@ -698,6 +709,7 @@ function precisionCorrectionPanel(message, classification) {
       <details class="precision-correction">
         <summary>이 분류를 직접 보정</summary>
         <form id="precisionCorrectionForm">
+          <p class="precision-correction-note">저장하면 이 메일 보정이 기록되고, 같은 발신자의 같은 스레드 또는 비슷한 제목 템플릿에도 적용됩니다. 그 메일에 직접 보정이 있으면 그 보정이 우선합니다.</p>
           <input type="hidden" name="messageId" value="${escapeHtml(message.id)}" />
           <label>현재 업무 상태
             <select name="workState">
@@ -1088,7 +1100,10 @@ async function savePrecisionCorrection(event) {
     if (!response.ok) throw new Error(result.message || '정밀 분류 보정 저장 실패');
     const message = currentMessages.find((item) => item.id === messageId);
     if (message) message.precision = result.classification;
-    status.textContent = '저장됨 · 사용자 보정이 자동 판단보다 우선합니다.';
+    const appliedCount = result.generalized?.applied?.length || 0;
+    status.textContent = appliedCount
+      ? `저장됨 · 이 메일 보정 완료 · 유사 메일 ${appliedCount}건에 적용`
+      : '저장됨 · 이 메일 보정 완료 · 같은 발신자·스레드·제목의 이후 유사 메일에도 적용됩니다.';
     await loadPrecisionOverview({ classify: false });
     renderFilteredView();
   } catch (error) {

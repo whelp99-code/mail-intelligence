@@ -40,6 +40,8 @@ import { createConfiguredScanner } from './src/adapters/attachment-scanner.js';
 import { createGoogleDriveClient } from './src/adapters/google-drive-client.js';
 import { parseAttachmentKey } from './src/storage/mail-attachment-crypto.js';
 import { PRECISION_CLASSIFICATION_VERSION } from './src/domain/precision-classifier.js';
+import { PRECISION_LLM_PROMPT_VERSION } from './src/domain/precision-llm.js';
+import { classifyPrecisionBatch } from './src/application/llm-precision.js';
 import { INTELLIGENT_SEARCH_VERSION } from './src/domain/intelligent-search.js';
 import { OPERATIONAL_CLASSIFICATION_VERSION } from './src/domain/operational-classification.js';
 import { MAIL_ASSISTANT_TOOLS_VERSION } from './src/domain/mail-assistant-tools.js';
@@ -2028,6 +2030,77 @@ async function selectivelyAdjudicateMessage(messageId) {
   }
 }
 
+let llmClassificationInFlight = null;
+
+function llmClassificationReady() {
+  return String(process.env.MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI || '') === '1'
+    && runtimeConfig.aiOptInVersion === AI_OPT_IN_VERSION
+    && ['openai-codex-oauth', 'xai-grok-oauth'].includes(runtimeConfig.aiProvider);
+}
+
+function scheduleLlmForNewMail() {
+  if (!llmClassificationReady() || llmClassificationInFlight) return;
+  llmClassificationInFlight = classifyLatestWithLlm({ limit: 8, force: false })
+    .catch((error) => {
+      console.error(`[llm] background classification failed: ${error?.code || 'LLM_FAILED'}`);
+    })
+    .finally(() => {
+      llmClassificationInFlight = null;
+    });
+}
+
+async function classifyLatestWithLlm({ limit = 8, force = false } = {}) {
+  assertCapability(safetyPolicy, 'externalAi');
+  if (runtimeConfig.aiOptInVersion !== AI_OPT_IN_VERSION) {
+    throw new HttpError(403, 'EXTERNAL_AI_OPT_IN_REQUIRED', 'OAuth LLM data-policy acceptance is required.');
+  }
+  if (!['openai-codex-oauth', 'xai-grok-oauth'].includes(runtimeConfig.aiProvider)) {
+    throw new HttpError(400, 'AI_PROVIDER_NOT_SELECTED', 'Select an authenticated OAuth provider before LLM classification.');
+  }
+  const memory = requireMailMemory();
+  const mailboxUser = currentMailboxUser();
+  const provider = runtimeConfig.aiProvider;
+  const model = providerModel(provider, runtimeConfig);
+  const messages = memory.listLlmCandidates(mailboxUser, {
+    limit,
+    provider,
+    promptVersion: PRECISION_LLM_PROMPT_VERSION,
+    force,
+  });
+  if (!messages.length) {
+    return {
+      provider,
+      model,
+      promptVersion: PRECISION_LLM_PROMPT_VERSION,
+      processed: 0,
+      accepted: 0,
+      rejected: 0,
+      skipped: 0,
+    };
+  }
+  const batch = await classifyPrecisionBatch({
+    messages,
+    provider,
+    model,
+    promptVersion: PRECISION_LLM_PROMPT_VERSION,
+    runProvider: (prompt) => executeAiRoute(provider, prompt),
+  });
+  const accepted = memory.acceptLlmObservations(mailboxUser, batch.accepted, batch);
+  const rejected = memory.recordLlmFailures(mailboxUser, batch.rejected, batch);
+  return {
+    provider: batch.provider,
+    model: batch.model,
+    promptVersion: batch.promptVersion,
+    analyzedAt: batch.analyzedAt,
+    processed: messages.length,
+    accepted: accepted.accepted.length,
+    rejected: rejected.length,
+    skipped: accepted.skipped.length,
+    acceptedIds: accepted.accepted.map((item) => item.messageId),
+    rejectedCodes: batch.rejected.map((item) => ({ id: item.messageId, code: item.code })),
+  };
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
   try {
@@ -2531,6 +2604,23 @@ async function handleApi(req, res) {
       }));
     }
 
+    if (url.pathname === '/api/intelligence/classify-llm') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const limit = body.limit == null ? 8 : Number(body.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 30) {
+        throw new HttpError(400, 'LIMIT_INVALID', 'limit must be an integer between 1 and 30.');
+      }
+      if (body.force != null && typeof body.force !== 'boolean') {
+        throw new HttpError(400, 'FORCE_INVALID', 'force must be a boolean.');
+      }
+      return json(res, 200, await classifyLatestWithLlm({
+        limit,
+        force: body.force === true,
+      }));
+    }
+
     if (url.pathname === '/api/intelligence/correct') {
       if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       requireStateChange(req);
@@ -2595,6 +2685,9 @@ async function handleApi(req, res) {
       const syncResult = await fetchOutlookMessages(top, {
         forceInitial: body.forceInitial === true,
       });
+      const upserted = Number(syncResult.sync?.upserted || 0);
+      const received = Number(syncResult.sync?.fetchedFromGraph || 0);
+      if (upserted > 0 || received > 0) scheduleLlmForNewMail();
       return json(res, 200, syncResult);
     }
 

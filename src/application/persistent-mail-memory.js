@@ -154,6 +154,19 @@ export class PersistentMailMemoryRuntime {
     return this.precision.correct(mailboxUser, messageId, correction);
   }
 
+  listLlmCandidates(mailboxUser = '', options = {}) {
+    const mailbox = this.ensureMailbox(mailboxUser);
+    return this.store.listLlmCandidates(mailbox.id, options);
+  }
+
+  acceptLlmObservations(mailboxUser = '', observations = [], meta = {}) {
+    return this.precision.acceptLlmObservations(mailboxUser, observations, meta);
+  }
+
+  recordLlmFailures(mailboxUser = '', failures = [], meta = {}) {
+    return this.precision.recordLlmFailures(mailboxUser, failures, meta);
+  }
+
   precisionSummary(mailboxUser = '', options = {}) {
     return this.precision.summary(mailboxUser, options);
   }

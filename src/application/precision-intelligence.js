@@ -1,4 +1,17 @@
 import {
+  applyLearnedPolicy,
+  bestLearningPolicy,
+  feedbackStatusForOverrides,
+  policyFromCorrection,
+  policyMatches,
+  subjectTokens,
+  MAX_GENERALIZED_MESSAGES,
+} from '../domain/correction-generalization.js';
+import {
+  labelLlmFailure,
+  mergeLlmClassification,
+} from '../domain/precision-llm.js';
+import {
   applyPrecisionCorrection,
   classifyMessage,
   normalizePrecisionCorrection,
@@ -13,6 +26,16 @@ import { evaluateSemanticSearchResults } from '../domain/search-semantic-ranker.
 
 function mailboxKey(value = '') {
   return String(value || 'me').trim().toLowerCase() || 'me';
+}
+
+function llmCacheKey(message = {}, meta = {}) {
+  return [
+    String(message.id || ''),
+    String(message.changeKey || message.receivedAt || ''),
+    String(meta.provider || 'llm'),
+    String(meta.model || ''),
+    String(meta.promptVersion || 'precision-llm'),
+  ].join('::');
 }
 
 function boundedLimit(value, fallback = 250, max = 1000) {
@@ -72,21 +95,30 @@ export class PrecisionIntelligenceService {
     if (!message?.id) throw new Error('Precision classification requires a stored message.');
     const projects = this.store.listProjects(mailbox.id);
     const mailboxAddresses = this.store.getMailboxSenderAliases(mailbox.id);
-    const automatic = classifyMessage(message, {
-      projects,
-      mailboxAddress: mailbox.address || mailboxUser,
-      mailboxAddresses,
-      now: options.now || this.now(),
-      source: options.source || 'rules',
-      provider: options.provider || 'rules',
-      model: options.model || '',
-      promptVersion: options.promptVersion,
-    });
+    const previous = this.store.getPrecisionClassification(mailbox.id, message.id);
+    const keepAi = previous?.source === 'ai'
+      && previous.provider
+      && previous.provider !== 'rules'
+      && options.replaceAi !== true;
+    const automatic = keepAi
+      ? previous
+      : classifyMessage(message, {
+        projects,
+        mailboxAddress: mailbox.address || mailboxUser,
+        mailboxAddresses,
+        now: options.now || this.now(),
+        source: options.source || 'rules',
+        provider: options.provider || 'rules',
+        model: options.model || '',
+        promptVersion: options.promptVersion,
+      });
     const correction = this.store.getPrecisionCorrection(mailbox.id, message.id);
+    const learnedPolicy = correction ? null : this.matchingPolicy(mailbox.id, message);
     const finalClassification = correction
       ? applyPrecisionCorrection(automatic, correction)
-      : automatic;
-    const previous = this.store.getPrecisionClassification(mailbox.id, message.id);
+      : learnedPolicy
+        ? applyLearnedPolicy(automatic, learnedPolicy)
+        : automatic;
     const saved = this.store.savePrecisionClassification(mailbox.id, message.id, finalClassification);
     return {
       classification: saved,
@@ -190,12 +222,177 @@ export class PrecisionIntelligenceService {
       };
     }
     const savedCorrection = this.store.savePrecisionCorrection(mailbox.id, messageId, correction);
+    const message = this.store.getMessage(mailbox.id, messageId);
+    const feedback = this.recordCorrectionFeedback(mailbox.id, message, savedCorrection);
+    const policyInput = message ? policyFromCorrection(message, savedCorrection) : null;
+    const policy = policyInput ? this.store.saveLearningPolicy(mailbox.id, policyInput) : null;
+    const generalized = policy && message
+      ? this.applyPolicyToSimilar(mailboxUser, mailbox.id, message, policy)
+      : { applied: [], skippedExplicit: [], truncated: false };
     const result = this.classifyOne(mailboxUser, messageId);
     return {
       correction: savedCorrection,
       classification: result.classification,
       events: this.store.getPrecisionEvents(mailbox.id, messageId),
+      feedback,
+      learningPolicy: policy,
+      generalized,
     };
+  }
+
+  matchingPolicy(mailboxId, message) {
+    return bestLearningPolicy(message, this.store.listLearningPolicies(mailboxId));
+  }
+
+  recordCorrectionFeedback(mailboxId, message, correction) {
+    if (!message?.id) return null;
+    const userStatus = feedbackStatusForOverrides(correction?.overrides || {});
+    if (!userStatus) return null;
+    return this.store.saveFeedback(mailboxId, message.id, {
+      userStatus,
+      reasonCode: correction.reasonCode || userStatus,
+      reasonLabel: correction.note || correction.reasonCode || userStatus,
+      note: correction.note || '',
+      sender: message.from || '',
+      subject: message.subject || '',
+      subjectTokens: subjectTokens(message.subject),
+      savedAt: correction.savedAt,
+    });
+  }
+
+  applyPolicyToSimilar(mailboxUser, mailboxId, message, policy) {
+    const candidates = this.store.listMessagesBySender(mailboxId, policy.senderEmail);
+    const applied = [];
+    const skippedExplicit = [];
+    let considered = 0;
+    for (const candidate of candidates) {
+      if (!candidate?.id || candidate.id === message.id) continue;
+      if (!policyMatches(candidate, policy)) continue;
+      considered += 1;
+      if (this.store.getPrecisionCorrection(mailboxId, candidate.id)) {
+        skippedExplicit.push(candidate.id);
+        continue;
+      }
+      if (applied.length >= MAX_GENERALIZED_MESSAGES) continue;
+      this.classifyOne(mailboxUser, candidate);
+      applied.push(candidate.id);
+    }
+    return {
+      applied,
+      skippedExplicit,
+      truncated: considered > applied.length + skippedExplicit.length,
+    };
+  }
+
+  acceptLlmObservations(mailboxUser, observations = [], meta = {}) {
+    const accepted = [];
+    const skipped = [];
+    for (const observation of observations) {
+      const message = this.store.getMessage(this.ensureMailbox(mailboxUser).id, observation.messageId);
+      if (!message) {
+        skipped.push({ messageId: observation.messageId, reason: 'missing-message' });
+        continue;
+      }
+      const mailbox = this.ensureMailbox(mailboxUser);
+      if (this.store.getPrecisionCorrection(mailbox.id, message.id)) {
+        skipped.push({ messageId: message.id, reason: 'explicit-correction' });
+        continue;
+      }
+      const rules = this.rulesClassification(mailboxUser, message);
+      const merged = mergeLlmClassification(rules, observation, {
+        provider: meta.provider || observation.provider,
+        model: meta.model || observation.model,
+        promptVersion: meta.promptVersion || observation.promptVersion,
+        analyzedAt: meta.analyzedAt,
+      });
+      const policy = this.matchingPolicy(mailbox.id, message);
+      const finalClassification = policy ? applyLearnedPolicy(merged, policy) : merged;
+      const saved = this.store.savePrecisionClassification(mailbox.id, message.id, finalClassification);
+      this.store.saveAnalysis(mailbox.id, message.id, llmCacheKey(message, meta), {
+        source: 'ai',
+        provider: meta.provider || observation.provider,
+        model: meta.model || observation.model,
+        promptVersion: meta.promptVersion || observation.promptVersion,
+        status: observation.legacyStatus || 'active',
+        confidence: observation.confidence,
+        summary: [observation.rationale || observation.workState],
+        evidenceItems: [observation.evidence?.exactText || ''],
+        nextActions: [],
+        aiRationale: observation.rationale || '',
+      });
+      this.store.saveObservation(mailbox.id, message.id, {
+        observationType: 'precision-classification',
+        value: {
+          workState: observation.workState,
+          nextActor: observation.nextActor,
+          priority: observation.priority,
+        },
+        evidence: [observation.evidence?.exactText || ''],
+        source: 'ai',
+        provider: meta.provider || observation.provider,
+        model: meta.model || observation.model,
+        promptVersion: meta.promptVersion || observation.promptVersion,
+        confidence: observation.confidence,
+        reviewStatus: 'accepted',
+        createdAt: meta.analyzedAt,
+      });
+      accepted.push(saved);
+    }
+    return { accepted, skipped };
+  }
+
+  recordLlmFailures(mailboxUser, failures = [], meta = {}) {
+    const recorded = [];
+    for (const failure of failures) {
+      const mailbox = this.ensureMailbox(mailboxUser);
+      const message = this.store.getMessage(mailbox.id, failure.messageId);
+      if (!message) continue;
+      const rules = this.rulesClassification(mailboxUser, message);
+      const labeled = labelLlmFailure(rules, failure);
+      const policy = this.matchingPolicy(mailbox.id, message);
+      const finalClassification = policy ? applyLearnedPolicy(labeled, policy) : labeled;
+      const saved = this.store.savePrecisionClassification(mailbox.id, message.id, finalClassification);
+      this.store.saveAnalysis(mailbox.id, message.id, `${llmCacheKey(message, meta)}::failed`, {
+        source: 'rules-fallback',
+        provider: meta.provider || '',
+        model: meta.model || '',
+        promptVersion: meta.promptVersion || '',
+        status: labeled.legacyStatus || 'active',
+        confidence: null,
+        summary: [failure.message || failure.code || 'llm-failed'],
+        evidenceItems: [],
+        nextActions: [],
+        aiRationale: '',
+        errorCode: failure.code || 'LLM_FAILED',
+        errorMessage: failure.message || '',
+      });
+      this.store.saveObservation(mailbox.id, message.id, {
+        observationType: 'precision-classification',
+        value: { code: failure.code || 'LLM_FAILED' },
+        evidence: [],
+        source: 'ai',
+        provider: meta.provider || '',
+        model: meta.model || '',
+        promptVersion: meta.promptVersion || '',
+        reviewStatus: 'rejected',
+        createdAt: meta.analyzedAt,
+      });
+      recorded.push(saved);
+    }
+    return recorded;
+  }
+
+  rulesClassification(mailboxUser, message) {
+    const mailbox = this.ensureMailbox(mailboxUser);
+    return classifyMessage(message, {
+      projects: this.store.listProjects(mailbox.id),
+      mailboxAddress: mailbox.address || mailboxUser,
+      mailboxAddresses: this.store.getMailboxSenderAliases(mailbox.id),
+      now: this.now(),
+      source: 'rules',
+      provider: 'rules',
+      model: '',
+    });
   }
 
   summary(mailboxUser = '', { classifyPending = true } = {}) {

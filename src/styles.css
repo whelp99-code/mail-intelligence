@@ -1303,6 +1303,14 @@ textarea {
 
 .precision-correction summary { cursor: pointer; font-weight: 850; }
 
+.precision-correction-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .precision-correction form {
   display: grid;
   gap: 8px;
