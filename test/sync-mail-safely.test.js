@@ -35,7 +35,8 @@ test('safe sync sends exactly one allowed mutation and exposes aggregate-only re
   const { baseUrl, requests } = await withServer(t);
   const result = await syncMailSafely({ baseUrl, accessKey });
   assert.equal(result.status, 'PASS');
-  assert.deepEqual(Object.keys(result).sort(), ['command', 'completedAt', 'completedFolders', 'deleted', 'discoveredFolders', 'failedFolders', 'fetchedFromGraph', 'mode', 'pagesProcessed', 'status', 'totalCached', 'upserted']);
+  assert.deepEqual(Object.keys(result).sort(), ['command', 'completedAt', 'completedFolders', 'deleted', 'discoveredFolders', 'externalAi', 'failedFolders', 'fetchedFromGraph', 'mode', 'pagesProcessed', 'status', 'totalCached', 'upserted']);
+  assert.equal(result.externalAi, 'disabled');
   assert.match(result.completedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(JSON.stringify(result).includes('secret'), false);
   const mutations = requests.filter((item) => item.method !== 'GET');
@@ -60,6 +61,31 @@ for (const [name, path, body, code] of [
     if (code !== 'OUTLOOK_OFFLINE' && code !== 'SYNC_INCOMPLETE') {
       assert.equal(requests.some((item) => item.method === 'POST'), false);
     }
+  });
+}
+
+const approvedAi = { externalAiEnabled: true, dataPolicyAccepted: true, selectedProvider: 'xai-grok-oauth' };
+
+test('safe sync proceeds with approved external AI only when the operator opts in', async (t) => {
+  const { baseUrl, requests } = await withServer(t, { 'GET /api/ai/oauth/status': { body: approvedAi } });
+  const result = await syncMailSafely({ baseUrl, accessKey, allowApprovedExternalAi: true });
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.externalAi, 'approved');
+  assert.deepEqual(requests.filter((item) => item.method === 'POST').map((item) => item.url), ['/api/outlook/sync']);
+  const withoutOptIn = await withServer(t, { 'GET /api/ai/oauth/status': { body: approvedAi } });
+  await assert.rejects(() => syncMailSafely({ baseUrl: withoutOptIn.baseUrl, accessKey }), { code: 'EXTERNAL_AI_ENABLED' });
+  assert.equal(withoutOptIn.requests.some((item) => item.method === 'POST'), false);
+});
+
+for (const [name, body, code] of [
+  ['without data-policy acceptance', { ...approvedAi, dataPolicyAccepted: false }, 'EXTERNAL_AI_UNAPPROVED'],
+  ['with an unknown provider', { ...approvedAi, selectedProvider: 'other-cloud' }, 'EXTERNAL_AI_UNAPPROVED'],
+  ['with a missing status flag', { dataPolicyAccepted: true, selectedProvider: 'xai-grok-oauth' }, 'EXTERNAL_AI_ENABLED'],
+]) {
+  test(`opted-in safe sync still rejects external AI ${name}`, async (t) => {
+    const { baseUrl, requests } = await withServer(t, { 'GET /api/ai/oauth/status': { body } });
+    await assert.rejects(() => syncMailSafely({ baseUrl, accessKey, allowApprovedExternalAi: true }), { code });
+    assert.equal(requests.some((item) => item.method === 'POST'), false);
   });
 }
 

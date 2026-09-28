@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3010';
+const APPROVED_AI_PROVIDERS = new Set(['xai-grok-oauth', 'openai-codex-oauth']);
 const REQUEST_TIMEOUT_MS = 120_000;
 
 function fail(code) {
@@ -84,6 +85,7 @@ function integer(value) {
 export async function syncMailSafely({
   baseUrl = DEFAULT_BASE_URL,
   accessKey,
+  allowApprovedExternalAi = false,
 } = {}) {
   const safeUrl = safeBaseUrl(baseUrl);
   if (!/^[A-Za-z0-9_-]{40,}$/.test(String(accessKey || ''))) fail('ACCESS_KEY_INVALID');
@@ -104,7 +106,12 @@ export async function syncMailSafely({
   if (!session.body?.csrfToken || !noCapabilities(session.body.capabilities)) fail('SESSION_UNSAFE');
 
   const ai = await responseJson(safeUrl, '/api/ai/oauth/status', { headers: { Cookie: cookie } });
-  if (ai.body?.externalAiEnabled !== false) fail('EXTERNAL_AI_ENABLED');
+  let externalAi = 'disabled';
+  if (ai.body?.externalAiEnabled !== false) {
+    if (!allowApprovedExternalAi || ai.body?.externalAiEnabled !== true) fail('EXTERNAL_AI_ENABLED');
+    if (ai.body?.dataPolicyAccepted !== true || !APPROVED_AI_PROVIDERS.has(ai.body?.selectedProvider)) fail('EXTERNAL_AI_UNAPPROVED');
+    externalAi = 'approved';
+  }
 
   const sync = await responseJson(safeUrl, '/api/outlook/sync', {
     method: 'POST',
@@ -142,6 +149,7 @@ export async function syncMailSafely({
     status: 'PASS',
     completedAt: new Date().toISOString(),
     mode: detail.mode,
+    externalAi,
     discoveredFolders: integer(detail.discoveredFolders),
     completedFolders: integer(detail.completedFolders),
     failedFolders: integer(detail.failedFolders),
@@ -158,8 +166,9 @@ async function main() {
   const sourceRoot = resolve(sourceIndex < 0 ? process.cwd() : process.argv[sourceIndex + 1] || '');
   const baseIndex = process.argv.indexOf('--base-url');
   const baseUrl = baseIndex < 0 ? DEFAULT_BASE_URL : process.argv[baseIndex + 1];
+  const allowApprovedExternalAi = process.argv.includes('--allow-approved-external-ai');
   const accessKey = (await readFile(resolve(sourceRoot, 'data/.mail-intelligence-access-key'), 'utf8')).trim();
-  process.stdout.write(`${JSON.stringify(await syncMailSafely({ baseUrl, accessKey }), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(await syncMailSafely({ baseUrl, accessKey, allowApprovedExternalAi }), null, 2)}\n`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
