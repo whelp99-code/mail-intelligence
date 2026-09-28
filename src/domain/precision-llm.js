@@ -17,8 +17,13 @@ const WORK_STATE_SET = new Set(WORK_STATES);
 const NEXT_ACTOR_SET = new Set(NEXT_ACTORS);
 const PRIORITY_SET = new Set(PRIORITIES);
 
-function clip(value = '', max = 2200) {
-  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+function clip(value = '', max = 700) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
 }
 
 function currentBody(message = {}) {
@@ -46,7 +51,7 @@ export function buildPrecisionLlmPrompt(messages = [], {
       folder: message.folderName || '',
       isDraft: Boolean(message.isDraft || message.isDraftFolder),
       isOutgoing: Boolean(message.isOutgoing),
-      body: clip(source.body, 2200),
+      body: clip(source.body, 700),
     };
   });
   return `You are a cautious mail work-state classifier. Return ONLY JSON. No markdown.

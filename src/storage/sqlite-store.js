@@ -1017,8 +1017,7 @@ export class SQLiteMailStore {
             WHERE a.message_id = m.id
               AND a.provider = ?
               AND a.prompt_version = ?
-              AND a.source = 'ai'
-              AND a.error_code = ''
+              AND a.source IN ('ai', 'rules-fallback')
           )
         )
       ORDER BY m.first_seen_at DESC, m.id DESC

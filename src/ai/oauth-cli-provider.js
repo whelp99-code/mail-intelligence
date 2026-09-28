@@ -414,6 +414,8 @@ export async function runOAuthCliProvider(provider, prompt, {
       return { text: output, model: selectedModel, cli: definition.executable };
     }
 
+    const promptPath = join(temporaryDirectory, 'prompt.txt');
+    await writeFile(promptPath, prompt, { mode: 0o600 });
     const args = [
       '--no-auto-update',
       '--cwd',
@@ -430,8 +432,8 @@ export async function runOAuthCliProvider(provider, prompt, {
       '--disable-web-search',
       '--disallowed-tools',
       GROK_DISALLOWED_TOOLS.join(','),
-      '-p',
-      prompt,
+      '--prompt-file',
+      promptPath,
     ];
     const result = await runCliProcess(executable, args, {
       cwd: temporaryDirectory,
