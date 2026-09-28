@@ -75,10 +75,8 @@ async function authenticatedCookie() {
   return cookie;
 }
 
-test.before(async () => {
-  port = await availablePort();
-  baseUrl = `http://127.0.0.1:${port}`;
-  dataDir = await mkdtemp(join(tmpdir(), 'mail-intelligence-test-'));
+async function startServer(key = accessKey) {
+  output = '';
   server = spawn(process.execPath, ['server.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -86,7 +84,7 @@ test.before(async () => {
       PORT: String(port),
       MAIL_INTELLIGENCE_HOST: '127.0.0.1',
       MAIL_INTELLIGENCE_DATA_DIR: dataDir,
-      MAIL_INTELLIGENCE_ACCESS_KEY: accessKey,
+      MAIL_INTELLIGENCE_ACCESS_KEY: key,
       MAIL_INTELLIGENCE_ALLOW_SEND: '0',
       MAIL_INTELLIGENCE_ALLOW_MAIL_MUTATIONS: '0',
       MAIL_INTELLIGENCE_ALLOW_DATA_PLANE: '0',
@@ -97,6 +95,13 @@ test.before(async () => {
   server.stdout.on('data', (chunk) => { output += chunk.toString(); });
   server.stderr.on('data', (chunk) => { output += chunk.toString(); });
   await waitForHealth();
+}
+
+test.before(async () => {
+  port = await availablePort();
+  baseUrl = `http://127.0.0.1:${port}`;
+  dataDir = await mkdtemp(join(tmpdir(), 'mail-intelligence-test-'));
+  await startServer();
 });
 
 test.after(async () => {
@@ -153,6 +158,26 @@ test('올바른 접근키로만 HttpOnly SameSite 세션을 발급한다', async
   assert.match(cookie, /mi_session=/);
   assert.match(cookie, /HttpOnly/i);
   assert.match(cookie, /SameSite=Strict/i);
+  assert.match(cookie, /Max-Age=2592000/);
+});
+
+test('접근키 세션은 재시작 후에도 유지되고 접근키를 바꾸면 무효화된다', async () => {
+  const cookie = await authenticatedCookie();
+  const stored = await readFile(join(dataDir, '.mail-intelligence-sessions.json'), 'utf8');
+  assert.equal(stored.includes(decodeURIComponent(cookie.slice('mi_session='.length))), false);
+
+  await stopServer();
+  await startServer();
+  const restored = await fetch(`${baseUrl}/api/outlook/config`, { headers: { Cookie: cookie } });
+  assert.equal(restored.status, 200);
+
+  await stopServer();
+  await startServer('rotated-access-key-0123456789abcdefghij');
+  const rotated = await fetch(`${baseUrl}/api/outlook/config`, { headers: { Cookie: cookie } });
+  assert.equal(rotated.status, 401);
+
+  await stopServer();
+  await startServer();
 });
 
 test('세션과 mutation header가 있어도 외부 행동 Kill Switch가 우선 차단한다', async () => {

@@ -76,6 +76,7 @@ const databasePath = join(dataRoot, 'mail-intelligence.sqlite');
 const backupDirectory = join(dataRoot, 'backups');
 const secretPath = join(dataRoot, '.outlook-secrets.enc.json');
 const keyPath = join(dataRoot, '.mail-intelligence.key');
+const sessionStorePath = join(dataRoot, '.mail-intelligence-sessions.json');
 const legacyConfigPath = legacyFallbackEnabled ? join(legacyDataRoot, '.outlook-config.json') : '';
 const legacyMailCachePath = legacyFallbackEnabled ? join(legacyDataRoot, '.mail-cache.json') : '';
 const port = normalizePort(process.env.PORT || 3010);
@@ -106,7 +107,8 @@ const driveEnabled = ['1', 'true', 'yes', 'on'].includes(
 const googleDriveClientId = String(process.env.GOOGLE_DRIVE_CLIENT_ID || '').trim();
 const googleDriveClientSecret = String(process.env.GOOGLE_DRIVE_CLIENT_SECRET || '').trim();
 const googleDriveRedirectUri = String(process.env.GOOGLE_DRIVE_REDIRECT_URI || '').trim();
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+// One access-key login per browser lasts 30 days and survives service restarts.
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const MAX_LOCAL_SESSIONS = 128;
 const MAX_PENDING_OAUTH_STATES = 128;
@@ -634,6 +636,50 @@ function prunePendingOAuth() {
   }
 }
 
+function sessionTokenHash(token) {
+  return createHash('sha256').update(String(token)).digest('hex');
+}
+
+// Binds persisted sessions to the current access key: rotating the key logs every browser out.
+function sessionStoreBinding() {
+  return createHash('sha256').update(`mail-intelligence-session-store:${configuredAccessKey}`).digest('hex');
+}
+
+async function loadPersistedSessions() {
+  if (!accessKeyRequired) return;
+  let stored;
+  try {
+    stored = JSON.parse(await readFile(sessionStorePath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    console.warn(`[session] Ignoring unreadable session store: ${error.message}`);
+    return;
+  }
+  if (stored?.binding !== sessionStoreBinding() || !Array.isArray(stored.sessions)) return;
+  for (const item of stored.sessions) {
+    if (typeof item?.tokenHash !== 'string' || typeof item.csrfToken !== 'string' || !Number.isFinite(item.createdAt)) continue;
+    localSessions.set(item.tokenHash, { csrfToken: item.csrfToken, createdAt: item.createdAt });
+  }
+  pruneLocalSessions();
+  trimOldestEntry(localSessions, MAX_LOCAL_SESSIONS + 1);
+}
+
+let sessionStoreWrite = Promise.resolve();
+function persistLocalSessions() {
+  if (!accessKeyRequired) return;
+  const snapshot = {
+    binding: sessionStoreBinding(),
+    sessions: [...localSessions].map(([tokenHash, session]) => ({
+      tokenHash,
+      csrfToken: session.csrfToken,
+      createdAt: session.createdAt
+    }))
+  };
+  sessionStoreWrite = sessionStoreWrite
+    .then(() => atomicWriteJson(sessionStorePath, snapshot))
+    .catch((error) => console.warn(`[session] Failed to persist sessions: ${error.message}`));
+}
+
 function createLocalSession(res) {
   pruneLocalSessions();
   trimOldestEntry(localSessions, MAX_LOCAL_SESSIONS);
@@ -643,7 +689,8 @@ function createLocalSession(res) {
     csrfToken: base64Url(randomBytes(24)),
     createdAt: Date.now()
   };
-  localSessions.set(token, session);
+  localSessions.set(sessionTokenHash(token), session);
+  persistLocalSessions();
   res.setHeader(
     'Set-Cookie',
     `mi_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
@@ -654,7 +701,10 @@ function createLocalSession(res) {
 function sessionForRequest(req) {
   pruneLocalSessions();
   const token = parseCookies(req.headers.cookie || '').mi_session || '';
-  return token ? localSessions.get(token) || null : null;
+  const session = token ? localSessions.get(sessionTokenHash(token)) || null : null;
+  // Sessions restored from disk only know the token hash; callers need the raw token.
+  if (session) session.token = token;
+  return session;
 }
 
 function validBasicAccess(req) {
@@ -2957,6 +3007,7 @@ server.on('error', async (error) => {
 
 await ensurePrivateDirectory(dataRoot);
 await loadPersistedConfig();
+await loadPersistedSessions();
 mailMemory = new PersistentMailMemoryRuntime({
   databasePath,
   migrationsDir: join(appRoot, 'migrations'),
