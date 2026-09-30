@@ -1,6 +1,6 @@
 # Reply draft pipeline (step 1)
 
-After a sync, `runReplyDraftPipeline` selects new inbound mail that needs a reply and stores a `needs_approval` draft. It never approves or sends.
+After a sync, `runReplyDraftPipeline` selects new inbound mail that needs a reply and stores a `needs_approval` draft. It never approves or sends. The sync hook runs only when `MAIL_INTELLIGENCE_REPLY_DRAFTS=1` (POST `/api/outlook/sync`). Unset that variable and restart the service to disable it.
 
 - Pending queue (JSON lines: draftId, from, subject, template, summary, created_at): `data/ops/pending-approvals.jsonl`
 - Morning digest markdown: `data/ops/morning-digest-YYYY-MM-DD.md`
