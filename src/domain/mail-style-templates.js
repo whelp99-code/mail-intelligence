@@ -42,14 +42,15 @@ const BODIES = Object.freeze({
   T1: `{담당자} {직함}님, 안녕하세요.
 베를로 박재민입니다.
 
-{고객사}에서 {제품} {신규/갱신} 견적을 요청드립니다.
+요청하신 {제품} 견적 관련하여 회신드립니다.
 - 고객사: {고객사}
 - 제품: {제품/모델}
+- 구분: {신규/갱신}
 - 수량/기간: {수량 또는 기간}
 - 현재 만료일: {만료일, 갱신일 때}
 - 참고: {이전 PO/Key ID 등}
 
-{특이 요청 한 문장}. 가능 여부도 함께 알려 주시면 감사하겠습니다.
+확인되는 대로 가능 여부를 안내드리겠습니다.
 
 감사합니다.
 박재민 드림`,
@@ -68,7 +69,7 @@ const BODIES = Object.freeze({
   T3: `{담당자} {직함}님, 안녕하세요.
 베를로 박재민입니다.
 
-{받은 요청 요약 한 문장}에 대해 회신드립니다.
+{주제} 관련하여 회신드립니다.
 - {답변 1}
 - {답변 2}
 
@@ -109,7 +110,7 @@ const BODIES = Object.freeze({
   T7: `{담당자} {직함}님, 안녕하세요.
 베를로 박재민입니다.
 
-문의하신 {증상/요청} 관련하여 회신드립니다.
+문의하신 {주제} 관련하여 회신드립니다.
 - 확인 내용: {확인한 사실}
 - 조치/제안: {조치}
 - 다음 단계: {일정·담당}
@@ -132,7 +133,8 @@ const SLOT_KEYS = Object.freeze({
   '특이 요청 한 문장': '특이 요청',
   범위: '범위',
   금액: '금액',
-  '받은 요청 요약 한 문장': '받은 요청 요약',
+  주제: '주제',
+  '받은 요청 요약 한 문장': '주제',
   '답변 1': '답변 1',
   '답변 2': '답변 2',
   '품목, 수량': '품목',
@@ -143,7 +145,7 @@ const SLOT_KEYS = Object.freeze({
   날짜: '날짜',
   대상: '대상',
   자료명: '자료명',
-  '증상/요청': '증상/요청',
+  '증상/요청': '주제',
   '확인한 사실': '확인한 사실',
   조치: '조치',
   '일정·담당': '일정·담당',
@@ -274,13 +276,39 @@ export function recipientGreeting(message = {}) {
   return `${name}님`;
 }
 
-function firstRequestSentence(text = '') {
-  const lines = String(text || '').split(/\n+/).map((line) => normalizeSpace(line)).filter(Boolean);
-  const skipped = /안녕하세요|안녕하십니까|감사합니다|수고하십시오|박재민/;
-  const picked = lines.find((line) => /문의|요청|부탁|확인/.test(line) && !skipped.test(line) && !line.includes('@') && line.length >= 8)
-    || lines.find((line) => !skipped.test(line) && !line.includes('@') && line.length >= 8);
-  if (!picked) return '';
-  return quoteIn(text, picked.slice(0, 90));
+const SENTENCE_VOICE = /(?:습니다|드립니다|부탁드립니다|하시면|해주세요|문의드립니다|가능하신지|하시기 바랍니다|요청드립니다)/;
+
+export function isNounPhraseFact(value = '') {
+  const text = normalizeSpace(value);
+  if (!text || text.length > 48 || text.includes('@')) return false;
+  if (SENTENCE_VOICE.test(text) || /[.!?。]/.test(text)) return false;
+  if (/(?:입니다|합니다|세요|시오)$/.test(text)) return false;
+  return true;
+}
+
+function topicFromSubject(subject = '') {
+  let rest = stripReplyPrefixes(subject).replace(/^\[[^\]]{1,40}\]\s*/, '');
+  rest = normalizeSpace(rest.replace(/[.。]\s*$/, ''));
+  const tails = [
+    /\s*네고\s*및\s+.*/,
+    /\s*및\s*20\d{2}년\s*예산\s*견적.*/, 
+    /\s*견적\s*요청.*/, 
+    /\s*관련\s+.*/, 
+    /\s*회신드립니다\.?/, 
+    /\s*문의드립니다\.?/, 
+    /\s*요청드립니다\.?/, 
+    /\s*건으로\s*요청.*/, 
+    /\s*요청\s*건/, 
+    /\s*의\s*건/, 
+  ];
+  for (let guard = 0; guard < 6; guard += 1) {
+    const next = normalizeSpace(tails.reduce((current, pattern) => current.replace(pattern, ''), rest));
+    if (next === rest) break;
+    rest = next;
+  }
+  rest = normalizeSpace(rest.replace(/\s*건$/, ''));
+  if (!isNounPhraseFact(rest)) return '';
+  return quoteIn(subject, rest);
 }
 
 function subjectProduct(subject = '') {
@@ -302,7 +330,7 @@ export function extractRuleSlots(message = {}, attachmentText = '') {
   const values = {};
   const take = (key, value) => {
     const quoted = quoteIn(source, value);
-    if (quoted) values[key] = quoted;
+    if (quoted && !SENTENCE_VOICE.test(quoted)) values[key] = quoted;
   };
   take('고객사', firstLabeled(source, [/고객사\s*[:：]\s*([^\n.]{2,40})/]));
   take('제품', firstLabeled(source, [/제품\s*[:：]\s*([^\n.]{2,80})/, /제품\/모델\s*[:：]\s*([^\n.]{2,80})/]));
@@ -325,14 +353,14 @@ export function extractRuleSlots(message = {}, attachmentText = '') {
     if (/갱신|리뉴얼|renewal/i.test(source)) take('신규/갱신', source.match(/갱신/) ? '갱신' : '');
     else if (/신규/.test(intentText(message))) take('신규/갱신', '신규');
   }
-  if (!values['받은 요청 요약']) take('받은 요청 요약', firstRequestSentence(currentBody(message)));
-  if (!values['증상/요청'] && values['받은 요청 요약']) values['증상/요청'] = values['받은 요청 요약'];
+  if (!values.주제) take('주제', topicFromSubject(message.subject || ''));
   return values;
 }
 
 function backed(value, sourceText, citation) {
   const clean = normalizeSpace(value);
   if (!clean || clean === UNFILLED || clean.includes(UNFILLED) || clean.includes('@')) return '';
+  if (SENTENCE_VOICE.test(clean)) return '';
   if (/^\d[\d,.\s]*$/.test(clean) && !/(원|VAT)/.test(clean)) return '';
   if (normalizeSpace(citation)) return clean;
   return quoteIn(sourceText, clean);
@@ -399,14 +427,20 @@ export function validateDraftSlotPayload(payload) {
   };
 }
 
+const MODEL_FACT_KEYS = new Set([
+  '고객사', '제품', '건명', '공급가', '금액', '기간', '날짜', '주제',
+  '만료일', '수량 또는 기간', '품목', '자료명', '대상', '납기', '참고', '신규/갱신', '범위',
+]);
+
 export function applyModelSlots(ruleValues, payload, sourceText) {
   const validated = validateDraftSlotPayload(payload);
   const values = { ...ruleValues };
   const fillSources = Object.fromEntries(Object.keys(ruleValues).filter((key) => ruleValues[key]).map((key) => [key, 'rules']));
   for (const slot of validated.slots) {
-    if (values[slot.key]) continue;
+    if (!MODEL_FACT_KEYS.has(slot.key) || values[slot.key]) continue;
+    if (SENTENCE_VOICE.test(slot.quote) || !isNounPhraseFact(slot.quote)) continue;
     const quoted = quoteIn(sourceText, slot.quote);
-    if (!quoted || quoted !== slot.quote && normalizeSpace(quoted) !== normalizeSpace(slot.quote)) continue;
+    if (!quoted || normalizeSpace(quoted) !== normalizeSpace(slot.quote)) continue;
     values[slot.key] = quoted;
     fillSources[slot.key] = 'model';
   }
@@ -415,7 +449,7 @@ export function applyModelSlots(ruleValues, payload, sourceText) {
 
 export function draftSlotPrompt(message = {}, attachmentText = '') {
   const source = factSource(message, attachmentText).slice(0, 6000);
-  return `Extract mail draft slots. Return ONLY JSON matching the draft slot schema. Each quote must be an exact contiguous substring of the source. Do not invent amounts, dates, or promises. Use an empty slots array when unsure.\nSource:\n${source}`;
+  return `Extract mail draft slots for a vendor reply from 베를로. Return ONLY JSON matching the draft slot schema. Each quote must be an exact contiguous substring of the source and a short noun phrase, amount, or date — never the counterpart's sentence. Allowed keys: 고객사, 제품, 건명, 공급가, 금액, 기간, 날짜, 주제, 만료일, 수량 또는 기간, 품목, 자료명, 대상, 납기, 참고, 신규/갱신, 범위. Do not invent amounts, dates, or promises. Use an empty slots array when unsure.\nSource:\n${source}`;
 }
 
 export function renderMailTemplate(templateId, { message = {}, evidence = {} } = {}) {
@@ -473,6 +507,20 @@ export function renderMailTemplate(templateId, { message = {}, evidence = {} } =
   };
 }
 
+function providerSlotText(raw) {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw.text === 'string') return raw.text;
+  return '';
+}
+
+function parseSlotPayload(raw) {
+  let text = providerSlotText(raw).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) text = text.slice(start, end + 1);
+  return validateDraftSlotPayload(JSON.parse(text));
+}
+
 export async function fillDraftSlotsWithProvider({
   message = {},
   attachmentText = '',
@@ -481,11 +529,19 @@ export async function fillDraftSlotsWithProvider({
   getModelName = () => 'unknown',
 } = {}) {
   const ruleValues = extractRuleSlots(message, attachmentText);
-  if (typeof callProvider !== 'function') {
-    return { values: ruleValues, fillSources: Object.fromEntries(Object.keys(ruleValues).map((key) => [key, 'rules'])), model: '' };
+  const rules = {
+    values: ruleValues,
+    fillSources: Object.fromEntries(Object.keys(ruleValues).map((key) => [key, 'rules'])),
+    fillMode: 'rules',
+    model: '',
+  };
+  if (typeof callProvider !== 'function') return rules;
+  try {
+    const raw = await callProvider(requestedProvider, draftSlotPrompt(message, attachmentText));
+    const payload = parseSlotPayload(raw);
+    const applied = applyModelSlots(ruleValues, payload, factSource(message, attachmentText));
+    return { ...applied, fillMode: 'model', model: getModelName(requestedProvider) || '' };
+  } catch {
+    return { ...rules, fillMode: 'rules-fallback' };
   }
-  const raw = await callProvider(requestedProvider, draftSlotPrompt(message, attachmentText));
-  const payload = validateDraftSlotPayload(JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)));
-  const applied = applyModelSlots(ruleValues, payload, factSource(message, attachmentText));
-  return { ...applied, model: getModelName(requestedProvider) };
 }
