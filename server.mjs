@@ -25,6 +25,7 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
+import { replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
 import { createSendReconciliationWorker } from './src/application/send-reconciliation-worker.js';
@@ -1468,7 +1469,7 @@ async function getGraphAccessToken() {
   return payload.access_token;
 }
 
-async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
+async function fetchOutlookMessages(top = 25, { forceInitial = false, replyDrafts = false } = {}) {
   const memory = requireMailMemory();
   const mailboxUser = currentMailboxUser();
   const cacheKey = mailboxCacheKey(mailboxUser);
@@ -1502,7 +1503,8 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false } = {}) {
       accessToken,
       mailboxUser,
       recentLimit: requestedTop,
-      forceInitial
+      forceInitial,
+      replyDrafts: replyDrafts === true,
     });
     return attachPrecisionIntelligence({
       connected: true,
@@ -2747,6 +2749,7 @@ async function handleApi(req, res) {
       }
       const syncResult = await fetchOutlookMessages(top, {
         forceInitial: body.forceInitial === true,
+        replyDrafts: replyDraftsEnabled(),
       });
       const upserted = Number(syncResult.sync?.upserted || 0);
       const received = Number(syncResult.sync?.fetchedFromGraph || 0);

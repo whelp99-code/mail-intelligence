@@ -5,6 +5,10 @@ import { generateSafeDraft } from '../domain/mail-assistant-tools.js';
 
 export const REPLY_DRAFT_PIPELINE_VERSION = 'reply-draft-pipeline-v1';
 export const PENDING_APPROVALS_PATH = 'data/ops/pending-approvals.jsonl';
+
+export function replyDraftsEnabled(env = process.env) {
+  return String(env.MAIL_INTELLIGENCE_REPLY_DRAFTS || '') === '1';
+}
 export const MORNING_DIGEST_DIR = 'data/ops';
 export const REPLY_NEEDED_STATES = Object.freeze(['action_required', 'decision_required']);
 const REPLY_NEEDED = new Set(REPLY_NEEDED_STATES);
