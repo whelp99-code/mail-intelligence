@@ -169,6 +169,17 @@ test('vendor reply does not reuse the customer quote request sentence', () => {
   assert.equal(rendered.fillSources.제품, 'rules');
 });
 
+test('T3 topic drops a trailing request particle', () => {
+  const message = {
+    subject: 'Re: [일에이엔] 아이센스 건으로 요청드립니다.',
+    from: '이재윤 프로 <lee@example.com>',
+    body: '참석이 가능하신지 혹은 미팅으로 참여가 가능하신지 문의드립니다.',
+  };
+  const { rendered } = draftOf(message);
+  assert.match(rendered.body, /아이센스 관련하여 회신드립니다/);
+  assert.doesNotMatch(rendered.body, /건으로 관련|참석이 가능하신지|문의드립니다/);
+});
+
 test('T3 topic is a subject noun phrase, not the counterpart sentence', () => {
   const message = {
     subject: 'RE: [베를로] 계약이행보증보험 가입 요청 건',
