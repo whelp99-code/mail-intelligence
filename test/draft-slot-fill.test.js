@@ -75,8 +75,8 @@ test('insurance reply does not paste the quoted incoming body', () => {
   const { templateId, rendered } = draftOf(message);
   assert.equal(templateId, 'T3');
   assert.match(rendered.body, /^담당자님, 안녕하세요/);
-  assert.match(rendered.body, /계약보증보험건 전자서명 하시면 됩니다/);
-  assert.doesNotMatch(rendered.body, /원본 메세지|owner@example.com|요청하신 서류를 전달/);
+  assert.match(rendered.body, /계약이행보증보험 가입 관련하여 회신드립니다/);
+  assert.doesNotMatch(rendered.body, /전자서명 하시면 됩니다|원본 메세지|owner@example.com|요청하신 서류를 전달/);
 });
 
 test('technical meeting uses T7 and the sender display name', () => {
@@ -145,4 +145,52 @@ test('model slots are kept only when the quote is in the source', async () => {
   assert.equal(filled.model, 'test-model');
   const rulesOnly = extractRuleSlots(message);
   assert.equal(rulesOnly.공급가, undefined);
+  const sentence = applyModelSlots({}, { slots: [{ key: '주제', quote: '계약보증보험건 전자서명 하시면 됩니다' }] }, '계약보증보험건 전자서명 하시면 됩니다');
+  assert.equal(sentence.values.주제, undefined);
+  const fallback = await fillDraftSlotsWithProvider({
+    message,
+    requestedProvider: 'xai-grok-oauth',
+    callProvider: async () => { throw new Error('provider down'); },
+  });
+  assert.equal(fallback.fillMode, 'rules-fallback');
+  assert.equal(fallback.values.공급가, undefined);
+});
+
+test('vendor reply does not reuse the customer quote request sentence', () => {
+  const message = {
+    subject: '[견적 요청] vGPU 2Node 유지보수 라이선스 네고 및 2027년 예산 견적 요청',
+    from: '박민후 <buyer@example.com>',
+    body: 'GS건설에서 vGPU 2Node 유지보수 라이선스 갱신 견적을 요청드립니다.\n만료일: 2026-10-13',
+  };
+  const { templateId, rendered } = draftOf(message);
+  assert.equal(templateId, 'T1');
+  assert.match(rendered.body, /요청하신 vGPU 2Node 유지보수 라이선스 견적 관련하여/);
+  assert.doesNotMatch(rendered.body, /견적을 요청드립니다|GS건설에서 vGPU/);
+  assert.equal(rendered.fillSources.제품, 'rules');
+});
+
+test('T3 topic is a subject noun phrase, not the counterpart sentence', () => {
+  const message = {
+    subject: 'RE: [베를로] 계약이행보증보험 가입 요청 건',
+    from: '잠실하남 <agent@example.com>',
+    body: '계약보증보험건 전자서명 하시면 됩니다',
+  };
+  const { templateId, rendered } = draftOf(message);
+  assert.equal(templateId, 'T3');
+  assert.match(rendered.body, /계약이행보증보험 가입 관련하여 회신드립니다/);
+  assert.doesNotMatch(rendered.body, /전자서명 하시면 됩니다|에 대해 회신드립니다/);
+  assert.equal(rendered.fillSources.주제, 'rules');
+});
+
+test('T7 topic is a subject noun phrase, not the counterpart request', () => {
+  const message = {
+    subject: 'Fw: DB/OS 업그레이드 및 재설치 관련 기술 회의 결과 및 추가 문의사항 회신드립니다.',
+    from: '손길동 <son@example.com>',
+    body: '이사님 커널버전 확인 부탁드립니다.',
+  };
+  const { templateId, rendered } = draftOf(message);
+  assert.equal(templateId, 'T7');
+  assert.match(rendered.body, /문의하신 DB\/OS 업그레이드 및 재설치 관련하여/);
+  assert.doesNotMatch(rendered.body, /커널버전 확인 부탁드립니다|에 대해 회신드립니다/);
+  assert.equal(rendered.fillSources.주제, 'rules');
 });
