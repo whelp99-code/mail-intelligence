@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { splitMessageHistory } from './precision-classifier.js';
+import { renderMailTemplate, selectMailTemplate } from './mail-style-templates.js';
 
 export const MAIL_ASSISTANT_TOOLS_VERSION = 'mail-assistant-tools-v1.2.2';
 export const DEFAULT_ASSISTANT_PERSONALITY = Object.freeze({
@@ -226,25 +227,6 @@ export function improveDraftText(value = '', personality = DEFAULT_ASSISTANT_PER
   };
 }
 
-function replyIntent(classification = {}) {
-  if (classification.workState === 'decision_required') {
-    return '요청하신 결정 사항을 확인한 뒤 회신드리겠습니다.';
-  }
-  if (classification.workState === 'action_required') {
-    return '요청하신 내용을 확인하고 필요한 조치를 진행하겠습니다.';
-  }
-  if (classification.workState === 'waiting') {
-    return '진행 상태를 확인하고 있어 관련 결과를 기다리겠습니다.';
-  }
-  if (classification.workState === 'completed') {
-    return '처리 완료 내용을 확인했습니다.';
-  }
-  if (classification.workState === 'reference') {
-    return '공유해 주신 내용을 확인했습니다.';
-  }
-  return '내용을 검토한 뒤 정확히 회신드리겠습니다.';
-}
-
 export function generateSafeDraft({
   message = {},
   classification = {},
@@ -253,9 +235,12 @@ export function generateSafeDraft({
   personality = DEFAULT_ASSISTANT_PERSONALITY,
   meetingCandidate = null,
   threadSummary = null,
+  evidence = {},
 } = {}) {
+  void threadSummary;
   const normalizedPersonality = normalizeAssistantPersonality(personality);
   let body;
+  let template = null;
   if (mode === 'improve') {
     body = improveDraftText(draftText, normalizedPersonality).text;
   } else if (mode === 'meeting_confirmation') {
@@ -268,14 +253,10 @@ export function generateSafeDraft({
       '감사합니다.',
     ].join('\n\n');
   } else {
-    const summary = threadSummary?.oneLine || summarizeMessage(message, classification).oneLine;
-    body = [
-      normalizedPersonality.opening,
-      replyIntent(classification),
-      summary ? `확인한 핵심 내용: ${summary}` : '',
-      '최종 내용은 발송 전에 직접 검토하겠습니다.',
-      '감사합니다.',
-    ].filter(Boolean).join('\n\n');
+    const templateId = selectMailTemplate(message, classification);
+    const rendered = renderMailTemplate(templateId, { message, evidence });
+    body = rendered.body;
+    template = rendered;
   }
   return {
     version: MAIL_ASSISTANT_TOOLS_VERSION,
@@ -285,6 +266,9 @@ export function generateSafeDraft({
     body: bounded(body, 12_000),
     personality: normalizedPersonality,
     generationMode: 'rules-local',
+    templateId: template?.templateId || null,
+    templateSubject: template?.subject || '',
+    unfilled: template?.unfilled || [],
     requiresHumanApproval: true,
     sendAllowed: false,
     calendarWriteAllowed: false,

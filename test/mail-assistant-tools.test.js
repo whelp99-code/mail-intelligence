@@ -103,7 +103,9 @@ test('rapid reply and meeting confirmation are copy-only drafts', () => {
   assert.equal(rapid.sendAllowed, false);
   assert.equal(rapid.requiresHumanApproval, true);
   assert.equal(rapid.action, 'copy_only');
-  assert.match(rapid.body, /최종 내용은 발송 전에 직접 검토/);
+  assert.equal(rapid.templateId, 'T2');
+  assert.match(rapid.body, /베를로 박재민입니다/);
+  assert.match(rapid.body, /\{확인 필요\}/);
 
   const meeting = generateSafeDraft({
     message: baseMessage,

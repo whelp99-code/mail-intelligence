@@ -146,3 +146,59 @@ else process.exitCode = 2;
   });
   assert.deepEqual(JSON.parse(result.text), JSON.parse(VALID_ANALYSIS));
 });
+
+test('Grok classification calls pin low reasoning effort so batches do not stall', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'mail-intelligence-oauth-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cli = await fakeCli(root, 'grok', `
+const args = process.argv.slice(2);
+if (args[0] === 'version' || args[0] === 'models') {
+  console.log('ok');
+  process.exit(0);
+}
+const effort = args[args.indexOf('--reasoning-effort') + 1];
+if (effort !== 'low') {
+  console.error('effort ' + effort);
+  process.exit(3);
+}
+console.log(JSON.stringify({ text: ${JSON.stringify(VALID_ANALYSIS)} }));
+`);
+  const result = await runOAuthCliProvider('xai-grok-oauth', 'mail prompt', {
+    configuredPath: cli,
+    model: 'grok-4.7-build-fast',
+  });
+  assert.equal(JSON.parse(result.text).messages[0].id, 'message-1');
+  await assert.rejects(
+    runOAuthCliProvider('xai-grok-oauth', 'mail prompt', {
+      configuredPath: cli,
+      model: 'grok-4.7-build-fast',
+      reasoningEffort: 'max',
+    }),
+    /unsupported/,
+  );
+});
+
+test('Grok invocation removes current built-in tool ids', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'mail-intelligence-oauth-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const required = ['grep', 'read_file', 'run_terminal_cmd', 'list_dir', 'search_replace', 'search_tool', 'x_user_search'];
+  const cli = await fakeCli(root, 'grok', `
+const args = process.argv.slice(2);
+if (args[0] === 'version' || args[0] === 'models') {
+  console.log('ok');
+  process.exit(0);
+}
+const disallowed = String(args[args.indexOf('--disallowed-tools') + 1] || '').split(',');
+const missing = ${JSON.stringify(required)}.filter((name) => !disallowed.includes(name));
+if (missing.length) {
+  console.error('missing ' + missing.join(','));
+  process.exit(3);
+}
+console.log(JSON.stringify({ text: ${JSON.stringify(VALID_ANALYSIS)} }));
+`);
+  const result = await runOAuthCliProvider('xai-grok-oauth', 'mail prompt', {
+    configuredPath: cli,
+    model: 'grok-4.6',
+  });
+  assert.equal(JSON.parse(result.text).messages[0].id, 'message-1');
+});

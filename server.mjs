@@ -1673,7 +1673,9 @@ async function executeAiRoute(selectedProvider, prompt) {
   } catch (error) {
     const safe = error?.safeProviderFailure || safeProviderFailure(error);
     error.attempts = attempts;
-    error.aiRun = failedAiRun(new Error(safe.message), {
+    const labeled = new Error(safe.message);
+    labeled.code = error?.code || safe.safeErrorCode;
+    error.aiRun = failedAiRun(labeled, {
       provider: selectedProvider,
       model,
       attempts,
@@ -1827,7 +1829,9 @@ async function enrichWithAI(messages, result) {
       ...safe,
     });
     error.attempts = execution.attempts;
-    error.aiRun = failedAiRun(new Error(safe.message), {
+    const labeled = new Error(safe.message);
+    labeled.code = error?.code || safe.safeErrorCode;
+    error.aiRun = failedAiRun(labeled, {
       provider: execution.provider,
       model: execution.model,
       attempts: execution.attempts

@@ -34,6 +34,11 @@ export const OAUTH_CLI_PROVIDERS = Object.freeze({
 });
 
 const MAX_PROCESS_OUTPUT_BYTES = 1024 * 1024;
+// grok-4.7 defaults to reasoning effort high. Classification batches then sit in
+// streaming_reasoning and miss the 120s process timeout. Low effort is the
+// catalog's fast path and is enough for schema-checked work-state JSON.
+const GROK_CLASSIFICATION_REASONING_EFFORT = 'low';
+const GROK_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const FORBIDDEN_CODEX_ITEM_TYPES = new Set([
   'command_execution',
   'file_change',
@@ -42,6 +47,35 @@ const FORBIDDEN_CODEX_ITEM_TYPES = new Set([
   'image_generation',
 ]);
 const GROK_DISALLOWED_TOOLS = [
+  // Current grok CLI built-in ids (tool_definitions.json). A mismatch leaves
+  // the tool available; with --max-turns 1 that call exits "max turns reached".
+  'grep',
+  'list_dir',
+  'read_file',
+  'run_terminal_cmd',
+  'run_terminal_command',
+  'search_replace',
+  'search_tool',
+  'write',
+  'ask_user_question',
+  'enter_plan_mode',
+  'exit_plan_mode',
+  'image_edit',
+  'image_gen',
+  'image_to_video',
+  'reference_to_video',
+  'monitor',
+  'send_feedback',
+  'todo_write',
+  'use_tool',
+  'workflow',
+  'web_search',
+  'web_fetch',
+  'x_search',
+  'x_user_search',
+  'x_keyword_search',
+  'x_semantic_search',
+  // Older CLI names, kept so a downgrade still strips tools.
   'Bash',
   'Read',
   'Write',
@@ -330,6 +364,17 @@ function scanCodexEvents(raw) {
   }
 }
 
+function grokReasoningArgs(reasoningEffort) {
+  const effort = reasoningEffort === undefined
+    ? GROK_CLASSIFICATION_REASONING_EFFORT
+    : String(reasoningEffort || '');
+  if (!effort) return [];
+  if (!GROK_REASONING_EFFORTS.has(effort)) {
+    throw new Error('Grok reasoning effort is unsupported.');
+  }
+  return ['--reasoning-effort', effort];
+}
+
 function grokTextFromJson(raw) {
   const parsed = JSON.parse(String(raw || '').trim());
   const candidates = [
@@ -357,6 +402,7 @@ export async function runOAuthCliProvider(provider, prompt, {
   schemaPath = '',
   env = process.env,
   timeoutMs = 120_000,
+  reasoningEffort,
   spawnImpl = spawn,
 } = {}) {
   const definition = providerDefinition(provider);
@@ -432,6 +478,7 @@ export async function runOAuthCliProvider(provider, prompt, {
       '--disable-web-search',
       '--disallowed-tools',
       GROK_DISALLOWED_TOOLS.join(','),
+      ...grokReasoningArgs(reasoningEffort),
       '--prompt-file',
       promptPath,
     ];
