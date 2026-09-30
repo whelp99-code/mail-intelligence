@@ -6,12 +6,12 @@ export const UNFILLED = '{확인 필요}';
 const TITLE_PATTERN = /(팀장|과장|차장|부장|이사|대표|매니저|실장|센터장)/;
 
 const SUBJECTS = Object.freeze({
-  T1: `[베를로] ${UNFILLED} ${UNFILLED} ${UNFILLED} 견적 요청 건`,
-  T2: `[공유] ${UNFILLED} ${UNFILLED} 견적서`,
+  T1: '[베를로] {고객사} {제품} {신규/갱신} 견적 요청 건',
+  T2: '[공유] {고객사} {범위} 견적서',
   T3: '',
-  T4: `[베를로] ${UNFILLED} ${UNFILLED} 발주 건`,
+  T4: '[베를로] {고객사} {제품} 발주 건',
   T5: '',
-  T6: `[베를로] ${UNFILLED} 자료 전달`,
+  T6: '[베를로] {자료명} 자료 전달',
   T7: '',
 });
 
@@ -127,6 +127,18 @@ const SLOT_KEYS = Object.freeze({
 
 function normalizeSpace(value = '') {
   return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+const REPLY_PREFIX = /^(?:re|회신)\s*[:：]\s*/i;
+
+export function replySubject(subject = '') {
+  let rest = normalizeSpace(subject);
+  let guard = 0;
+  while (REPLY_PREFIX.test(rest) && guard < 8) {
+    rest = rest.replace(REPLY_PREFIX, '').trim();
+    guard += 1;
+  }
+  return `RE: ${rest || '(제목 없음)'}`;
 }
 
 function currentText(message = {}) {

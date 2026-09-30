@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { splitMessageHistory } from './precision-classifier.js';
-import { renderMailTemplate, selectMailTemplate } from './mail-style-templates.js';
+import { renderMailTemplate, replySubject, selectMailTemplate, UNFILLED } from './mail-style-templates.js';
 
 export const MAIL_ASSISTANT_TOOLS_VERSION = 'mail-assistant-tools-v1.2.2';
 export const DEFAULT_ASSISTANT_PERSONALITY = Object.freeze({
@@ -262,7 +262,7 @@ export function generateSafeDraft({
     version: MAIL_ASSISTANT_TOOLS_VERSION,
     mode,
     to: normalizeSpace(message.from || ''),
-    subject: /^re:/i.test(message.subject || '') ? String(message.subject) : `RE: ${message.subject || '(제목 없음)'}`,
+    subject: mode === 'new_mail' ? (template?.subject || UNFILLED) : replySubject(message.subject),
     body: bounded(body, 12_000),
     personality: normalizedPersonality,
     generationMode: 'rules-local',
