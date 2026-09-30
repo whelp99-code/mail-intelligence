@@ -35,8 +35,8 @@ test('reply draft sync hook is off unless MAIL_INTELLIGENCE_REPLY_DRAFTS is 1', 
 
 test('only the outlook sync POST passes the env hook; send routes do not', () => {
   const server = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
-  const syncPost = server.slice(server.indexOf("url.pathname === '/api/outlook/sync'"));
-  const nextRoute = syncPost.indexOf("url.pathname === '/api/mail/search'");
+  const syncPost = server.slice(server.indexOf('url.pathname === \'/api/outlook/sync\''));
+  const nextRoute = syncPost.indexOf('url.pathname === \'/api/mail/search\'');
   const syncBlock = syncPost.slice(0, nextRoute);
   assert.match(syncBlock, /replyDrafts:\s*replyDraftsEnabled\(\)/);
   assert.doesNotMatch(server, /\/api\/mail\/send[\s\S]{0,400}replyDraftsEnabled/);
@@ -82,7 +82,7 @@ test('sync hook off leaves the pipeline uncalled and creates no sendable draft',
   const off = await runtime.syncMailbox({ accessToken: 'token', replyDrafts: replyDraftsEnabled({}) });
   assert.equal(off.replyDraftPipeline, null);
   const sent = runtime.store.db.prepare(
-    "SELECT COUNT(*) AS n FROM mail_send_drafts WHERE status IN ('approved', 'sending', 'sent')",
+    'SELECT COUNT(*) AS n FROM mail_send_drafts WHERE status IN (\'approved\', \'sending\', \'sent\')',
   ).get();
   assert.equal(sent.n, 0);
 });
@@ -93,7 +93,7 @@ test('sync hook on runs the pipeline without a send path', async (t) => {
   assert.equal(on.replyDraftPipeline.dryRun, false);
   assert.equal(on.replyDraftPipeline.drafted, 0);
   const sent = runtime.store.db.prepare(
-    "SELECT COUNT(*) AS n FROM mail_send_drafts WHERE status IN ('approved', 'sending', 'sent')",
+    'SELECT COUNT(*) AS n FROM mail_send_drafts WHERE status IN (\'approved\', \'sending\', \'sent\')',
   ).get();
   assert.equal(sent.n, 0);
 });
