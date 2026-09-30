@@ -107,3 +107,77 @@ test('safe sync rejects unsafe session without a POST', async (t) => {
   await assert.rejects(() => syncMailSafely({ baseUrl, accessKey }), { code: 'SESSION_UNSAFE' });
   assert.equal(requests.some((item) => item.method === 'POST'), false);
 });
+
+const approvedSendCapabilities = {
+  mailSend: true,
+  mailReadState: false,
+  mailMove: false,
+  mailDelete: false,
+  mailCategory: false,
+  calendarWrite: false,
+  taskWrite: false,
+  dataPlaneWrite: false,
+  fixtureWrite: false,
+};
+
+function approvedSendHealth(capabilities = approvedSendCapabilities, mode = 'human-approved-mail-send') {
+  return {
+    ok: true,
+    storage: { ready: true },
+    externalActionsAllowed: capabilities.mailSend === true,
+    safety: {
+      mode,
+      approved: false,
+      capabilities,
+    },
+    capabilities: {
+      send: capabilities.mailSend === true,
+      markRead: capabilities.mailReadState === true,
+      dataPlane: capabilities.dataPlaneWrite === true,
+      externalAi: false,
+    },
+  };
+}
+
+test('safe sync accepts human-approved send health when sync cannot mutate', async (t) => {
+  const { baseUrl, requests } = await withServer(t, {
+    'GET /api/health': { body: approvedSendHealth() },
+    'GET /api/session': { body: { csrfToken: 'csrf', capabilities: { sendMail: true, markRead: false, dataPlane: false } } },
+  });
+  const result = await syncMailSafely({ baseUrl, accessKey });
+  assert.equal(result.status, 'PASS');
+  assert.deepEqual(requests.filter((item) => item.method === 'POST').map((item) => item.url), ['/api/outlook/sync']);
+});
+
+for (const capability of ['mailReadState', 'mailMove', 'mailDelete', 'mailCategory', 'dataPlaneWrite']) {
+  test(`safe sync rejects approved-send health when ${capability} is on`, async (t) => {
+    const { baseUrl, requests } = await withServer(t, {
+      'GET /api/health': { body: approvedSendHealth({ ...approvedSendCapabilities, [capability]: true }) },
+    });
+    await assert.rejects(() => syncMailSafely({ baseUrl, accessKey }), { code: 'HEALTH_UNSAFE' });
+    assert.equal(requests.some((item) => item.method === 'POST'), false);
+  });
+}
+
+test('safe sync rejects an unknown safety mode', async (t) => {
+  const { baseUrl, requests } = await withServer(t, {
+    'GET /api/health': { body: approvedSendHealth(approvedSendCapabilities, 'approved-execution-test') },
+  });
+  await assert.rejects(() => syncMailSafely({ baseUrl, accessKey }), { code: 'HEALTH_UNSAFE' });
+  assert.equal(requests.some((item) => item.method === 'POST'), false);
+});
+
+test('safe sync rejects human-approved send mode without a reported capability gate', async (t) => {
+  const { baseUrl, requests } = await withServer(t, {
+    'GET /api/health': {
+      body: {
+        ok: true,
+        storage: { ready: true },
+        externalActionsAllowed: true,
+        safety: { mode: 'human-approved-mail-send' },
+      },
+    },
+  });
+  await assert.rejects(() => syncMailSafely({ baseUrl, accessKey }), { code: 'HEALTH_UNSAFE' });
+  assert.equal(requests.some((item) => item.method === 'POST'), false);
+});
