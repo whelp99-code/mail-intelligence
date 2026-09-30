@@ -58,6 +58,67 @@ test('draft generator uses the selected template and still cannot send', () => {
   assert.equal(draft.body.includes(NEED) || draft.unfilled.length > 0, true);
 });
 
+test('reply drafts use RE plus the original subject and drop stacked prefixes', () => {
+  const draft = generateSafeDraft({
+    message: {
+      subject: 'Re: RE: 회신: [공유] 견적 검토',
+      from: '홍길동 팀장 <hong@example.com>',
+      body: '잘 받았습니다.',
+    },
+    mode: 'rapid_reply',
+  });
+  assert.equal(draft.subject, 'RE: [공유] 견적 검토');
+  assert.equal(draft.subject.includes(NEED), false);
+});
+
+test('new-mail template subject fills known fields and keeps unknown slots', () => {
+  const rendered = renderMailTemplate('T1', {
+    message: {
+      subject: '견적 요청',
+      body: '고객사: 한빛소프트. 제품: HCI-100.',
+      from: '홍길동 팀장 <hong@example.com>',
+    },
+    evidence: {
+      고객사: '한빛소프트',
+      제품: 'HCI-100',
+      citations: { 고객사: 'message.body', 제품: 'message.body' },
+    },
+  });
+  assert.equal(rendered.subject, `[베를로] 한빛소프트 HCI-100 ${NEED} 견적 요청 건`);
+});
+
+test('new mail without a template subject stays 확인 필요', () => {
+  const draft = generateSafeDraft({
+    message: { subject: '', from: '', body: '안녕하세요' },
+    mode: 'new_mail',
+  });
+  assert.equal(draft.subject, NEED);
+});
+
+test('new mail uses a deterministic template subject when fields are known', () => {
+  const draft = generateSafeDraft({
+    message: {
+      subject: '',
+      from: '홍길동 팀장 <hong@example.com>',
+      body: '고객사 한빛소프트 제품 HCI-100 신규 견적 요청드립니다.',
+    },
+    mode: 'new_mail',
+    evidence: {
+      고객사: '한빛소프트',
+      제품: 'HCI-100',
+      '신규/갱신': '신규',
+      citations: {
+        고객사: 'message.body',
+        제품: 'message.body',
+        '신규/갱신': 'message.body',
+      },
+    },
+  });
+  assert.equal(draft.templateId, 'T1');
+  assert.equal(draft.subject, '[베를로] 한빛소프트 HCI-100 신규 견적 요청 건');
+  assert.equal(draft.sendAllowed, false);
+});
+
 test('T6 keeps unknown recipient fields as 확인 필요', () => {
   const rendered = renderMailTemplate('T6', {
     message: { subject: '자료', body: '', from: '' },

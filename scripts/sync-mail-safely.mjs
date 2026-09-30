@@ -69,9 +69,46 @@ async function sessionResponse(baseUrl, authorization) {
   }
 }
 
-function noCapabilities(value) {
-  const capabilities = Object.values(value || {});
-  return value && typeof value === 'object' && capabilities.length > 0 && capabilities.every((enabled) => enabled === false);
+const SYNC_UNSAFE_CAPABILITIES = [
+  'mailReadState',
+  'mailMove',
+  'mailDelete',
+  'mailCategory',
+  'calendarWrite',
+  'taskWrite',
+  'dataPlaneWrite',
+];
+
+function capabilityMap(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function sessionAllowsSync(value, allowApprovedSend) {
+  const capabilities = capabilityMap(value);
+  if (!capabilities || Object.keys(capabilities).length === 0) return false;
+  return Object.entries(capabilities).every(([key, enabled]) => enabled === false || (allowApprovedSend && key === 'sendMail' && enabled === true));
+}
+
+function healthAllowsSync(body) {
+  if (body?.ok !== true || body?.storage?.ready !== true) return false;
+  const mode = body?.safety?.mode;
+  const caps = capabilityMap(body?.safety?.capabilities);
+  const publicCaps = capabilityMap(body?.capabilities);
+  if (publicCaps && (publicCaps.markRead === true || publicCaps.dataPlane === true)) return false;
+  if (mode === 'read-only' && body?.externalActionsAllowed === false) {
+    if (caps && Object.values(caps).some((enabled) => enabled === true)) return false;
+    if (publicCaps && (publicCaps.send === true)) return false;
+    return true;
+  }
+  if (mode !== 'human-approved-mail-send' || !caps) return false;
+  if (!SYNC_UNSAFE_CAPABILITIES.every((key) => caps[key] === false)) return false;
+  if (caps.mailSend !== true && caps.mailSend !== false) return false;
+  if (Object.entries(caps).some(([key, enabled]) => enabled === true && key !== 'mailSend')) return false;
+  if (Object.values(caps).some((enabled) => enabled !== true && enabled !== false)) return false;
+  if (body.externalActionsAllowed === true && caps.mailSend !== true) return false;
+  if (body.externalActionsAllowed !== true && body.externalActionsAllowed !== false) return false;
+  if (publicCaps?.send === true && caps.mailSend !== true) return false;
+  return caps.mailSend === true || caps.mailSend === false;
 }
 
 function isCount(value) {
@@ -91,10 +128,8 @@ export async function syncMailSafely({
   if (!/^[A-Za-z0-9_-]{40,}$/.test(String(accessKey || ''))) fail('ACCESS_KEY_INVALID');
 
   const health = await responseJson(safeUrl, '/api/health');
-  if (health.body?.ok !== true
-    || health.body?.storage?.ready !== true
-    || health.body?.safety?.mode !== 'read-only'
-    || health.body?.externalActionsAllowed !== false) fail('HEALTH_UNSAFE');
+  if (!healthAllowsSync(health.body)) fail('HEALTH_UNSAFE');
+  const allowApprovedSend = health.body?.safety?.mode === 'human-approved-mail-send';
 
   const authorization = `Basic ${Buffer.from(`mailintelligence:${accessKey}`, 'utf8').toString('base64')}`;
   const root = await sessionResponse(safeUrl, authorization);
@@ -103,7 +138,7 @@ export async function syncMailSafely({
   if (!/^mi_session=/.test(cookie)) fail('SESSION_COOKIE_MISSING');
 
   const session = await responseJson(safeUrl, '/api/session', { headers: { Cookie: cookie } });
-  if (!session.body?.csrfToken || !noCapabilities(session.body.capabilities)) fail('SESSION_UNSAFE');
+  if (!session.body?.csrfToken || !sessionAllowsSync(session.body.capabilities, allowApprovedSend)) fail('SESSION_UNSAFE');
 
   const ai = await responseJson(safeUrl, '/api/ai/oauth/status', { headers: { Cookie: cookie } });
   let externalAi = 'disabled';
