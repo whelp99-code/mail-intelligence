@@ -269,6 +269,8 @@ export function generateSafeDraft({
     templateId: template?.templateId || null,
     templateSubject: template?.subject || '',
     unfilled: template?.unfilled || [],
+    fillSources: template?.fillSources || {},
+    greeting: template?.greeting || '',
     requiresHumanApproval: true,
     sendAllowed: false,
     calendarWriteAllowed: false,

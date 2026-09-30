@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mail draft slot fill",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["slots"],
+  "properties": {
+    "slots": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "quote"],
+        "properties": {
+          "key": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "quote": { "type": "string", "minLength": 1, "maxLength": 160 }
+        }
+      }
+    }
+  }
+}

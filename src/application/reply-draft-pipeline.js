@@ -5,6 +5,10 @@ import { generateSafeDraft } from '../domain/mail-assistant-tools.js';
 
 export const REPLY_DRAFT_PIPELINE_VERSION = 'reply-draft-pipeline-v1';
 export const PENDING_APPROVALS_PATH = 'data/ops/pending-approvals.jsonl';
+
+export function replyDraftsEnabled(env = process.env) {
+  return String(env.MAIL_INTELLIGENCE_REPLY_DRAFTS || '') === '1';
+}
 export const MORNING_DIGEST_DIR = 'data/ops';
 export const REPLY_NEEDED_STATES = Object.freeze(['action_required', 'decision_required']);
 const REPLY_NEEDED = new Set(REPLY_NEEDED_STATES);
@@ -79,11 +83,12 @@ export function buildReplyDraftPlan(message = {}, classification = null, now = n
   if (!to) return { action: 'skip', reason: 'no_reply_address', method: assessment.method };
   const draft = generateSafeDraft({
     message: {
-      from: to,
+      from: message.from || (message.sender_name ? `${message.sender_name} <${to}>` : to),
       subject: message.subject || '',
       body: message.body || message.body_text || message.bodyPreview || message.body_preview || '',
     },
     classification: assessment.classification || {},
+    evidence: { attachmentText: message.attachmentText || '' },
   });
   if (draft.sendAllowed !== false) {
     return { action: 'skip', reason: 'send_path_refused', method: assessment.method };
