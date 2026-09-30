@@ -83,11 +83,12 @@ export function buildReplyDraftPlan(message = {}, classification = null, now = n
   if (!to) return { action: 'skip', reason: 'no_reply_address', method: assessment.method };
   const draft = generateSafeDraft({
     message: {
-      from: to,
+      from: message.from || (message.sender_name ? `${message.sender_name} <${to}>` : to),
       subject: message.subject || '',
       body: message.body || message.body_text || message.bodyPreview || message.body_preview || '',
     },
     classification: assessment.classification || {},
+    evidence: { attachmentText: message.attachmentText || '' },
   });
   if (draft.sendAllowed !== false) {
     return { action: 'skip', reason: 'send_path_refused', method: assessment.method };

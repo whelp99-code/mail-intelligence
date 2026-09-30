@@ -125,7 +125,8 @@ test('T6 keeps unknown recipient fields as 확인 필요', () => {
     evidence: { 자료명: '발송 확인 파일', citations: { 자료명: 'attachment:test.txt' } },
   });
   assert.equal(rendered.templateId, 'T6');
-  assert.match(rendered.body, /\{확인 필요\} \{확인 필요\}님/);
+  assert.match(rendered.body, /^담당자님, 안녕하세요/m);
+  assert.doesNotMatch(rendered.body.split('\n')[0], /@|\{확인 필요\}/);
   assert.match(rendered.body, /발송 확인 파일/);
   assert.match(rendered.subject, /\[베를로\]/);
 });
