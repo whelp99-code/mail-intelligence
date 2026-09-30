@@ -449,7 +449,7 @@ export function applyModelSlots(ruleValues, payload, sourceText) {
 
 export function draftSlotPrompt(message = {}, attachmentText = '') {
   const source = factSource(message, attachmentText).slice(0, 6000);
-  return `Extract mail draft slots for a vendor reply from 베를로. Return ONLY JSON matching the draft slot schema. Each quote must be an exact contiguous substring of the source and a short noun phrase, amount, or date — never the counterpart's sentence. Allowed keys: 고객사, 제품, 건명, 공급가, 금액, 기간, 날짜, 주제, 만료일, 수량 또는 기간, 품목, 자료명, 대상, 납기, 참고, 신규/갱신, 범위. Do not invent amounts, dates, or promises. Use an empty slots array when unsure.\nSource:\n${source}`;
+  return `Return ONLY this JSON object and nothing else. No markdown. No explanation.\n{"slots":[{"key":"주제","quote":"exact noun phrase from the source"}]}\nEach quote must be an exact contiguous substring and a short noun phrase, amount, or date — never the counterpart's sentence. Allowed keys: 고객사, 제품, 건명, 공급가, 금액, 기간, 날짜, 주제, 만료일, 수량 또는 기간, 품목, 자료명, 대상, 납기, 참고, 신규/갱신, 범위. Do not invent amounts, dates, or promises. If unsure, return {"slots":[]}.\nSource:\n${source}`;
 }
 
 export function renderMailTemplate(templateId, { message = {}, evidence = {} } = {}) {
