@@ -291,22 +291,25 @@ function topicFromSubject(subject = '') {
   rest = normalizeSpace(rest.replace(/[.。]\s*$/, ''));
   const tails = [
     /\s*네고\s*및\s+.*/,
-    /\s*및\s*20\d{2}년\s*예산\s*견적.*/, 
-    /\s*견적\s*요청.*/, 
-    /\s*관련\s+.*/, 
-    /\s*회신드립니다\.?/, 
-    /\s*문의드립니다\.?/, 
-    /\s*요청드립니다\.?/, 
+    /\s*및\s*20\d{2}년\s*예산\s*견적.*/,
+    /\s*견적\s*요청.*/,
+    /\s*관련\s+.*/,
     /\s*건으로\s*요청.*/, 
-    /\s*요청\s*건/, 
-    /\s*의\s*건/, 
+    /\s*회신드립니다\.?/,
+    /\s*문의드립니다\.?/,
+    /\s*요청드립니다\.?/,
+    /\s*요청\s*건/,
+    /\s*의\s*건/,
+    /\s*건으로$/,
+    /\s*건$/,
   ];
-  for (let guard = 0; guard < 6; guard += 1) {
-    const next = normalizeSpace(tails.reduce((current, pattern) => current.replace(pattern, ''), rest));
+  for (let guard = 0; guard < 8; guard += 1) {
+    let next = rest;
+    for (const pattern of tails) next = next.replace(pattern, '');
+    next = normalizeSpace(next);
     if (next === rest) break;
     rest = next;
   }
-  rest = normalizeSpace(rest.replace(/\s*건$/, ''));
   if (!isNounPhraseFact(rest)) return '';
   return quoteIn(subject, rest);
 }
