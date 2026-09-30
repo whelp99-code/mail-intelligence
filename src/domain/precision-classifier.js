@@ -149,7 +149,7 @@ const SIGNATURE_MARKERS = [
 ];
 
 const HARD_HISTORY_MARKERS = [
-  /^-{2,}\s*(?:original message|원본 메시지|forwarded message|전달된 메시지 시작|보낸 메시지 시작)\s*-{2,}$/i,
+  /^-{2,}\s*(?:original message|원본 메시지|원본 메세지|forwarded message|전달된 메시지 시작|보낸 메시지 시작)\s*-{2,}$/i,
   /^begin forwarded message:\s*$/i,
   /^forwarded by\b/i,
   /^_{5,}$/,
@@ -159,9 +159,9 @@ const HARD_HISTORY_MARKERS = [
 ];
 
 const HISTORY_HEADER_PATTERNS = [
-  /^(?:보낸 사람|발신|from)\s*:/i,
-  /^(?:보낸 날짜|보낸 시각|sent|date)\s*:/i,
-  /^(?:받는 사람|수신|to)\s*:/i,
+  /^(?:보낸\s*사람|발신|from)\s*:/i,
+  /^(?:보낸\s*날짜|보낸\s*시각|sent|date)\s*:/i,
+  /^(?:받는\s*사람|수신|to)\s*:/i,
   /^(?:참조|cc)\s*:/i,
   /^(?:제목|subject)\s*:/i,
 ];
