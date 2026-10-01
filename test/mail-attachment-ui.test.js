@@ -28,6 +28,7 @@ class FakeNode {
     this.open = false;
     this.files = [];
     this.hidden = false;
+    this.dataset = {};
   }
   reset() { this.value = ''; }
   get textContent() { return this._text || this.children.map((child) => child.textContent).join(''); }
@@ -238,7 +239,8 @@ test('Drive link composer requires the access warning and stores acknowledged li
   document.querySelector('#driveLinkUrl').value = 'https://drive.google.com/file/d/abcDEF123/view?usp=sharing';
   document.querySelector('#driveLinkLabel').value = 'Spec';
   document.querySelector('#confirmDriveLink').click();
-  assert.match(document.querySelector('#attachmentLive').textContent, /접근 권한 미확인/);
+  assert.equal(document.querySelector('#attachmentLive').dataset.attachmentState, 'drive-link-ack-required');
+  assert.notEqual(document.querySelector('#attachmentLive').dataset.attachmentState, 'none');
   document.querySelector('#driveLinkAck').checked = true;
   document.querySelector('#confirmDriveLink').click();
   assert.match(document.querySelector('.drive-link-row').textContent, /파일 첨부가 아닌 링크/);
