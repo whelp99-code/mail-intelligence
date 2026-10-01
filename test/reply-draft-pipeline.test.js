@@ -82,7 +82,7 @@ test('creates one needs_approval draft and skips notifications without send', ()
   assert.equal(twice.alreadyDrafted, 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS c FROM mail_send_drafts').get().c, 1);
   const row = db.prepare('SELECT status, subject FROM mail_send_drafts').get();
-  assert.equal(row.status, 'needs_approval');
+  assert.equal(row.status, 'needs_clarification');
   assert.match(row.subject, /^RE:/);
   const line = JSON.parse(readFileSync(queuePath, 'utf8').trim());
   assert.equal(typeof line.draftId, 'string');
@@ -319,7 +319,7 @@ test('folder copies of one mail produce one reply draft; distinct mails stay sep
   const rows = db.prepare('SELECT request_id, message_id, status FROM mail_send_drafts ORDER BY message_id').all();
   assert.deepEqual(rows.map((row) => row.message_id), [755, 801, 901, 902]);
   assert.deepEqual(rows.map((row) => row.request_id), ['reply.m755', 'reply.m801', 'reply.m901', 'reply.m902']);
-  assert.equal(rows.every((row) => row.status === 'needs_approval'), true);
+  assert.equal(rows.every((row) => row.status === 'needs_clarification'), true);
   db.close();
 });
 

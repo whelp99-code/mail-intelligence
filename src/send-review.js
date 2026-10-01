@@ -217,6 +217,22 @@ export function initializeSendReview(apiFetch) {
     URL.revokeObjectURL(url);
     status.textContent = '첨부 파일을 다운로드했습니다. 브라우저에서 실행하지 말고 검토하세요.';
   }
+  function showSuggestions(target, suggestions = []) {
+    if (!suggestions?.length) return;
+    target.append(node('h3', '첨부 제안'));
+    target.append(node('p', '제안만 표시합니다. 자동으로 첨부하지 않습니다.', 'send-draft-warning'));
+    const rows = node('ul', '', 'attachment-list');
+    for (const item of suggestions) {
+      const row = node('li', '', 'drive-link-row');
+      const main = node('div', '', 'attachment-row-main');
+      main.append(node('div', item.name || item.url || '파일', 'attachment-row-name'));
+      main.append(node('div', `${item.reason || item.kind} · 자동 첨부 아님`, 'attachment-row-meta'));
+      if (item.url) main.append(node('div', item.url, 'attachment-row-meta'));
+      row.append(main);
+      rows.append(row);
+    }
+    target.append(rows);
+  }
   function show(draft) {
     detail.replaceChildren();
     detail.append(node('p', `${statuses[draft.status] || draft.status} · 출처: ${draft.source}`, 'send-draft-meta'));
@@ -236,6 +252,7 @@ export function initializeSendReview(apiFetch) {
       detail.append(original);
     }
     detail.append(node('pre', draft.body_text || '본문 확인 필요', 'send-draft-body'));
+    showSuggestions(detail, draft.attachment_suggestions);
     showAttachments(detail, draft.attachments, draft.links, { downloadable: true });
     detail.append(node('p', `초안 ID: ${draft.draft_id}`, 'send-draft-meta'));
     if (draft.status === 'sent') detail.append(node('p', `발송 확인 시각: ${draft.sent_at} · Graph message id: ${draft.graph_message_id}`, 'send-draft-receipt'));
