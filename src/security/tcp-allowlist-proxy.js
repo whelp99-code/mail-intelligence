@@ -61,6 +61,7 @@ function tailnetHostname(value) {
   if (!host || host.length > 253 || host.includes('..')) return '';
   if (!/^[a-z0-9.-]+$/.test(host) || !host.includes('.') || host.startsWith('.') || host.endsWith('-')) return '';
   if (host === 'localhost' || host.endsWith('.localhost')) return '';
+  if (!host.endsWith('.ts.net') || host === 'ts.net') return '';
   return host;
 }
 
