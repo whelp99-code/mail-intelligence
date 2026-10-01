@@ -56,16 +56,28 @@ export function parseAllowedCidrs(value = '100.64.0.0/10') {
   return items.map(parseIpv4Cidr);
 }
 
+function tailnetHostname(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host || host.length > 253 || host.includes('..')) return '';
+  if (!/^[a-z0-9.-]+$/.test(host) || !host.includes('.') || host.startsWith('.') || host.endsWith('-')) return '';
+  if (host === 'localhost' || host.endsWith('.localhost')) return '';
+  return host;
+}
+
 export function parseTailnetAllowedHosts(value = '', allowedCidrs = parseAllowedCidrs()) {
-  const items = String(value || '')
-    .split(',')
-    .map((item) => normalizeIpv4(item))
-    .filter(Boolean);
-  const unique = [...new Set(items)];
-  for (const host of unique) {
-    if (!allowedCidrs.some((cidr) => ipv4InCidr(host, cidr))) {
-      throw configError(`Allowed proxy host is outside the tailnet CIDR: ${host}.`);
+  const unique = [];
+  for (const raw of String(value || '').split(',').map((item) => item.trim()).filter(Boolean)) {
+    const ip = normalizeIpv4(raw);
+    if (ip) {
+      if (!allowedCidrs.some((cidr) => ipv4InCidr(ip, cidr))) {
+        throw configError(`Allowed proxy host is outside the tailnet CIDR: ${ip}.`);
+      }
+      if (!unique.includes(ip)) unique.push(ip);
+      continue;
     }
+    const name = tailnetHostname(raw);
+    if (!name) throw configError('Allowed proxy host is not a tailnet address or hostname.');
+    if (!unique.includes(name)) unique.push(name);
   }
   return Object.freeze(unique);
 }

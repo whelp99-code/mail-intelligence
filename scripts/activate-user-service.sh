@@ -31,11 +31,16 @@ fi
 ALLOWED_PROXY_HOSTS=""
 if [[ -s "$PROXY_ENV" ]]; then
   ALLOWED_PROXY_HOSTS="$(awk -F= '$1 == "MAIL_INTELLIGENCE_PROXY_BIND" { print $2; exit }' "$PROXY_ENV" | tr -d '[:space:]')"
+  PUBLIC_HOSTS="$(awk -F= '$1 == "MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS" { print $2; exit }' "$RUNTIME_ENV" 2>/dev/null | tr ',' '\n' | awk 'NF && $0 !~ /^[0-9.]+$/ { print }' | paste -sd, -)"
+  if [[ -n "$PUBLIC_HOSTS" ]]; then
+    ALLOWED_PROXY_HOSTS="${ALLOWED_PROXY_HOSTS},${PUBLIC_HOSTS}"
+  fi
   if [[ -n "$ALLOWED_PROXY_HOSTS" ]]; then
     MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS="$ALLOWED_PROXY_HOSTS" node --input-type=module - <<'NODE'
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
 const hosts = parseTailnetAllowedHosts(process.env.MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS || '');
-if (hosts.length !== 1) throw new Error('Exactly one persisted tailnet proxy host is required.');
+const addresses = hosts.filter((host) => /^\d+\.\d+\.\d+\.\d+$/.test(host));
+if (addresses.length !== 1) throw new Error('Exactly one persisted tailnet proxy host is required.');
 NODE
   fi
 fi
