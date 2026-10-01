@@ -52,7 +52,7 @@ const authenticatedRoot = await fetch(`${baseUrl}/`, {
 });
 assert.equal(authenticatedRoot.status, 200);
 const html = await authenticatedRoot.text();
-assert.match(html, /v1\.2\.2 · Operational Classification/);
+assert.match(html, /v1\.2\.2 · 운영 분류/);
 assert.match(html, /프로젝트는 자동 생성하지 않습니다/);
 assert.match(html, /http:\/\/localhost:3010\/auth\/callback/);
 const mailWorkspaceIndex = html.indexOf('id="mailShell"');

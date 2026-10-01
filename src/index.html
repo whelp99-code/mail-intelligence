@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">Outlook Work OS</p>
         <h1>Mail Intelligence</h1>
-        <span class="version-badge">v1.2.2 · Operational Classification</span>
+        <span class="version-badge">v1.2.2 · 운영 분류</span>
         <p class="lede">확실한 업무는 바로 배치하고, 애매한 메일은 조용히 숨기지 않고 검토함에 남깁니다.</p>
       </div>
       <nav class="nav" aria-label="분석 섹션">
@@ -41,7 +41,7 @@
             <button id="showSent" type="button" role="tab" aria-selected="false">보낸 편지함</button>
           </div>
           <label class="search-field" aria-label="메일 검색">
-            <span>Search</span>
+            <span>검색</span>
             <input id="mailSearch" type="search" placeholder="예: 오늘 내가 처리할 견적 / 고객 회신 대기" />
           </label>
           <button id="searchDatabase" type="button">지능형 탐색</button>
@@ -59,7 +59,7 @@
 
       <section class="notice safety-notice" aria-label="안전 모드 안내">
         <strong>v1.2.2 읽기 전용 운영 안정화</strong>
-        <span>DO NOW·WAITING·REVIEW·ARCHIVE로 단순하게 배치합니다. 불확실한 메일과 신규 문서는 자동 보관하지 않습니다. 초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단됩니다.</span>
+        <span>지금 처리·대기·검토·보관으로 단순하게 배치합니다. 불확실한 메일과 신규 문서는 자동 보관하지 않습니다. 초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단됩니다.</span>
       </section>
 
       <section id="sentMail" class="sent-mail" hidden>
@@ -120,7 +120,7 @@
       <section id="precisionIntelligence" class="precision-panel" aria-live="polite">
         <div class="precision-head">
           <div>
-            <span class="memory-label">Precision Classification · 저장 전체</span>
+            <span class="memory-label">정밀 분류 · 저장 전체</span>
             <strong id="precisionStatus">정밀 분류 확인 중</strong>
             <p id="precisionSummary">현재 상태, 다음 행동 주체, 프로젝트, 기한과 근거를 확인합니다.</p>
           </div>
@@ -135,10 +135,10 @@
           <button class="metric review" type="button" data-filter="review_required"><span>검토 필요</span><strong id="reviewRequiredCount">0</strong></button>
         </div>
         <div class="operational-lanes" role="group" aria-label="운영 업무함 필터">
-          <button class="metric operational-do-now" type="button" data-filter="op:do_now"><span>DO NOW</span><strong id="doNowCount">0</strong></button>
-          <button class="metric operational-waiting" type="button" data-filter="op:waiting"><span>WAITING</span><strong id="operationalWaitingCount">0</strong></button>
-          <button class="metric operational-review" type="button" data-filter="op:review"><span>REVIEW</span><strong id="operationalReviewCount">0</strong></button>
-          <button class="metric operational-archive" type="button" data-filter="op:archive"><span>ARCHIVE</span><strong id="operationalArchiveCount">0</strong></button>
+          <button class="metric operational-do-now" type="button" data-filter="op:do_now"><span>지금 처리</span><strong id="doNowCount">0</strong></button>
+          <button class="metric operational-waiting" type="button" data-filter="op:waiting"><span>대기</span><strong id="operationalWaitingCount">0</strong></button>
+          <button class="metric operational-review" type="button" data-filter="op:review"><span>검토</span><strong id="operationalReviewCount">0</strong></button>
+          <button class="metric operational-archive" type="button" data-filter="op:archive"><span>보관</span><strong id="operationalArchiveCount">0</strong></button>
         </div>
         <div id="smartViews" class="smart-views" aria-label="저장된 지능형 탐색"></div>
         <details class="project-registry">
@@ -164,7 +164,7 @@
 
       <section id="persistentMemory" class="memory-panel" aria-live="polite">
         <div>
-          <span class="memory-label">Authoritative Storage</span>
+          <span class="memory-label">기준 저장소</span>
           <strong id="memoryStatus">SQLite 확인 중</strong>
           <p id="memorySummary">DB 스키마와 동기화 상태를 불러오는 중입니다.</p>
         </div>
