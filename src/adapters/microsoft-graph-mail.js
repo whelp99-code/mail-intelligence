@@ -124,7 +124,7 @@ export class GraphMailClient {
     return url.toString();
   }
 
-  async requestJson(url) {
+  async requestJson(url, { expectCollection = true } = {}) {
     const target = this.validateContinuationUrl(url);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -159,8 +159,10 @@ export class GraphMailClient {
         });
       }
       const payload = await response.json();
-      if (!payload || typeof payload !== 'object' || !Array.isArray(payload.value)) {
-        throw new GraphMailError('Microsoft Graph response did not contain a value array.', {
+      const invalidCollection = expectCollection && (!payload || typeof payload !== 'object' || !Array.isArray(payload.value));
+      const invalidItem = !expectCollection && (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id);
+      if (invalidCollection || invalidItem) {
+        throw new GraphMailError('Microsoft Graph response did not contain the expected payload.', {
           code: 'GRAPH_RESPONSE_INVALID',
         });
       }
@@ -264,6 +266,15 @@ export class GraphMailClient {
       }
     }
     return folders;
+  }
+
+  async fetchMessage({ mailboxPath = '/me', messageId }) {
+    const path = safeMailboxPath(mailboxPath);
+    const id = String(messageId || '').trim();
+    if (!id || id.length > 2000 || hasControlCharacters(id)) throw new Error('messageId is required.');
+    const url = new URL(`${this.graphBaseUrl}${path}/messages/${encodeURIComponent(id)}`);
+    url.searchParams.set('$select', DEFAULT_SELECT);
+    return this.requestJson(url.toString(), { expectCollection: false });
   }
 
   async fetchAttachmentMetadata({ mailboxPath = '/me', messageId }) {
