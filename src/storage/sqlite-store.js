@@ -11,6 +11,11 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { bridgeAttachmentDraftPrincipals } from './attachment-migration-bridge.js';
+import {
+  getHandledElsewhere as getHandledElsewhereRecord,
+  markHandledElsewhere as markHandledElsewhereRecord,
+  undoHandledElsewhere as undoHandledElsewhereRecord,
+} from '../application/handled-elsewhere.js';
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
 import {
@@ -2717,6 +2722,32 @@ export class SQLiteMailStore {
       backup.close();
     }
     return { path: target, sizeBytes: statSync(target).size, createdAt: this.now() };
+  }
+
+  markHandledElsewhere(mailboxId, messageId, { channel, note = '', actor, now = this.now() } = {}) {
+    return markHandledElsewhereRecord({
+      db: this.db,
+      mailboxId,
+      messageId,
+      channel,
+      note,
+      actor,
+      now,
+    });
+  }
+
+  undoHandledElsewhere(mailboxId, messageId, { actor, now = this.now() } = {}) {
+    return undoHandledElsewhereRecord({
+      db: this.db,
+      mailboxId,
+      messageId,
+      actor,
+      now,
+    });
+  }
+
+  getHandledElsewhere(mailboxId, messageId) {
+    return getHandledElsewhereRecord(this.db, mailboxId, messageId);
   }
 
   close() {

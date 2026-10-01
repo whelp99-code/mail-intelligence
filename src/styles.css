@@ -36,6 +36,41 @@
   padding: 8px 12px;
   white-space: normal;
 }
+
+.handled-elsewhere {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.handled-elsewhere select,
+.handled-elsewhere input,
+.handled-elsewhere button {
+  min-height: 44px;
+  min-width: 0;
+}
+
+.handled-elsewhere select { flex: 1 1 8rem; }
+
+.handled-elsewhere input { flex: 1 1 12rem; }
+
+.handled-elsewhere button {
+  flex: 1 1 auto;
+  background: var(--soft-green);
+  border-color: var(--green);
+  color: #0f6b45;
+  font-weight: 700;
+}
+
+.handled-elsewhere .handled-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  flex: 1 1 100%;
+}
 .send-review { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin-top: 24px; }
 .send-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .send-review-heading h2 { margin-bottom: 8px; }

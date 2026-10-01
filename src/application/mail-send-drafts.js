@@ -357,7 +357,8 @@ export class MailSendDrafts {
   }
 
   cancel(mailboxId, id, actor, reason = '') {
-    const systemReply = actor === 'system:already-replied' && reason === '이미 회신함';
+    const systemReply = (actor === 'system:already-replied' && reason === '이미 회신함')
+      || (actor === 'system:handled-elsewhere' && reason === '외부에서 회신함');
     if (!systemReply && (typeof actor !== 'string' || !actor.startsWith('session:') || actor.length > 160)) fail(403, 'HUMAN_APPROVAL_REQUIRED');
     return this.transaction(() => {
       const draft = this.get(mailboxId, id);
