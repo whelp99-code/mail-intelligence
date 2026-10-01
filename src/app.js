@@ -1,3 +1,4 @@
+import { messageIdFromHash } from './message-hash.js';
 import { initializeSendReview } from './send-review.js';
 import { renderReceivedAttachments } from './received-attachments.js';
 import {
@@ -1335,6 +1336,8 @@ function renderActionPanel() {
 function render(result, messages = []) {
   currentResult = result && typeof result === 'object' ? { ...emptyResult(), ...result, calendar: Array.isArray(result.calendar) ? result.calendar : [], reminders: Array.isArray(result.reminders) ? result.reminders : [], insights: Array.isArray(result.insights) ? result.insights : [] } : emptyResult();
   currentMessages = Array.isArray(messages) ? messages : [];
+  const fromHash = messageIdFromHash(location.hash);
+  if (fromHash && currentMessages.some((message) => String(message.id) === fromHash)) selectedMessageId = fromHash;
   activeFilter = 'all';
   searchQuery = '';
   mailSearch.value = '';
@@ -2114,6 +2117,10 @@ sentSearch.addEventListener('input', () => {
   renderSentList();
 });
 if (location.hash === '#sentMail') showMailbox('sent');
+window.addEventListener('hashchange', () => {
+  const id = messageIdFromHash(location.hash);
+  if (id && currentMessages.some((message) => String(message.id) === id)) selectMessage(id);
+});
 
 async function refreshSafetyBanner() {
   const title = document.querySelector('#safetyNoticeTitle');
