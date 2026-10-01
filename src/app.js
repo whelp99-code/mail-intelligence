@@ -1900,6 +1900,7 @@ async function loadOutlookMessages() {
     });
     await loadWorkLinks();
     render(payload.result, payload.messages);
+    await openHashedMessage();
     if (payload.precision?.summary) renderPrecisionOverview(payload.precision.summary);
     await loadPrecisionProjects();
     await loadMemoryStatus();
@@ -2118,11 +2119,25 @@ sentSearch.addEventListener('input', () => {
   renderSentList();
 });
 if (location.hash === '#sentMail') showMailbox('sent');
-window.addEventListener('hashchange', () => {
+async function openHashedMessage() {
   const id = messageIdFromHash(location.hash);
-  const hashed = id && currentMessages.find((message) => messageMatchesHash(message, id));
+  if (!id) return;
+  let hashed = currentMessages.find((message) => messageMatchesHash(message, id));
+  if (!hashed && /^\d+$/.test(id)) {
+    const response = await apiFetch(`/api/mail/message?id=${encodeURIComponent(id)}`);
+    const payload = await readApiPayload(response);
+    if (response.ok && payload.message) {
+      hashed = payload.message;
+      currentMessages = [hashed, ...currentMessages.filter((message) => message.id !== hashed.id)];
+      selectedMessageId = hashed.id;
+      render(currentResult, currentMessages);
+      return;
+    }
+  }
   if (hashed) selectMessage(hashed.id);
-});
+}
+
+window.addEventListener('hashchange', () => { void openHashedMessage(); });
 
 async function refreshSafetyBanner() {
   const title = document.querySelector('#safetyNoticeTitle');
