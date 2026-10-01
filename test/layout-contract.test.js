@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [html, css, app] = await Promise.all([
+const [html, css, app, labels] = await Promise.all([
   readFile(new URL('../src/index.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
   readFile(new URL('../src/app.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/ui-labels.js', import.meta.url), 'utf8'),
 ]);
 
 test('desktop mail workspace is the first primary section and keeps five grid tracks', () => {
@@ -35,10 +36,11 @@ test('desktop mail workspace is the first primary section and keeps five grid tr
 });
 
 test('scope labels distinguish loaded, stored, and global precision counts', () => {
-  assert.match(html, /Precision Classification · 저장 전체/);
+  assert.match(html, /정밀 분류 · 저장 전체/);
   assert.match(html, /저장 메일/);
   assert.match(app, /현재 로드 \$\{currentMessages\.length\}건 중/);
-  assert.match(app, /저장 전체 정밀 분류/);
+  assert.match(app, /renderStoredPrecisionStatus/);
+  assert.match(`${app}\n${labels}`, /저장 전체 정밀 분류/);
 });
 
 test('settings are split, bounded, and secondary sections remain collapsed by default', () => {

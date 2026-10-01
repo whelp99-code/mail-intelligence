@@ -132,7 +132,7 @@ assert.match(
 );
 assert.match(indexSource, /id="aiDataPolicyAccepted"/);
 assert.match(indexSource, /공식 OpenAI 또는 xAI 서비스로 전송/);
-assert.match(indexSource, /v1\.2\.2 · Operational Classification/);
+assert.match(indexSource, /v1\.2\.2 · 운영 분류/);
 assert.match(indexSource, /id="precisionIntelligence"/);
 assert.match(indexSource, /프로젝트는 자동 생성하지 않습니다/);
 assert.match(appSource, /aiDataPolicyAccepted:\s*aiProvider\.value !== 'rules'/);
