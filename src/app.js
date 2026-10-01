@@ -1,5 +1,12 @@
 import { initializeSendReview } from './send-review.js';
 import { renderReceivedAttachments } from './received-attachments.js';
+import {
+  displayLabel,
+  operationalLaneLabel,
+  priorityLabel,
+  renderPrecisionStayNote,
+  renderStoredPrecisionStatus,
+} from './ui-labels.js';
 
 let serverCapabilities = { sendMail: false, markRead: false, dataPlane: false };
 let localSessionPromise = null;
@@ -402,14 +409,6 @@ function nextActorLabel(value) {
   }[value] || value || '행동 주체 불명';
 }
 
-function priorityLabel(value) {
-  return {
-    critical: '최우선',
-    high: '높음',
-    normal: '보통',
-    low: '낮음'
-  }[value] || value || '보통';
-}
 
 function projectResolutionLabel(value) {
   return {
@@ -474,14 +473,6 @@ function operationalLaneForMessage(messageId) {
   return precision?.operational?.lane || 'review';
 }
 
-function operationalLaneLabel(value) {
-  return {
-    do_now: 'DO NOW',
-    waiting: 'WAITING',
-    review: 'REVIEW',
-    archive: 'ARCHIVE'
-  }[value] || 'REVIEW';
-}
 
 function operationalDetail(classification) {
   const operational = classification?.operational;
@@ -492,7 +483,7 @@ function operationalDetail(classification) {
   return `
     <section class="operational-detail lane-${escapeHtml(operational.lane.replaceAll('_', '-'))}">
       <div>
-        <span class="memory-label">Operational Lane</span>
+        <span class="memory-label">${displayLabel('Operational Lane')}</span>
         <strong>${escapeHtml(operationalLaneLabel(operational.lane))}</strong>
       </div>
       <span>${operational.silentRiskPrevented ? '자동 보관 차단 · 조용한 누락 방지' : operational.autoConfirmed ? '자동 배치 가능' : '사용자 확인 권장'}</span>
@@ -932,11 +923,11 @@ async function runAssistantTool(action, messageId) {
       if (requestSequence !== assistantRequestSequence || messageId !== selectedMessageId) return;
       if (!response.ok) throw new Error(payload.message || 'Luna 2차 검토 실패');
       if (payload.status === 'policy_blocked') {
-        renderAssistantOutput('외부 AI가 운영 정책으로 꺼져 있습니다. Rules 결과를 유지하고 이 메일은 REVIEW에서 사람이 확인합니다.');
+        renderAssistantOutput(`외부 AI가 운영 정책으로 꺼져 있습니다. Rules 결과를 유지하고 이 메일은 ${operationalLaneLabel('review')}에서 사람이 확인합니다.`);
       } else if (payload.status === 'agreed') {
         renderAssistantOutput(`Rules와 Luna 후보가 일치했습니다.\n${JSON.stringify(payload.luna, null, 2)}\n자동 저장은 하지 않았습니다.`);
       } else if (payload.status === 'disagreed') {
-        renderAssistantOutput(`Rules와 Luna가 불일치했습니다. REVIEW를 유지합니다.\nRules: ${JSON.stringify(payload.rules)}\nLuna: ${JSON.stringify(payload.luna)}`);
+        renderAssistantOutput(`Rules와 Luna가 불일치했습니다. ${operationalLaneLabel('review')}를 유지합니다.\nRules: ${JSON.stringify(payload.rules)}\nLuna: ${JSON.stringify(payload.luna)}`);
       } else {
         renderAssistantOutput(payload);
       }
@@ -1007,7 +998,7 @@ function selectMessage(messageId) {
     </div>
     <div class="detail-content">
       <h3>${escapeHtml(insight?.subject || message?.subject || '(제목 없음)')}</h3>
-      <p class="detail-meta">${escapeHtml(insight?.fromName || message?.fromName || message?.from || 'unknown')} · ${message?.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${escapeHtml(message?.importance || 'normal')} · ${escapeHtml(analysisState)} · 신뢰도 ${escapeHtml(confidence)}</p>
+      <p class="detail-meta">${escapeHtml(insight?.fromName || message?.fromName || message?.from || '알 수 없음')} · ${message?.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${escapeHtml(priorityLabel(message?.importance || 'normal'))} · ${escapeHtml(analysisState)} · 신뢰도 ${escapeHtml(confidence)}</p>
       <section class="detail-block first">
         <h4>메일 내용</h4>
         <p class="detail-body">${escapeHtml(fullBody).slice(0, 5000)}</p>
@@ -1303,10 +1294,10 @@ function renderPrecisionOverview(summary) {
     if (node) node.textContent = String(operationalLanes[lane] || 0);
   });
   precisionStatus.textContent = total
-    ? `저장 전체 정밀 분류 ${total}건 · DO NOW ${operationalLanes.do_now || 0} · WAITING ${operationalLanes.waiting || 0} · REVIEW ${operationalLanes.review || review} · ARCHIVE ${operationalLanes.archive || 0}`
+    ? renderStoredPrecisionStatus({ total, lanes: operationalLanes, review })
     : '정밀 분류할 저장 메일이 없습니다.';
   precisionSummaryNode.textContent = total
-    ? `사용자 보정 ${corrected}건 · 자동 보관 차단 ${operational.silentRiskPrevented || 0}건 · 확정 프로젝트 연결 ${confirmed}건 · 애매한 판단은 REVIEW에 남깁니다.`
+    ? `사용자 보정 ${corrected}건 · 자동 보관 차단 ${operational.silentRiskPrevented || 0}건 · 확정 프로젝트 연결 ${confirmed}건 · ${renderPrecisionStayNote()}`
     : 'Outlook을 연결하거나 저장 메일을 동기화하면 정밀 분류가 시작됩니다.';
 }
 
@@ -1594,7 +1585,7 @@ function renderDatabaseSearchResults(results, query, parsedQuery = null) {
     item.addEventListener('click', () => {
       const existing = currentMessages.find((candidate) => candidate.id === message.id);
       if (!existing) {
-        fetchStatus.textContent = 'Search result is not in the loaded mailbox.';
+        fetchStatus.textContent = '검색 결과가 현재 불러온 편지함에 없습니다.';
         return;
       }
       existing.precision = classification || existing.precision;

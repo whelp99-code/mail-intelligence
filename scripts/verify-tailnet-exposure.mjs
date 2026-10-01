@@ -60,7 +60,7 @@ const authenticatedRoot = await fetch(`${baseUrl}/`, {
 });
 assert.equal(authenticatedRoot.status, 200);
 const html = await authenticatedRoot.text();
-assert.match(html, /v1\.2\.2 · Operational Classification/);
+assert.match(html, /v1\.2\.2 · 운영 분류/);
 assert.match(html, /http:\/\/localhost:3010\/auth\/callback/);
 const cookie = (authenticatedRoot.headers.get('set-cookie') || '').split(';')[0];
 assert.match(cookie, /^mi_session=/);
