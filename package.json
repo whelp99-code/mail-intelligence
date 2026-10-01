@@ -16,7 +16,7 @@
     "lint:fix": "eslint server.mjs src test scripts --ext .js,.mjs --fix",
     "validate:html": "htmlhint src/index.html",
     "validate:css": "stylelint src/styles.css",
-    "audit": "npm audit --audit-level=high",
+    "audit": "env -u npm_config_allow_scripts -u NPM_CONFIG_ALLOW_SCRIPTS npm audit --audit-level=high",
     "audit:fix": "npm audit fix --ignore-scripts --no-fund",
     "memory:status": "node scripts/mail-memory-admin.mjs status",
     "memory:integrity": "node scripts/mail-memory-admin.mjs integrity",
