@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { GraphSendClient, hasMailSendScope } from '../adapters/microsoft-graph-send.js';
 import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
+import { commandDigest, consumeReceiptItem, matchingMailItem, verifyJarvisReceipt } from './jarvis-receipt-gate.js';
 
 function fail(statusCode, code) {
   throw Object.assign(new Error(code), { statusCode, code });
@@ -20,6 +21,9 @@ export function createMailSendApi({
   companyMemory = null,
   getAttachmentKey, recheckDrive = async () => {},
   clientFactory = (options) => new GraphSendClient(options),
+  jarvisReceiptGate = false,
+  jarvisDecisionPublicKey = '',
+  jarvisDecisionKeyId = '',
 }) {
   const tokens = { ...agentTokens };
   if (serviceToken) tokens['grok-bot'] = tokens['grok-bot'] || serviceToken;
@@ -42,7 +46,7 @@ export function createMailSendApi({
         }
       }
       if (!agentSource) fail(401, 'DRAFT_TOKEN_REQUIRED');
-      if (action) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+      if (action && !(action === 'approve' && jarvisReceiptGate)) fail(403, 'HUMAN_APPROVAL_REQUIRED');
       if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!id && req.method === 'GET') fail(403, 'DRAFT_LIST_FORBIDDEN');
     } else {
@@ -99,14 +103,31 @@ export function createMailSendApi({
     }
     if (req.method !== 'POST' || !action) fail(405, 'METHOD_NOT_ALLOWED');
     const body = await readBody(req);
-    const actor = `session:${createHash('sha256').update(session.token).digest('hex').slice(0, 24)}`;
+    let receiptUse;
+    if (!bot && jarvisReceiptGate && draft.owner_principal === 'agent:grok-bot' && action === 'approve') {
+      fail(403, 'SECOND_APPROVAL_DISABLED');
+    }
+    let actor = bot ? 'agent:grok-bot' : `session:${createHash('sha256').update(session.token).digest('hex').slice(0, 24)}`;
+    if (bot && action === 'approve') {
+      if (!jarvisDecisionPublicKey || !jarvisDecisionKeyId) fail(503, 'JARVIS_RECEIPT_UNCONFIGURED');
+      const command = body.command;
+      const receipt = body.receipt;
+      if (!verifyJarvisReceipt(receipt, jarvisDecisionPublicKey, Date.now(), jarvisDecisionKeyId)) fail(403, 'JARVIS_RECEIPT_INVALID');
+      if (commandDigest(command) !== receipt.command_digest || receipt.request_id !== command.request_id) fail(403, 'JARVIS_RECEIPT_INVALID');
+      const item = matchingMailItem(command, draft);
+      if (!item) fail(403, 'JARVIS_RECEIPT_INVALID');
+      if (body.payload_digest !== draft.payload_digest) fail(409, 'DRAFT_DIGEST_MISMATCH');
+      actor = `jarvis-receipt:${receipt.receipt_id}`;
+      receiptUse = { receiptId: receipt.receipt_id, itemDigest: item.payload_digest };
+    }
     if (action === 'cancel') {
       if (Object.keys(body).length) fail(400, 'INVALID_CANCEL_FIELDS');
       return { status: 200, body: { draft: decorate(drafts.cancel(mailbox.id, id, actor)) } };
     }
     if (!allowSend) fail(403, 'MAIL_SEND_DISABLED');
     if (!accessKeyRequired) fail(403, 'AUTHENTICATED_OPERATOR_REQUIRED');
-    if (Object.keys(body).some((key) => !['payload_digest', 'confirm'].includes(key)) || body.confirm !== true) fail(400, 'EXPLICIT_CONFIRMATION_REQUIRED');
+    const allowed = bot && jarvisReceiptGate ? ['payload_digest', 'confirm', 'receipt', 'command'] : ['payload_digest', 'confirm'];
+    if (Object.keys(body).some((key) => !allowed.includes(key)) || body.confirm !== true) fail(400, 'EXPLICIT_CONFIRMATION_REQUIRED');
     drafts.assertRecipientsAllowed(draft);
     const token = await getAccessToken();
     const verified = await drafts.verifySendBuffers(mailbox.id, id, {
@@ -115,7 +136,11 @@ export function createMailSendApi({
       }),
     });
     await recheckDrive(drafts.get(mailbox.id, id));
-    draft = drafts.approve(mailbox.id, id, { actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token) });
+    draft = drafts.approve(mailbox.id, id, {
+      actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token),
+      receiptVerified: Boolean(bot && jarvisReceiptGate),
+    });
+    if (receiptUse) consumeReceiptItem(store.db, receiptUse.receiptId, receiptUse.itemDigest, draft.draft_id, Date.now());
     if (drafts.claim(mailbox.id, id)) {
       const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist });
       let outcome;

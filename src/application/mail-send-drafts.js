@@ -291,10 +291,12 @@ export class MailSendDrafts {
     });
   }
 
-  approve(mailboxId, id, { actor, digest, allowSend, hasSendScope }) {
+  approve(mailboxId, id, { actor, digest, allowSend, hasSendScope, receiptVerified = false }) {
     if (allowSend !== true) fail(403, 'MAIL_SEND_DISABLED');
     if (hasSendScope !== true) fail(403, 'MAIL_SEND_SCOPE_REQUIRED');
-    if (typeof actor !== 'string' || !actor.startsWith('session:') || actor.length > 160) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+    const human = typeof actor === 'string' && actor.startsWith('session:') && actor.length <= 160;
+    const receiptActor = receiptVerified === true && typeof actor === 'string' && actor.startsWith('jarvis-receipt:') && actor.length <= 160;
+    if (!human && !receiptActor) fail(403, 'HUMAN_APPROVAL_REQUIRED');
     return this.transaction(() => {
       const draft = this.get(mailboxId, id);
       if (digest !== draft.payload_digest) fail(409, 'DRAFT_DIGEST_MISMATCH');
