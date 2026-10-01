@@ -136,11 +136,11 @@ export function createMailSendApi({
       }),
     });
     await recheckDrive(drafts.get(mailbox.id, id));
+    if (receiptUse) consumeReceiptItem(store.db, receiptUse.receiptId, receiptUse.itemDigest, id, Date.now());
     draft = drafts.approve(mailbox.id, id, {
       actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token),
       receiptVerified: Boolean(bot && jarvisReceiptGate),
     });
-    if (receiptUse) consumeReceiptItem(store.db, receiptUse.receiptId, receiptUse.itemDigest, draft.draft_id, Date.now());
     if (drafts.claim(mailbox.id, id)) {
       const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist });
       let outcome;

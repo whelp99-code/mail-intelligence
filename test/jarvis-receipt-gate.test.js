@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { Readable } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createMailSendApi } from '../src/application/mail-send-api.js';
@@ -93,5 +92,4 @@ test('flag off still rejects a grok approve', async (t) => {
   });
   const created = await api({ method: 'POST', body: { request_id: 'api-request-002', to: ['self@example.com'], subject: 'Fixture', body_text: 'no' }, headers: { authorization: `Bearer ${secret}` } }, new URL('http://127.0.0.1:3010/api/mail/send-drafts'));
   await assert.rejects(api({ method: 'POST', body: { confirm: true }, headers: { authorization: `Bearer ${secret}` } }, new URL(`http://127.0.0.1:3010/api/mail/send-drafts/${created.body.draft.draft_id}/approve`)), { code: 'HUMAN_APPROVAL_REQUIRED' });
-  assert.equal(Readable, Readable);
 });
