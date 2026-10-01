@@ -11,6 +11,10 @@ export function replyDraftsEnabled(env = process.env) {
 }
 export const MORNING_DIGEST_DIR = 'data/ops';
 export const REPLY_NEEDED_STATES = Object.freeze(['action_required', 'decision_required']);
+export const ALREADY_REPLIED_REASON = '이미 회신함';
+export const ALREADY_REPLIED_ACTOR = 'system:already-replied';
+const SENT_WELL_KNOWN = new Set(['sentitems', 'sent']);
+const SENT_DISPLAY = new Set(['보낸 편지함', '보낸메일함', '보낸 메일함', 'sent items', 'sent mail', 'sent']);
 const REPLY_NEEDED = new Set(REPLY_NEEDED_STATES);
 const DRAFT_SOURCE = 'jarvis';
 const EMAIL = /[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}/;
@@ -200,8 +204,9 @@ export function loadInboundMessages(db, { since = null, mailboxId = null } = {})
   }
   return db.prepare(`
     SELECT m.id, m.mailbox_id, m.subject, m.normalized_subject, m.sender_email, m.sender_name, m.body_preview, m.body_text,
-           m.is_draft, m.is_promotional, m.received_at, m.first_seen_at, m.graph_id, m.internet_message_id,
-           f.well_known_name,
+           m.is_draft, m.is_promotional, m.received_at, m.sent_at, m.first_seen_at, m.graph_id, m.internet_message_id,
+           m.conversation_id,
+           f.well_known_name, f.display_name,
            pc.work_state, pc.source AS classification_source
     FROM messages m
     LEFT JOIN mail_folders f ON f.id = m.folder_id
@@ -221,9 +226,12 @@ export function loadInboundMessages(db, { since = null, mailboxId = null } = {})
     is_draft: row.is_draft,
     is_promotional: row.is_promotional,
     received_at: row.received_at,
+    sent_at: row.sent_at,
+    conversation_id: row.conversation_id || '',
     first_seen_at: row.first_seen_at,
     graph_id: row.graph_id,
     well_known_name: row.well_known_name,
+    display_name: row.display_name || '',
     classification: row.work_state ? { workState: row.work_state, method: 'stored', source: row.classification_source } : null,
   }));
 }
@@ -252,6 +260,174 @@ function existingDraftForCopy(db, message) {
   return hit ? { draft_id: hit.draft_id, status: hit.status } : null;
 }
 
+function tableColumns(db, table) {
+  const exists = db.prepare('SELECT 1 FROM sqlite_master WHERE type = \'table\' AND name = ?').get(table);
+  if (!exists) return new Set();
+  return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+}
+
+export function isSentFolderMessage(message = {}) {
+  const wellKnown = String(message.well_known_name || message.wellKnownName || message.folderWellKnownName || '').toLowerCase();
+  const display = String(message.display_name || message.displayName || message.folderName || message.folder_display_name || '').toLowerCase();
+  if (message.isOutgoing || message.is_outgoing) return true;
+  return SENT_WELL_KNOWN.has(wellKnown) || SENT_DISPLAY.has(display);
+}
+
+function messageTime(message = {}, preferSent = false) {
+  if (preferSent) return String(message.sent_at || message.sentAt || message.received_at || message.receivedAt || '');
+  return String(message.received_at || message.receivedAt || message.sent_at || message.sentAt || '');
+}
+
+function senderDomain(message = {}) {
+  const email = senderEmail(message);
+  const domain = email.split('@')[1] || '';
+  return domain.toLowerCase();
+}
+
+function recipientDomains(message = {}) {
+  const raw = [
+    ...(Array.isArray(message.to) ? message.to : []),
+    ...(Array.isArray(message.toEmails) ? message.toEmails : []),
+    ...(Array.isArray(message.toRecipients) ? message.toRecipients.map((item) => item?.emailAddress?.address || item) : []),
+  ];
+  return raw.map((item) => String(item || '').toLowerCase().split('@')[1] || '').filter(Boolean);
+}
+
+export function hasLaterSentReply(inbound = {}, sentMessages = []) {
+  const inboundTime = messageTime(inbound, false);
+  const conversation = String(inbound.conversation_id || inbound.conversationId || '').trim();
+  const subject = normalizeReplySubject(inbound.normalized_subject || inbound.normalizedSubject || inbound.subject || '');
+  const domain = senderDomain(inbound);
+  return sentMessages.some((sent) => {
+    if (!isSentFolderMessage(sent)) return false;
+    const sentTime = messageTime(sent, true);
+    if (inboundTime && sentTime && sentTime <= inboundTime) return false;
+    if (inboundTime && !sentTime) return false;
+    const sentConversation = String(sent.conversation_id || sent.conversationId || '').trim();
+    if (conversation && sentConversation && conversation === sentConversation) return true;
+    const sentSubject = normalizeReplySubject(sent.normalized_subject || sent.normalizedSubject || sent.subject || '');
+    return Boolean(subject && sentSubject === subject && domain && recipientDomains(sent).includes(domain));
+  });
+}
+
+export function needsUnansweredReply(message = {}, sentMessages = []) {
+  if (isSentFolderMessage(message)) return false;
+  const state = message.classification?.workState || message.work_state || message.workState || message.precision?.workState || '';
+  if (!REPLY_NEEDED.has(state)) return false;
+  return !hasLaterSentReply(message, sentMessages);
+}
+
+function sentFolderPredicate(columns) {
+  const parts = ['lower(COALESCE(f.well_known_name, \'\')) IN (\'sentitems\', \'sent\')'];
+  if (columns.has('display_name')) {
+    parts.push('lower(COALESCE(f.display_name, \'\')) IN (\'보낸 편지함\', \'보낸메일함\', \'보낸 메일함\', \'sent items\', \'sent mail\', \'sent\')');
+  }
+  return parts.join(' OR ');
+}
+
+export function loadSentReplies(db, { mailboxId = null, conversationIds = [], subjects = [] } = {}) {
+  if (!db) return [];
+  const folderColumns = tableColumns(db, 'mail_folders');
+  const messageColumns = tableColumns(db, 'messages');
+  if (!folderColumns.size || !messageColumns.has('id')) return [];
+  const conversations = [...new Set(conversationIds.map((item) => String(item || '').trim()).filter(Boolean))];
+  const normalized = [...new Set(subjects.map((item) => normalizeReplySubject(item)).filter(Boolean))];
+  const clauses = ['s.deleted_at IS NULL', 's.is_draft = 0', `(${sentFolderPredicate(folderColumns)})`];
+  const params = [];
+  if (mailboxId != null) {
+    clauses.push('s.mailbox_id = ?');
+    params.push(mailboxId);
+  }
+  const match = [];
+  if (conversations.length && messageColumns.has('conversation_id')) {
+    match.push(`s.conversation_id IN (${conversations.map(() => '?').join(',')})`);
+    params.push(...conversations);
+  }
+  if (normalized.length && messageColumns.has('normalized_subject')) {
+    match.push(`lower(s.normalized_subject) IN (${normalized.map(() => '?').join(',')})`);
+    params.push(...normalized);
+  }
+  if (match.length) clauses.push(`(${match.join(' OR ')})`);
+  else if (conversations.length || normalized.length) return [];
+  const sentAt = messageColumns.has('sent_at') ? 's.sent_at' : 'NULL';
+  const conversation = messageColumns.has('conversation_id') ? 's.conversation_id' : '\'\'';
+  const normalizedSubject = messageColumns.has('normalized_subject') ? 's.normalized_subject' : '\'\'';
+  const display = folderColumns.has('display_name') ? 'f.display_name' : '\'\'';
+  const rows = db.prepare(`
+    SELECT s.id, s.mailbox_id, s.subject, ${normalizedSubject} AS normalized_subject, s.sender_email,
+           s.received_at, ${sentAt} AS sent_at, ${conversation} AS conversation_id,
+           f.well_known_name, ${display} AS display_name, s.folder_id
+    FROM messages s
+    JOIN mail_folders f ON f.id = s.folder_id
+    WHERE ${clauses.join(' AND ')}
+  `).all(...params);
+  const recipientTable = tableColumns(db, 'message_recipients');
+  const recipientQuery = recipientTable.has('message_id')
+    ? db.prepare('SELECT email_norm FROM message_recipients WHERE message_id = ? AND recipient_type = \'to\'')
+    : null;
+  return rows.map((row) => ({
+    ...row,
+    to: recipientQuery ? recipientQuery.all(row.id).map((item) => item.email_norm) : [],
+  }));
+}
+
+export function annotateReplyGaps(db, mailboxId, messages = []) {
+  if (!messages.length) return [];
+  const sent = loadSentReplies(db, {
+    mailboxId,
+    conversationIds: messages.map((message) => message.conversationId || message.conversation_id),
+    subjects: messages.map((message) => message.normalized_subject || message.normalizedSubject || message.subject),
+  });
+  return messages.map((message) => ({
+    ...message,
+    replyGap: needsUnansweredReply(message, sent),
+  }));
+}
+
+export function cancelAnsweredDrafts({ db, drafts, mailboxId = null } = {}) {
+  const summary = { cancelled: 0, skipped: 0, reason: ALREADY_REPLIED_REASON };
+  if (!db || typeof drafts?.cancel !== 'function' || !tableColumns(db, 'mail_send_drafts').has('draft_id')) return summary;
+  const params = [];
+  const mailboxClause = mailboxId == null ? '' : ' AND d.mailbox_id = ?';
+  if (mailboxId != null) params.push(mailboxId);
+  const pending = db.prepare(`
+    SELECT d.draft_id, d.mailbox_id, d.message_id, d.status
+    FROM mail_send_drafts d
+    WHERE d.status = 'needs_approval'${mailboxClause}
+  `).all(...params);
+  if (!pending.length) return summary;
+  const messageColumns = tableColumns(db, 'messages');
+  const conversation = messageColumns.has('conversation_id') ? 'm.conversation_id' : '\'\'';
+  const sentAt = messageColumns.has('sent_at') ? 'm.sent_at' : 'NULL';
+  const normalized = messageColumns.has('normalized_subject') ? 'm.normalized_subject' : '\'\'';
+  const folderColumns = tableColumns(db, 'mail_folders');
+  const display = folderColumns.has('display_name') ? 'f.display_name' : '\'\'';
+  const loadMessage = db.prepare(`
+    SELECT m.id, m.mailbox_id, m.subject, ${normalized} AS normalized_subject, m.sender_email,
+           m.received_at, ${sentAt} AS sent_at, ${conversation} AS conversation_id,
+           f.well_known_name, ${display} AS display_name
+    FROM messages m
+    LEFT JOIN mail_folders f ON f.id = m.folder_id
+    WHERE m.id = ?
+  `);
+  const linked = pending.map((row) => ({ row, message: row.message_id ? loadMessage.get(row.message_id) : null })).filter((item) => item.message);
+  const sent = loadSentReplies(db, {
+    mailboxId,
+    conversationIds: linked.map((item) => item.message.conversation_id),
+    subjects: linked.map((item) => item.message.normalized_subject || item.message.subject),
+  });
+  for (const item of linked) {
+    if (!hasLaterSentReply(item.message, sent)) {
+      summary.skipped += 1;
+      continue;
+    }
+    const updated = drafts.cancel(item.row.mailbox_id, item.row.draft_id, ALREADY_REPLIED_ACTOR, ALREADY_REPLIED_REASON);
+    if (updated?.status === 'cancelled') summary.cancelled += 1;
+    else summary.skipped += 1;
+  }
+  return summary;
+}
+
 export function runReplyDraftPipeline({
   db,
   drafts,
@@ -266,6 +442,11 @@ export function runReplyDraftPipeline({
     throw new Error('drafts.create is required unless dryRun');
   }
   const loaded = messages || loadInboundMessages(db, { since, mailboxId });
+  const sentReplies = db ? loadSentReplies(db, {
+    mailboxId,
+    conversationIds: loaded.map((message) => message.conversation_id),
+    subjects: loaded.map((message) => message.normalized_subject || message.subject),
+  }) : [];
   const summary = {
     version: REPLY_DRAFT_PIPELINE_VERSION,
     dryRun: dryRun === true,
@@ -286,6 +467,11 @@ export function runReplyDraftPipeline({
     if (plan.action !== 'draft') {
       summary.skipped += 1;
       summary.bySkip[plan.reason] = (summary.bySkip[plan.reason] || 0) + 1;
+      continue;
+    }
+    if (hasLaterSentReply(message, sentReplies)) {
+      summary.skipped += 1;
+      summary.bySkip.already_replied = (summary.bySkip.already_replied || 0) + 1;
       continue;
     }
     const existing = db ? existingDraftForCopy(db, message) : null;
