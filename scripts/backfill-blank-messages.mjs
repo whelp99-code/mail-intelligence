@@ -37,7 +37,9 @@ function decryptSecrets(dataDirectory) {
 
 function blankRows(store) {
   return store.db.prepare(`
-    SELECT m.id, m.graph_id, m.mailbox_id, m.folder_id, COALESCE(b.graph_user, '') AS graph_user
+    SELECT m.id, m.graph_id, m.mailbox_id, m.folder_id,
+           COALESCE(b.mailbox_key, 'me') AS mailbox_key,
+           COALESCE(b.graph_user, '') AS graph_user
     FROM messages m
     JOIN mailboxes b ON b.id = m.mailbox_id
     WHERE m.deleted_at IS NULL AND (m.subject IS NULL OR m.subject = '')
@@ -86,7 +88,7 @@ export async function backfillBlankMessages({ store, client, apply = false, crea
         result.skipped += 1;
         continue;
       }
-      const mailboxPath = row.graph_user
+      const mailboxPath = row.mailbox_key && row.mailbox_key !== 'me' && row.graph_user
         ? `/users/${encodeURIComponent(row.graph_user)}`
         : '/me';
       const raw = await client.fetchMessage({ mailboxPath, messageId: row.graph_id });
