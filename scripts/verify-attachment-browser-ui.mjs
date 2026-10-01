@@ -262,12 +262,13 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
   }
   assert.equal(reachedAttach, true, 'Tab order must reach PC 파일 첨부');
 
+  await waitFor(cdp, 'document.getElementById(\'attachmentLive\')?.dataset.attachmentState === \'none\'');
   await evaluate(cdp, `(() => {
     if (document.getElementById('driveLinkComposer')?.hidden !== false) document.getElementById('attachDriveLink')?.click();
     document.getElementById('confirmDriveLink')?.click();
   })()`);
-  const warningLive = await evaluate(cdp, 'document.getElementById("attachmentLive")?.textContent || ""');
-  assert.match(warningLive, /접근 권한 미확인/);
+  const warningState = await waitFor(cdp, 'document.getElementById(\'attachmentLive\')?.dataset.attachmentState === \'drive-link-ack-required\' ? \'drive-link-ack-required\' : null');
+  assert.equal(warningState, 'drive-link-ack-required');
   await evaluate(cdp, `(() => {
     document.getElementById('driveLinkUrl').value = 'https://drive.google.com/file/d/abcDEF123/view';
     document.getElementById('driveLinkAck').checked = true;

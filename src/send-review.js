@@ -72,6 +72,11 @@ export function initializeSendReview(apiFetch) {
   let refreshVersion = 0;
   const pending = [];
   const pendingLinks = [];
+  function setAttachmentLive(state, text) {
+    if (!live) return;
+    live.dataset.attachmentState = state;
+    live.textContent = text;
+  }
 
   function node(tag, text, className = '') {
     const element = document.createElement(tag);
@@ -137,7 +142,7 @@ export function initializeSendReview(apiFetch) {
         parts.push(blocked ? '파일 검사가 끝나기 전에는 초안을 저장할 수 없습니다.' : `준비된 첨부 ${pending.length}개`);
       }
       if (pendingLinks.length) parts.push(`Drive 링크 ${pendingLinks.length}개`);
-      live.textContent = parts.join(' · ') || '첨부를 선택하지 않았습니다.';
+      setAttachmentLive(blocked ? 'scanning' : (pending.length || pendingLinks.length ? 'ready' : 'none'), parts.join(' · ') || '첨부를 선택하지 않았습니다.');
     }
   }
   async function uploadFile(file) {
@@ -439,7 +444,7 @@ export function initializeSendReview(apiFetch) {
   });
   panel.querySelector('#confirmDriveLink')?.addEventListener('click', () => {
     if (!driveAck?.checked) {
-      if (live) live.textContent = '링크를 추가하려면 접근 권한 미확인 경고를 먼저 확인하세요.';
+      setAttachmentLive('drive-link-ack-required', '링크를 추가하려면 접근 권한 미확인 경고를 먼저 확인하세요.');
       return;
     }
     try {
@@ -456,7 +461,7 @@ export function initializeSendReview(apiFetch) {
       if (driveComposer) driveComposer.hidden = true;
       syncCompose();
     } catch {
-      if (live) live.textContent = errors.INVALID_DRIVE_LINK;
+      setAttachmentLive('drive-link-invalid', errors.INVALID_DRIVE_LINK);
     }
   });
   fileInput?.addEventListener('change', async () => {
