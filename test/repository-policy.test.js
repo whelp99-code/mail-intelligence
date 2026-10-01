@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
+import { safetyBannerCopy } from '../src/ui-labels.js';
 
 const root = process.cwd();
 const read = (path) => readFile(join(root, path), 'utf8');
@@ -228,7 +229,29 @@ test('runtime source keeps the read-only boundary and authoritative SQLite contr
   assert.match(app, /function safeExternalUrl/);
   assert.match(app, /parsed\.protocol === 'https:'/);
   assert.match(app, /초안 복사/);
-  assert.match(html, /v1\.2\.2 읽기 전용 운영 안정화/);
+  assert.match(html, /id="safetyNotice"/);
+  assert.match(html, /data-safety-banner="health"/);
+  assert.doesNotMatch(html, /v1\.2\.2 읽기 전용 운영 안정화/);
+  assert.doesNotMatch(html, /초안은 복사만 가능하며 메일 발송·원본 변경/);
+  assert.match(app, /fetch\('\/api\/health'/);
+  assert.match(app, /safetyBannerCopy\(health\)/);
+  const approved = safetyBannerCopy({
+    version: '1.2.2',
+    safety: { mode: 'human-approved-mail-send', capabilities: { mailSend: true, mailReadState: false, dataPlaneWrite: false } },
+    capabilities: { send: true, markRead: false, dataPlane: false },
+  });
+  const readonly = safetyBannerCopy({
+    version: '1.2.2',
+    safety: { mode: 'read-only', capabilities: { mailSend: false, mailReadState: false, dataPlaneWrite: false } },
+    capabilities: { send: false, markRead: false, dataPlane: false },
+  });
+  assert.match(approved.title, /승인 후 발송 모드/);
+  assert.match(approved.body, /대표 승인 후에만/);
+  assert.match(approved.body, /메일 이동·삭제·읽음 처리/);
+  assert.notEqual(approved.body, readonly.body);
+  assert.match(readonly.title, /읽기 전용/);
+  assert.match(readonly.body, /발송/);
+  assert.equal(safetyBannerCopy({ safety: { mode: 'read-only' }, capabilities: { send: true } }).title.includes('승인 후 발송'), true);
   assert.match(html, /프로젝트는 자동 생성하지 않습니다/);
   assert.match(html, /id="precisionIntelligence"/);
   assert.match(html, /id="persistentMemory"/);
