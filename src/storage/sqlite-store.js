@@ -984,6 +984,23 @@ export class SQLiteMailStore {
       .get(mailboxId, graphId) || null;
   }
 
+  getMessageByDatabaseId(mailboxId, databaseId) {
+    const id = Number(databaseId);
+    if (!Number.isInteger(id) || id < 1) return null;
+    const row = this.db.prepare(`
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      LEFT JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ? AND m.id = ? AND m.deleted_at IS NULL
+    `).get(mailboxId, id);
+    if (!row) return null;
+    const recipients = this.db.prepare(`
+      SELECT * FROM message_recipients
+      WHERE message_id = ? ORDER BY recipient_type, ordinal, id
+    `).all(row.id);
+    return rowToMessage(row, recipients);
+  }
+
   getMessage(mailboxId, graphId) {
     const row = this.db.prepare(`
       SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name

@@ -107,6 +107,11 @@ export class PersistentMailMemoryRuntime {
     return this.store.getRecentMessages(mailbox.id, { limit, includeDeleted });
   }
 
+  getMessageByDatabaseId(mailboxUser = '', databaseId) {
+    const mailbox = this.ensureMailbox(mailboxUser);
+    return this.store.getMessageByDatabaseId(mailbox.id, databaseId);
+  }
+
   getFeedbackMap(mailboxUser = '') {
     const mailbox = this.ensureMailbox(mailboxUser);
     return this.store.getFeedbackMap(mailbox.id);

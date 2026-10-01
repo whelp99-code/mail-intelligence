@@ -2786,6 +2786,16 @@ async function handleApi(req, res) {
       return json(res, 200, { messages, readOnly: true });
     }
 
+    if (url.pathname === '/api/mail/message') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const id = Number(url.searchParams.get('id'));
+      if (!Number.isInteger(id) || id < 1) throw new HttpError(400, 'MESSAGE_ID_INVALID', 'id must be a positive integer.');
+      const message = requireMailMemory().getMessageByDatabaseId(currentMailboxUser(), id);
+      if (!message) throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Message not found.');
+      return json(res, 200, { message, readOnly: true });
+    }
+
     if (url.pathname === '/api/mail/search') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       requireSessionCookie(req);
