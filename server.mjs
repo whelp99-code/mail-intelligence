@@ -34,6 +34,7 @@ import {
   runBoundCompanyMemoryDonorTick,
 } from './src/application/company-memory-donor-bind.js';
 import { createWorkLinksApi } from './src/application/work-links-api.js';
+import { createHandledElsewhereApi } from './src/application/handled-elsewhere-api.js';
 import { createMailAttachmentApi } from './src/application/mail-attachment-api.js';
 import { completeGoogleDriveCallback, createMailDriveApi } from './src/application/mail-drive-api.js';
 import { createDriveConnectionService } from './src/application/mail-drive-connections.js';
@@ -2193,6 +2194,11 @@ async function handleApi(req, res) {
       return json(res, result.status, result.body);
     }
 
+    if (url.pathname === '/api/messages/handled-elsewhere') {
+      const result = await handledElsewhereApi(req, url);
+      return json(res, result.status, result.body);
+    }
+
     if (url.pathname.startsWith('/api/work-links')) {
       const result = await workLinksApi(req, url);
       return json(res, result.status, result.body);
@@ -3161,6 +3167,16 @@ const mailDriveApi = createMailDriveApi({
 });
 const workLinksSnapshotPath = String(process.env.MAIL_INTELLIGENCE_NOTION_SNAPSHOT || '')
   .trim() || join(appRoot, 'test/fixtures/notion-jm-business-os.snapshot.json');
+const handledElsewhereApi = createHandledElsewhereApi({
+  getStore: () => requireMailMemory().store,
+  getMailbox: () => {
+    const mailbox = requireMailMemory().ensureMailbox(currentMailboxUser());
+    return { id: mailbox.id };
+  },
+  getSession: sessionForRequest,
+  readBody: readJsonBody,
+  accessKeyRequired,
+});
 const workLinksApi = createWorkLinksApi({
   getStore: () => requireMailMemory().store,
   getMailboxUser: () => currentMailboxUser() || 'me',

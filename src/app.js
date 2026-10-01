@@ -538,6 +538,86 @@ function groupLabelFor(message) {
   return `${prefix}${domain} · ${sender} · ${subject}`;
 }
 
+const HANDLED_CHANNELS = [
+  ['kakao', '카카오톡'],
+  ['phone', '전화'],
+  ['in_person', '대면'],
+  ['other', '기타'],
+];
+
+function handledChannelLabel(channel) {
+  return HANDLED_CHANNELS.find(([value]) => value === channel)?.[1] || channel;
+}
+
+function handledElsewhereControls(message, { compact = false } = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = 'handled-elsewhere';
+  wrap.addEventListener('click', (event) => event.stopPropagation());
+  wrap.addEventListener('keydown', (event) => event.stopPropagation());
+  if (message.handledElsewhere) {
+    const note = document.createElement('p');
+    note.className = 'handled-note';
+    note.textContent = `외부 회신 · ${handledChannelLabel(message.handledElsewhere.channel)}${message.handledElsewhere.note ? ` · ${message.handledElsewhere.note}` : ''}`;
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.textContent = '실행 취소';
+    undo.addEventListener('click', () => saveHandledElsewhere(message.id, { undo: true, button: undo }));
+    wrap.append(note, undo);
+    return wrap;
+  }
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', '회신 경로');
+  for (const [value, label] of HANDLED_CHANNELS) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+  select.value = 'kakao';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = '✓ 외부 회신';
+  let noteInput = null;
+  if (!compact) {
+    noteInput = document.createElement('input');
+    noteInput.type = 'text';
+    noteInput.maxLength = 500;
+    noteInput.placeholder = '메모 (선택)';
+    noteInput.setAttribute('aria-label', '외부 회신 메모');
+  }
+  button.addEventListener('click', () => saveHandledElsewhere(message.id, {
+    channel: select.value,
+    note: noteInput?.value || '',
+    button,
+  }));
+  wrap.append(select, ...(noteInput ? [noteInput] : []), button);
+  return wrap;
+}
+
+async function saveHandledElsewhere(messageId, { channel = 'kakao', note = '', undo = false, button = null } = {}) {
+  if (button) button.disabled = true;
+  try {
+    const response = await apiFetch('/api/messages/handled-elsewhere', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(undo ? { messageId, undo: true } : { messageId, channel, note }),
+    });
+    const result = await readApiPayload(response);
+    if (!response.ok) throw new Error(result.message || '외부 회신 표시를 저장하지 못했습니다.');
+    const message = currentMessages.find((item) => item.id === messageId);
+    if (message) {
+      message.handledElsewhere = result.handledElsewhere || null;
+      message.replyGap = Boolean(result.replyGap);
+    }
+    fetchStatus.textContent = undo ? '외부 회신 표시를 취소했습니다.' : '외부 회신으로 표시했습니다. 회신 필요 목록에서 빠집니다.';
+    renderFilteredView();
+    if (selectedMessageId === messageId) selectMessage(messageId);
+  } catch (error) {
+    if (button) button.disabled = false;
+    fetchStatus.textContent = error instanceof Error ? error.message : '외부 회신 표시를 저장하지 못했습니다.';
+  }
+}
+
 function messageCard(message) {
   const insight = insightFor(message.id);
   const precision = message.precision;
@@ -570,6 +650,7 @@ function messageCard(message) {
     gap.className = 'reply-gap';
     gap.textContent = '회신 필요 — 아직 회신 없음';
     article.appendChild(gap);
+    article.appendChild(handledElsewhereControls(message, { compact: true }));
   }
   if (insight?.aiEnhanced) article.classList.add('ai-enhanced');
   if (!message.isRead) article.classList.add('unread');
@@ -1000,6 +1081,7 @@ function selectMessage(messageId) {
     <div class="detail-content">
       <h3>${escapeHtml(insight?.subject || message?.subject || '(제목 없음)')}</h3>
       <p class="detail-meta">${escapeHtml(insight?.fromName || message?.fromName || message?.from || '알 수 없음')} · ${message?.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'} · ${escapeHtml(priorityLabel(message?.importance || 'normal'))} · ${escapeHtml(analysisState)} · 신뢰도 ${escapeHtml(confidence)}</p>
+      <div id="handledElsewhereMount"></div>
       <section class="detail-block first">
         <h4>메일 내용</h4>
         <p class="detail-body">${escapeHtml(fullBody).slice(0, 5000)}</p>
@@ -1017,6 +1099,7 @@ function selectMessage(messageId) {
     </div>
   `;
 
+  messageDetail.querySelector('#handledElsewhereMount')?.appendChild(handledElsewhereControls(message || { id: messageId }));
   messageDetail.querySelectorAll('.feedback-status').forEach((button) => {
     button.addEventListener('click', () => saveFeedback(messageId, button.dataset.status));
   });
