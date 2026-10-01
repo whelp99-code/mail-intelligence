@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { classifyMessage } from '../domain/precision-classifier.js';
 import { generateSafeDraft } from '../domain/mail-assistant-tools.js';
+import { HANDLED_ELSEWHERE_ACTOR, HANDLED_ELSEWHERE_REASON, loadActiveHandledElsewhere, markerForMessage } from './handled-elsewhere.js';
 
 export const REPLY_DRAFT_PIPELINE_VERSION = 'reply-draft-pipeline-v1';
 export const PENDING_APPROVALS_PATH = 'data/ops/pending-approvals.jsonl';
@@ -312,6 +313,7 @@ export function hasLaterSentReply(inbound = {}, sentMessages = []) {
 
 export function needsUnansweredReply(message = {}, sentMessages = []) {
   if (isSentFolderMessage(message)) return false;
+  if (message.handledElsewhere || message.handled_elsewhere) return false;
   const state = message.classification?.workState || message.work_state || message.workState || message.precision?.workState || '';
   if (!REPLY_NEEDED.has(state)) return false;
   return !hasLaterSentReply(message, sentMessages);
@@ -378,10 +380,15 @@ export function annotateReplyGaps(db, mailboxId, messages = []) {
     conversationIds: messages.map((message) => message.conversationId || message.conversation_id),
     subjects: messages.map((message) => message.normalized_subject || message.normalizedSubject || message.subject),
   });
-  return messages.map((message) => ({
-    ...message,
-    replyGap: needsUnansweredReply(message, sent),
-  }));
+  const handled = loadActiveHandledElsewhere(db, mailboxId);
+  return messages.map((message) => {
+    const marker = markerForMessage(handled, message);
+    return {
+      ...message,
+      handledElsewhere: marker,
+      replyGap: needsUnansweredReply({ ...message, handledElsewhere: marker }, sent),
+    };
+  });
 }
 
 export function cancelAnsweredDrafts({ db, drafts, mailboxId = null } = {}) {
@@ -416,12 +423,19 @@ export function cancelAnsweredDrafts({ db, drafts, mailboxId = null } = {}) {
     conversationIds: linked.map((item) => item.message.conversation_id),
     subjects: linked.map((item) => item.message.normalized_subject || item.message.subject),
   });
+  const handled = loadActiveHandledElsewhere(db, mailboxId);
   for (const item of linked) {
-    if (!hasLaterSentReply(item.message, sent)) {
+    const marked = handled.ids.has(item.message.id);
+    if (!marked && !hasLaterSentReply(item.message, sent)) {
       summary.skipped += 1;
       continue;
     }
-    const updated = drafts.cancel(item.row.mailbox_id, item.row.draft_id, ALREADY_REPLIED_ACTOR, ALREADY_REPLIED_REASON);
+    const updated = drafts.cancel(
+      item.row.mailbox_id,
+      item.row.draft_id,
+      marked ? HANDLED_ELSEWHERE_ACTOR : ALREADY_REPLIED_ACTOR,
+      marked ? HANDLED_ELSEWHERE_REASON : ALREADY_REPLIED_REASON,
+    );
     if (updated?.status === 'cancelled') summary.cancelled += 1;
     else summary.skipped += 1;
   }
@@ -447,6 +461,7 @@ export function runReplyDraftPipeline({
     conversationIds: loaded.map((message) => message.conversation_id),
     subjects: loaded.map((message) => message.normalized_subject || message.subject),
   }) : [];
+  const handledIds = db ? loadActiveHandledElsewhere(db, mailboxId).ids : new Set();
   const summary = {
     version: REPLY_DRAFT_PIPELINE_VERSION,
     dryRun: dryRun === true,
@@ -467,6 +482,11 @@ export function runReplyDraftPipeline({
     if (plan.action !== 'draft') {
       summary.skipped += 1;
       summary.bySkip[plan.reason] = (summary.bySkip[plan.reason] || 0) + 1;
+      continue;
+    }
+    if (handledIds.has(message.id)) {
+      summary.skipped += 1;
+      summary.bySkip.handled_elsewhere = (summary.bySkip.handled_elsewhere || 0) + 1;
       continue;
     }
     if (hasLaterSentReply(message, sentReplies)) {
