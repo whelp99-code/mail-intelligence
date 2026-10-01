@@ -86,6 +86,17 @@ for (const runtimeDirectory of runtimeDirectoryPaths) {
     const metadata = await stat(absolute);
     const mode = metadata.mode & 0o777;
     console.log(`[verify-repository-hygiene] runtime directory ${runtimeDirectory}: present, mode=${mode.toString(8)}`);
+    if (runtimeDirectory === 'data') {
+      try {
+        await stat(path.join(absolute, 'mail-intelligence.sqlite'));
+      } catch (sqliteError) {
+        if (sqliteError?.code === 'ENOENT') {
+          console.log('[verify-repository-hygiene] runtime directory data: tracked config only, sqlite absent');
+          continue;
+        }
+        throw sqliteError;
+      }
+    }
     if ((mode & 0o077) !== 0) findings.push({ file: runtimeDirectory, rule: `unsafe-directory-mode-${mode.toString(8)}` });
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
