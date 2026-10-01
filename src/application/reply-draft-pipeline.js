@@ -24,6 +24,24 @@ function textOf(message = {}) {
   return `${message.subject || ''}\n${message.bodyPreview || message.body_preview || ''}\n${message.body || message.body_text || ''}`;
 }
 
+export function normalizeReplySubject(value = '') {
+  return String(value || '')
+    .replace(/^(?:(?:re|fw|fwd)\s*:\s*)+/gi, '')
+    .replace(/\[[^\]]+\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function replyCopyKey(message = {}) {
+  const internet = String(message.internetMessageId || message.internet_message_id || '').trim();
+  if (internet) return `imid:${internet.toLowerCase()}`;
+  const sender = senderEmail(message);
+  const subject = normalizeReplySubject(message.normalized_subject || message.normalizedSubject || message.subject || '');
+  const received = String(message.received_at || message.receivedAt || '');
+  return `fb:${sender}|${subject}|${received}`;
+}
+
 function senderEmail(message = {}) {
   const raw = message.senderEmail || message.sender_email || message.from || '';
   const match = String(raw).match(EMAIL);
@@ -181,8 +199,8 @@ export function loadInboundMessages(db, { since = null, mailboxId = null } = {})
     params.push(mailboxId);
   }
   return db.prepare(`
-    SELECT m.id, m.mailbox_id, m.subject, m.sender_email, m.sender_name, m.body_preview, m.body_text,
-           m.is_draft, m.is_promotional, m.received_at, m.first_seen_at, m.graph_id,
+    SELECT m.id, m.mailbox_id, m.subject, m.normalized_subject, m.sender_email, m.sender_name, m.body_preview, m.body_text,
+           m.is_draft, m.is_promotional, m.received_at, m.first_seen_at, m.graph_id, m.internet_message_id,
            f.well_known_name,
            pc.work_state, pc.source AS classification_source
     FROM messages m
@@ -194,6 +212,8 @@ export function loadInboundMessages(db, { since = null, mailboxId = null } = {})
     id: row.id,
     mailboxId: row.mailbox_id,
     subject: row.subject,
+    normalized_subject: row.normalized_subject,
+    internet_message_id: row.internet_message_id,
     sender_email: row.sender_email,
     from: row.sender_name ? `${row.sender_name} <${row.sender_email}>` : row.sender_email,
     body_preview: row.body_preview,
@@ -214,6 +234,22 @@ export function existingDraftForMessage(db, mailboxId, messageId) {
     WHERE mailbox_id = ? AND message_id = ? AND status != 'cancelled'
     LIMIT 1
   `).get(mailboxId, messageId) || null;
+}
+
+function existingDraftForCopy(db, message) {
+  const mailboxId = message.mailboxId || message.mailbox_id;
+  const direct = existingDraftForMessage(db, mailboxId, message.id);
+  if (direct) return direct;
+  const key = replyCopyKey(message);
+  const rows = db.prepare(`
+    SELECT d.draft_id, d.status, m.internet_message_id, m.sender_email, m.sender_name,
+           m.subject, m.normalized_subject, m.received_at
+    FROM mail_send_drafts d
+    JOIN messages m ON m.id = d.message_id
+    WHERE d.mailbox_id = ? AND d.status != 'cancelled'
+  `).all(mailboxId);
+  const hit = rows.find((row) => replyCopyKey(row) === key);
+  return hit ? { draft_id: hit.draft_id, status: hit.status } : null;
 }
 
 export function runReplyDraftPipeline({
@@ -252,7 +288,7 @@ export function runReplyDraftPipeline({
       summary.bySkip[plan.reason] = (summary.bySkip[plan.reason] || 0) + 1;
       continue;
     }
-    const existing = db ? existingDraftForMessage(db, message.mailboxId || message.mailbox_id, message.id) : null;
+    const existing = db ? existingDraftForCopy(db, message) : null;
     if (existing) {
       summary.alreadyDrafted += 1;
       continue;
