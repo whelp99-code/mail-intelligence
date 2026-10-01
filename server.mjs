@@ -25,7 +25,7 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
-import { replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
+import { annotateReplyGaps, replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
 import { createSendReconciliationWorker } from './src/application/send-reconciliation-worker.js';
@@ -1286,10 +1286,10 @@ function attachPrecisionIntelligence(data) {
   const classificationByMessage = memory.store.getPrecisionClassificationMap(mailbox.id);
   return {
     ...data,
-    messages: (data.messages || []).map((message) => ({
+    messages: annotateReplyGaps(memory.store.db, mailbox.id, (data.messages || []).map((message) => ({
       ...message,
       precision: classificationByMessage[message.id] || null,
-    })),
+    }))),
     precision: {
       version: PRECISION_CLASSIFICATION_VERSION,
       searchVersion: INTELLIGENT_SEARCH_VERSION,
@@ -2755,6 +2755,29 @@ async function handleApi(req, res) {
       const received = Number(syncResult.sync?.fetchedFromGraph || 0);
       if (upserted > 0 || received > 0) scheduleLlmForNewMail();
       return json(res, 200, syncResult);
+    }
+
+    if (url.pathname === '/api/mail/sent') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireSessionCookie(req);
+      const query = validatedText(url.searchParams.get('q') || '', 'q', 200);
+      const limit = Number(url.searchParams.get('limit') || 50);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new HttpError(400, 'SEARCH_LIMIT_INVALID', 'limit must be an integer between 1 and 100.');
+      }
+      const memory = requireMailMemory();
+      const mailbox = memory.ensureMailbox(currentMailboxUser());
+      const messages = memory.store.listSentMessages(mailbox.id, { limit, query }).map((message) => ({
+        id: message.id,
+        subject: message.subject || '',
+        sentAt: message.sentAt || message.receivedAt || '',
+        to: (message.toRecipients || []).map((item) => item.emailAddress?.address || '').filter(Boolean),
+        toNames: (message.toRecipients || []).map((item) => item.emailAddress?.name || '').filter(Boolean),
+        bodyPreview: message.bodyPreview || '',
+        body: message.body || '',
+        conversationId: message.conversationId || '',
+      }));
+      return json(res, 200, { messages, readOnly: true });
     }
 
     if (url.pathname === '/api/mail/search') {

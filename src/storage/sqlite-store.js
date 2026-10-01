@@ -983,6 +983,35 @@ export class SQLiteMailStore {
     return rows.map((row) => rowToMessage(row, this.recipientsFor(row.id)));
   }
 
+  listSentMessages(mailboxId, { limit = 50, query = '' } = {}) {
+    const q = String(query || '').trim().toLowerCase().replace(/[%_\\]/g, '');
+    const like = q ? `%${q}%` : '';
+    const rows = this.db.prepare(`
+      SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name
+      FROM messages m
+      JOIN mail_folders f ON f.id = m.folder_id
+      WHERE m.mailbox_id = ?
+        AND m.deleted_at IS NULL
+        AND m.is_draft = 0
+        AND (
+          lower(COALESCE(f.well_known_name, '')) IN ('sentitems', 'sent')
+          OR lower(COALESCE(f.display_name, '')) IN ('보낸 편지함', '보낸메일함', '보낸 메일함', 'sent items', 'sent mail', 'sent')
+        )
+        AND (
+          ? = ''
+          OR lower(m.subject) LIKE ?
+          OR lower(m.body_preview) LIKE ?
+          OR EXISTS (
+            SELECT 1 FROM message_recipients r
+            WHERE r.message_id = m.id AND lower(r.email) LIKE ?
+          )
+        )
+      ORDER BY COALESCE(m.sent_at, m.received_at, m.first_seen_at) DESC, m.id DESC
+      LIMIT ?
+    `).all(mailboxId, like, like, like, like, boundedLimit(limit, 50, 100));
+    return rows.map((row) => rowToMessage(row, this.recipientsFor(row.id)));
+  }
+
   listLatestSyncedMessages(mailboxId, { limit = 30 } = {}) {
     const rows = this.db.prepare(`
       SELECT m.*, f.display_name AS folder_display_name, f.well_known_name AS folder_well_known_name

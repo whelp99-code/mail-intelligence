@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { GraphMailClient } from '../adapters/microsoft-graph-mail.js';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { MailSyncService } from './mail-sync.js';
-import { PENDING_APPROVALS_PATH, runReplyDraftPipeline } from './reply-draft-pipeline.js';
+import { PENDING_APPROVALS_PATH, cancelAnsweredDrafts, runReplyDraftPipeline } from './reply-draft-pipeline.js';
 import { MailAssistantService } from './mail-assistant.js';
 import { PrecisionIntelligenceService } from './precision-intelligence.js';
 import { retryOperation } from '../resilience.js';
@@ -326,6 +326,11 @@ export class PersistentMailMemoryRuntime {
         precision,
       });
       this.store.checkpointWal('TRUNCATE');
+      const replyDraftCancellation = cancelAnsweredDrafts({
+        db: this.store.db,
+        drafts: new MailSendDrafts(this.store.db),
+        mailboxId: result.mailbox?.id,
+      });
       const replyDraftPipeline = replyDrafts === true
         ? runReplyDraftPipeline({
           db: this.store.db,
@@ -339,6 +344,7 @@ export class PersistentMailMemoryRuntime {
       return {
         ...result,
         precision,
+        replyDraftCancellation,
         replyDraftPipeline,
         job: this.store.getOperatorJob(jobKey),
       };

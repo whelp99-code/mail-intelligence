@@ -16,6 +16,7 @@
       </div>
       <nav class="nav" aria-label="분석 섹션">
         <a href="#messages">메일</a>
+        <a href="#sentMail" id="navSent">보낸 편지함</a>
         <a href="#precisionIntelligence">정밀 분류</a>
         <a href="#persistentMemory">메일 DB</a>
         <a href="#messageDetail">요약</a>
@@ -35,6 +36,10 @@
           <p id="fetchStatus">아직 Outlook을 가져오지 않았습니다.</p>
         </div>
         <div class="actions">
+          <div class="mailbox-switch" role="tablist" aria-label="편지함">
+            <button id="showInbox" type="button" role="tab" aria-selected="true" class="primary">받은 메일</button>
+            <button id="showSent" type="button" role="tab" aria-selected="false">보낸 편지함</button>
+          </div>
           <label class="search-field" aria-label="메일 검색">
             <span>Search</span>
             <input id="mailSearch" type="search" placeholder="예: 오늘 내가 처리할 견적 / 고객 회신 대기" />
@@ -55,6 +60,23 @@
       <section class="notice safety-notice" aria-label="안전 모드 안내">
         <strong>v1.2.2 읽기 전용 운영 안정화</strong>
         <span>DO NOW·WAITING·REVIEW·ARCHIVE로 단순하게 배치합니다. 불확실한 메일과 신규 문서는 자동 보관하지 않습니다. 초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단됩니다.</span>
+      </section>
+
+      <section id="sentMail" class="sent-mail" hidden>
+        <div class="panel-head compact">
+          <h3>보낸 편지함</h3>
+          <span id="sentCount">0건</span>
+        </div>
+        <label class="search-field" aria-label="보낸 메일 검색">
+          <span>검색</span>
+          <input id="sentSearch" type="search" placeholder="받는 사람 또는 제목" />
+        </label>
+        <div class="sent-layout">
+          <div id="sentList" class="message-list" role="list"></div>
+          <article id="sentDetail" class="detail-panel" aria-live="polite">
+            <div class="empty">보낸 메일을 선택하면 날짜, 받는 사람, 제목, 본문이 표시됩니다. 읽기 전용입니다.</div>
+          </article>
+        </div>
       </section>
 
       <section class="mail-shell" id="mailShell">
