@@ -6,6 +6,7 @@ import {
   priorityLabel,
   renderPrecisionStayNote,
   renderStoredPrecisionStatus,
+  safetyBannerCopy,
 } from './ui-labels.js';
 
 let serverCapabilities = { sendMail: false, markRead: false, dataPlane: false };
@@ -2031,6 +2032,25 @@ sentSearch.addEventListener('input', () => {
 });
 if (location.hash === '#sentMail') showMailbox('sent');
 
+async function refreshSafetyBanner() {
+  const title = document.querySelector('#safetyNoticeTitle');
+  const body = document.querySelector('#safetyNoticeBody');
+  if (!title || !body) return;
+  try {
+    const response = await fetch('/api/health', { credentials: 'same-origin', cache: 'no-store' });
+    const health = await response.json();
+    if (!response.ok) throw new Error(health.message || 'health');
+    const copy = safetyBannerCopy(health);
+    title.textContent = copy.title;
+    body.textContent = copy.body;
+  } catch {
+    const copy = safetyBannerCopy({ version: '1.2.2', safety: { mode: 'read-only', capabilities: { mailSend: false } }, capabilities: { send: false } });
+    title.textContent = copy.title;
+    body.textContent = copy.body;
+  }
+}
+
+refreshSafetyBanner();
 loadStatus().finally(() => loadOutlookMessages());
 loadMemoryStatus();
 loadPrecisionOverview();

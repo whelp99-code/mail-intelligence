@@ -67,3 +67,27 @@ export function containsForbiddenVisibleLabel(text) {
   return FORBIDDEN_VISIBLE.some((label) => source.includes(label))
     || /(?:^|[^\w])normal(?:[^\w]|$)/.test(source);
 }
+
+const BLOCKED_WRITES = '메일 이동·삭제·읽음 처리·캘린더·CRM 자동 쓰기는 차단';
+
+export function safetyBannerCopy(health = {}) {
+  const safety = health?.safety && typeof health.safety === 'object' ? health.safety : {};
+  const capabilities = {
+    ...(safety.capabilities || {}),
+    ...(health?.capabilities || {}),
+  };
+  const version = 'v' + String(health?.version || safety.version || '1.2.2').replace(/^v/, '');
+  const sendOn = safety.mode === 'human-approved-mail-send'
+    || capabilities.mailSend === true
+    || capabilities.send === true;
+  if (sendOn) {
+    return {
+      title: version + ' 승인 후 발송 모드',
+      body: '초안은 자동 작성, 발송은 대표 승인 후에만. ' + BLOCKED_WRITES + '.',
+    };
+  }
+  return {
+    title: version + ' 읽기 전용 운영 안정화',
+    body: '초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 차단됩니다.',
+  };
+}
