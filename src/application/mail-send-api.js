@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { GraphSendClient, hasMailSendScope } from '../adapters/microsoft-graph-send.js';
+import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
 
 function fail(statusCode, code) {
   throw Object.assign(new Error(code), { statusCode, code });
@@ -57,7 +58,17 @@ export function createMailSendApi({
     const mailbox = getMailbox();
     const decorate = (draft) => {
       const source = draft.message_id === null ? null : store.db.prepare('SELECT subject,web_link FROM messages WHERE id=? AND mailbox_id=?').get(draft.message_id, mailbox.id);
-      return { ...draft, original_message: source ? { subject: source.subject, webLink: source.web_link } : null };
+      const suggestions = suggestReplyAttachments({
+        db: store.db,
+        message: draft.message_id ? { id: draft.message_id, subject: draft.subject } : { subject: draft.subject },
+        recipient: draft.to?.[0] || '',
+        keywords: [],
+      }).filter((item) => item.autoAttach === false);
+      return {
+        ...draft,
+        original_message: source ? { subject: source.subject, webLink: source.web_link } : null,
+        attachment_suggestions: suggestions,
+      };
     };
     if (!id && req.method === 'POST') {
       const result = drafts.create(mailbox.id, bot ? agentSource : 'ui', await readBody(req));

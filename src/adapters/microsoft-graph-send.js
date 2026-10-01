@@ -3,6 +3,12 @@ import {
   normalizeMailSendRecipientAllowlist,
 } from '../security/mail-send-recipient-policy.js';
 import { createHash } from 'node:crypto';
+import {
+  draftNeedsClarification,
+  graphTextBody,
+  loadPartnerNames,
+  partnerLeak,
+} from '../domain/reply-draft-guardrails.js';
 
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const CORRELATION_HEADER = 'x-mi-draft-id';
@@ -105,12 +111,14 @@ export class GraphSendClient {
     if (!hasMailSendScope(this.accessToken)) fail('MAIL_SEND_SCOPE_REQUIRED');
     if (draft.status !== 'sending' || !draft.approved_at || !draft.approved_by?.startsWith('session:')) fail('HUMAN_APPROVAL_REQUIRED');
     if (!/^[0-9a-f-]{36}$/.test(draft.draft_id) || !draft.to?.length || !draft.subject || !draft.body_text) fail('INVALID_SEND_DRAFT', 400);
+    if (draftNeedsClarification(draft.body_text)) fail('DRAFT_NEEDS_CLARIFICATION', 409);
+    if (partnerLeak(draft.body_text, [...draft.to, ...(draft.cc || [])], loadPartnerNames()).length) fail('PARTNER_NAME_BLOCKED', 409);
     assertMailSendRecipientsAllowed(this.recipientAllowlist, draft);
     const expected = Array.isArray(draft.attachments) ? draft.attachments : [];
     if (expected.length && (!Array.isArray(attachments) || attachments.length !== expected.length)) fail('INVALID_SEND_DRAFT', 400);
     const message = {
       subject: draft.subject,
-      body: { contentType: 'Text', content: draft.body_text },
+      body: graphTextBody(draft.body_text),
       toRecipients: draft.to.map((address) => ({ emailAddress: { address } })),
       ccRecipients: draft.cc.map((address) => ({ emailAddress: { address } })),
       internetMessageHeaders: [{ name: CORRELATION_HEADER, value: draft.draft_id }],
