@@ -10,12 +10,16 @@ import {
   ENCRYPTION_AAD_VERSION,
   ENCRYPTION_POLICY_VERSION,
 } from '../src/storage/mail-attachment-crypto.js';
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   ATTACHMENT_LIMITS,
   createAttachmentAssetService,
   createSyntheticPassScanner,
   createUnavailableScanner,
 } from '../src/application/mail-attachment-assets.js';
+import { createCommandScanner } from '../src/adapters/attachment-scanner.js';
 
 const KEY = Buffer.alloc(32, 9);
 const OTHER_KEY = Buffer.alloc(32, 3);
@@ -286,6 +290,55 @@ test('path, control, overlong, and unknown-extension names are rejected', async 
   const nfd = '회의록.txt'.normalize('NFD');
   const normalized = await upload(service, { displayName: nfd, bytes: textBytes('정규화'), requestId: randomUUID() });
   assert.equal(normalized.asset.name, nfc);
+});
+
+test('license.lic is accepted as octet-stream and still scanned', async (t) => {
+  let scanned = 0;
+  const { service } = fixture(t, {
+    scanner: {
+      async scan({ name, mime }) {
+        scanned += 1;
+        assert.equal(name, 'license.lic');
+        assert.equal(mime, 'application/octet-stream');
+        return { result: 'PASS', engine: 'injected', version: '1' };
+      },
+    },
+  });
+  const text = await upload(service, { displayName: 'license.lic', bytes: textBytes('SANGFOR-LIC') });
+  assert.equal(text.asset.mime, 'application/octet-stream');
+  assert.equal(text.asset.name, 'license.lic');
+  const binary = await upload(service, {
+    displayName: 'license.lic',
+    bytes: Buffer.from([0x00, 0x01, 0xff, 0x10]),
+    requestId: randomUUID(),
+  });
+  assert.equal(binary.asset.mime, 'application/octet-stream');
+  assert.equal(scanned, 2);
+});
+
+test('scanner exit 1 refuses a .lic and leaves no asset', async (t) => {
+  const script = join(tmpdir(), `mi-lic-reject-${process.pid}.mjs`);
+  await writeFile(script, 'process.exit(1);\n');
+  t.after(() => import('node:fs/promises').then((fs) => fs.rm(script, { force: true })));
+  const { db, service } = fixture(t, {
+    scanner: createCommandScanner({ command: process.execPath, args: [script] }),
+  });
+  await assert.rejects(
+    upload(service, { displayName: 'license.lic', bytes: textBytes('infected') }),
+    { code: 'UNSUPPORTED_FILE', statusCode: 422 },
+  );
+  assert.equal(db.prepare('SELECT count(*) n FROM mail_attachment_assets').get().n, 0);
+});
+
+test('executable and double-extension names stay refused', async (t) => {
+  const { service } = fixture(t);
+  for (const displayName of ['tool.exe', 'app.js', 'license.lic.exe', 'license.lic.js', 'note.txt.exe']) {
+    await assert.rejects(
+      () => upload(service, { displayName, requestId: randomUUID() }),
+      { code: 'UNSUPPORTED_FILE', statusCode: 422 },
+      displayName,
+    );
+  }
 });
 
 test('injected scanner FAIL rejects the upload and leaves no asset', async (t) => {

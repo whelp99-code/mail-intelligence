@@ -65,6 +65,44 @@ test('sendOnce posts fileAttachment bytes and confirms receipt hashes', async ()
   assert.equal(calls.filter((item) => item.method === 'POST').length, 1);
 });
 
+test('sendOnce attaches license.lic as application/octet-stream with the original filename', async () => {
+  const lic = Buffer.from('SANGFOR-LIC\n', 'utf8');
+  const calls = [];
+  const client = clientWith(async (url, options = {}) => {
+    calls.push({ url, method: options.method || 'GET', body: options.body });
+    if (options.method === 'POST') return new Response(null, { status: 202 });
+    if (url.includes('/attachments/') && url.endsWith('/$value')) return binary(lic);
+    if (url.includes('/attachments')) {
+      return json({ value: [{ id: 'att-lic', name: 'license.lic', contentType: 'application/octet-stream', size: lic.length, isInline: false }] });
+    }
+    return json({ value: [{
+      ...sent(),
+      subject: 'TV license',
+      body: { contentType: 'text', content: 'license attached' },
+    }] });
+  });
+  const licDraft = {
+    ...draft,
+    subject: 'TV license',
+    body_text: 'license attached',
+    attachments: [{
+      ...draft.attachments[0],
+      name: 'license.lic',
+      mime: 'application/octet-stream',
+      size: lic.length,
+      sha256: createHash('sha256').update(lic).digest('hex'),
+    }],
+  };
+  await client.sendOnce(licDraft, {
+    allowSend: true,
+    attachments: [{ name: 'license.lic', mime: 'application/octet-stream', bytes: lic }],
+  });
+  const payload = JSON.parse(calls.find((item) => item.method === 'POST').body);
+  assert.equal(payload.message.attachments[0].name, 'license.lic');
+  assert.equal(payload.message.attachments[0].contentType, 'application/octet-stream');
+  assert.equal(payload.message.attachments[0].contentBytes, lic.toString('base64'));
+});
+
 test('Graph 202 without matching attachment bytes stays sending', async () => {
   for (const handler of [
     async (_url, options = {}) => (options.method === 'POST' ? new Response(null, { status: 202 }) : json({ value: [sent()] })),

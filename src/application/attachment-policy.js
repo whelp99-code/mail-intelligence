@@ -85,6 +85,7 @@ export function validateAttachment({ bytes, displayName }) {
     return { name, mime, kind: 'jpeg' };
   }
   if (lower.endsWith('.hwp')) fail(422, 'UNSUPPORTED_FILE');
+  if (lower.endsWith('.lic')) return { name, mime, kind: 'license' };
   if (lower.endsWith('.docx') || lower.endsWith('.xlsx') || lower.endsWith('.pptx') || lower.endsWith('.hwpx')) {
     if (!startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]) && !startsWith(bytes, [0x50, 0x4b, 0x05, 0x06])) fail(422, 'UNSUPPORTED_FILE');
     inspectZip(bytes);
