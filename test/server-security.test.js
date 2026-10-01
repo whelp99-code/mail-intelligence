@@ -81,7 +81,9 @@ test('v1.2.2 server security boundary', async (t) => {
     assert.match(response.headers.get('content-type') || '', /text\/html/);
     const html = await response.text();
     assert.match(html, /v1\.2\.2 · 운영 분류/);
-    assert.match(html, /초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 계속 차단/);
+    assert.match(html, /id="safetyNotice"/);
+    assert.match(html, /data-safety-banner="health"/);
+    assert.doesNotMatch(html, /초안은 복사만 가능하며 메일 발송·원본 변경/);
     assert.equal(html.includes('id="loadSample"'), false);
     assert.equal(html.includes('id="sendMail"'), false);
   });
