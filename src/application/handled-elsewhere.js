@@ -10,7 +10,7 @@ function fail(statusCode, code, message) {
 }
 
 function tableColumns(db, table) {
-  const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+  const exists = db.prepare('SELECT 1 FROM sqlite_master WHERE type = \'table\' AND name = ?').get(table);
   if (!exists) return new Set();
   return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name));
 }

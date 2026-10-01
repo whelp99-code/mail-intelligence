@@ -64,7 +64,7 @@ export function createHandledElsewhereApi({
     const actor = sessionActor(session);
     if (body.undo === true) {
       if (body.channel != null || body.note != null) fail(400, 'INVALID_FIELDS', 'Undo does not take a channel.');
-      const undone = undoHandledElsewhere({
+      undoHandledElsewhere({
         db: store.db,
         mailboxId: mailbox.id,
         messageId: body.messageId,
