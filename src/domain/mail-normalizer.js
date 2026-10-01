@@ -75,6 +75,14 @@ export function normalizeGraphAttachment(attachment = {}) {
   };
 }
 
+export function graphItemLacksContent(message = {}) {
+  if (!message || typeof message !== 'object' || message['@removed']) return false;
+  const has = (key) => Object.prototype.hasOwnProperty.call(message, key);
+  return !has('subject')
+    || (!has('from') && !has('sender'))
+    || (!has('body') && !has('bodyPreview'));
+}
+
 export function normalizeGraphMessage(message = {}) {
   const graphId = text(message.id, 2000);
   if (!graphId) throw new Error('Microsoft Graph message id is required.');
@@ -159,6 +167,7 @@ export function normalizeGraphMessage(message = {}) {
     parentFolderId: text(message.parentFolderId, 2000),
     attachments,
     source,
+    contentIncomplete: graphItemLacksContent(message),
   };
 }
 

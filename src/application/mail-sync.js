@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { normalizeGraphAttachment, normalizeGraphMessage } from '../domain/mail-normalizer.js';
+import { graphItemLacksContent, normalizeGraphAttachment, normalizeGraphMessage } from '../domain/mail-normalizer.js';
 import { retryOperation } from '../resilience.js';
 
 function mailboxKey(value = '') {
@@ -206,7 +206,24 @@ export class MailSyncService {
       })) {
         const normalized = [];
         for (const raw of page.items) {
-          const item = normalizeGraphMessage(raw);
+          let payload = raw;
+          if (raw && !raw['@removed'] && graphItemLacksContent(raw)) {
+            if (typeof client.fetchMessage !== 'function') {
+              throw new Error('Graph client cannot re-fetch a partial delta item.');
+            }
+            payload = await retryOperation(
+              () => client.fetchMessage({
+                mailboxPath,
+                messageId: raw.id,
+              }),
+              {
+                attempts: 2,
+                baseDelayMs: 200,
+                shouldRetry: (error) => error?.retryable === true,
+              },
+            );
+          }
+          const item = normalizeGraphMessage(payload);
           if (
             item.kind === 'upsert'
             && item.hasAttachments

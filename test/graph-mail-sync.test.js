@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { MailSyncService } from '../src/application/mail-sync.js';
 import { GraphMailClient, GraphMailError } from '../src/adapters/microsoft-graph-mail.js';
+import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
 
 function response(status, payload) {
@@ -388,4 +389,129 @@ test('attachment metadata audit keeps only validated diagnostic fields', async (
   assert.deepEqual(invalidAudit.payload, { code: 'GRAPH_REQUEST_FAILED', statusCode: 0, retryable: false });
   assert.equal(JSON.stringify([httpAudit.payload, invalidAudit.payload]).includes('secret'), false);
   assert.equal(JSON.stringify([httpAudit.payload, invalidAudit.payload]).includes('raw body'), false);
+});
+
+test('partial delta item is re-fetched and does not blank stored content', async (t) => {
+  const store = await withStore(t);
+  const full = message('m1', {
+    subject: '[계산서/거래명세서] 내포연료전지',
+    from: { emailAddress: { address: 'jayhan@lotte.net', name: 'jayhan' } },
+    bodyPreview: '본문 유지',
+    body: { contentType: 'text', content: '본문 유지' },
+  });
+  const calls = [];
+  let phase = 'full';
+  const client = new GraphMailClient({
+    accessToken: 'token',
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('/messages/m1?')) {
+        return response(200, full);
+      }
+      if (phase === 'full') {
+        return response(200, {
+          value: [full],
+          '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/delta?opaque=full',
+        });
+      }
+      return response(200, {
+        value: [{ id: 'm1', changeKey: 'change-partial', parentFolderId: 'inbox' }],
+        '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/delta?opaque=partial',
+      });
+    },
+  });
+  const service = new MailSyncService({ store, graphClientFactory: () => client });
+  await service.syncFolder({ accessToken: 'token' });
+  phase = 'partial';
+  await service.syncFolder({ accessToken: 'token' });
+  const mailbox = store.getMailbox('me');
+  const stored = store.getRecentMessages(mailbox.id)[0];
+  assert.equal(stored.subject, full.subject);
+  assert.equal(stored.from, 'jayhan@lotte.net');
+  assert.equal(stored.body, '본문 유지');
+  const refetch = calls.find((url) => url.includes('/messages/m1'));
+  assert.equal(Boolean(refetch), true);
+  const selected = new URL(refetch).searchParams.get('$select');
+  assert.equal(selected.includes('subject'), true);
+  assert.equal(selected.includes('body'), true);
+  assert.equal(selected.includes('from'), true);
+});
+
+test('removed delta item still tombstones after partial-item handling', async (t) => {
+  const store = await withStore(t);
+  const service = new MailSyncService({
+    store,
+    graphClientFactory: () => ({
+      async *iterateDelta() {
+        yield {
+          pageIndex: 0,
+          requestUrl: 'https://graph.microsoft.com/v1.0/delta',
+          items: [message('m1')],
+          nextLink: '',
+          deltaLink: 'https://graph.microsoft.com/v1.0/delta-1',
+        };
+      },
+    }),
+  });
+  await service.syncFolder({ accessToken: 'token' });
+  const removing = new MailSyncService({
+    store,
+    graphClientFactory: () => ({
+      async *iterateDelta() {
+        yield {
+          pageIndex: 0,
+          requestUrl: 'https://graph.microsoft.com/v1.0/delta-1',
+          items: [{ id: 'm1', '@removed': { reason: 'deleted' } }],
+          nextLink: '',
+          deltaLink: 'https://graph.microsoft.com/v1.0/delta-2',
+        };
+      },
+    }),
+  });
+  const result = await removing.syncFolder({ accessToken: 'token' });
+  assert.equal(result.deletions, 1);
+  const mailbox = store.getMailbox('me');
+  assert.equal(store.getRecentMessages(mailbox.id).length, 0);
+});
+
+test('store upsert keeps content when a partial graph item is applied directly', async (t) => {
+  const store = await withStore(t);
+  const service = new MailSyncService({
+    store,
+    graphClientFactory: () => ({
+      async *iterateDelta() {
+        yield {
+          pageIndex: 0,
+          requestUrl: 'https://graph.microsoft.com/v1.0/delta',
+          items: [message('m1', {
+            subject: '유지 제목',
+            from: { emailAddress: { address: 'keep@example.com', name: 'keep' } },
+            body: { contentType: 'text', content: '유지 본문' },
+            bodyPreview: '유지 본문',
+          })],
+          nextLink: '',
+          deltaLink: 'https://graph.microsoft.com/v1.0/delta-1',
+        };
+      },
+    }),
+  });
+  await service.syncFolder({ accessToken: 'token' });
+  const mailbox = store.getMailbox('me');
+  const folderId = store.getSyncStatus(mailbox.id).folders[0].id;
+  store.applyDeltaPage({
+    mailboxId: mailbox.id,
+    folderId,
+    syncRunId: store.startSyncRun({ mailboxId: mailbox.id, folderId, runType: 'delta', cursorStart: '' }),
+    pageIndex: 0,
+    items: [normalizeGraphMessage({
+      id: 'm1',
+      changeKey: 'only-key',
+      parentFolderId: 'inbox',
+    })],
+    deltaLink: 'https://graph.microsoft.com/v1.0/delta-2',
+  });
+  const stored = store.getRecentMessages(mailbox.id)[0];
+  assert.equal(stored.subject, '유지 제목');
+  assert.equal(stored.from, 'keep@example.com');
+  assert.equal(stored.body, '유지 본문');
 });

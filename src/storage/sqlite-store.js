@@ -600,9 +600,36 @@ export class SQLiteMailStore {
 
   upsertNormalizedMessage({ mailboxId, folderId, message }) {
     if (!message?.graphId) throw new Error('Normalized message graphId is required.');
-    const previous = this.db.prepare(
-      'SELECT id, change_key, graph_modified_at, deleted_at, thread_id, first_seen_at FROM messages WHERE mailbox_id = ? AND graph_id = ?',
-    ).get(mailboxId, message.graphId);
+    const previous = this.db.prepare(`
+      SELECT id, change_key, graph_modified_at, deleted_at, thread_id, first_seen_at,
+             subject, sender_email, sender_name, body_preview, body_text, source_json,
+             internet_message_id, conversation_id, received_at
+      FROM messages WHERE mailbox_id = ? AND graph_id = ?
+    `).get(mailboxId, message.graphId);
+    if (previous && message.contentIncomplete === true) {
+      let preservedSource = message.source;
+      if (previous.source_json) {
+        try {
+          preservedSource = JSON.parse(previous.source_json);
+        } catch {
+          preservedSource = message.source;
+        }
+      }
+      message = {
+        ...message,
+        subject: message.subject || previous.subject || '',
+        sender: message.sender?.email
+          ? message.sender
+          : { email: previous.sender_email || '', name: previous.sender_name || '' },
+        bodyPreview: message.bodyPreview || previous.body_preview || '',
+        bodyText: message.bodyText || previous.body_text || '',
+        internetMessageId: message.internetMessageId || previous.internet_message_id || '',
+        conversationId: message.conversationId || previous.conversation_id || '',
+        receivedAt: message.receivedAt || previous.received_at || '',
+        source: preservedSource,
+        recipients: (message.recipients || []).length ? message.recipients : null,
+      };
+    }
     const sender = message.sender?.email ? this.upsertPerson(message.sender) : null;
     const thread = message.conversationId
       ? this.upsertThread(mailboxId, message.conversationId, message.subject, message.receivedAt)
@@ -693,7 +720,7 @@ export class SQLiteMailStore {
     if (!previous?.id && row.first_seen_at === null) {
       this.db.prepare('UPDATE messages SET first_seen_at = ? WHERE id = ?').run(now, row.id);
     }
-    this.replaceRecipients(row.id, message.recipients || []);
+    if (Array.isArray(message.recipients)) this.replaceRecipients(row.id, message.recipients);
     if (Array.isArray(message.attachments)) this.replaceAttachments(row.id, message.attachments);
 
     const changed = !previous
