@@ -2,7 +2,14 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { classifyMessage } from '../domain/precision-classifier.js';
 import { generateSafeDraft } from '../domain/mail-assistant-tools.js';
+import { applyOwnerVoice, loadOwnerVoiceProfile } from '../domain/owner-voice.js';
+import {
+  loadPartnerNames,
+  replaceUngroundedNumbers,
+  scrubPartnerNames,
+} from '../domain/reply-draft-guardrails.js';
 import { HANDLED_ELSEWHERE_ACTOR, HANDLED_ELSEWHERE_REASON, loadActiveHandledElsewhere, markerForMessage } from './handled-elsewhere.js';
+import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
 
 export const REPLY_DRAFT_PIPELINE_VERSION = 'reply-draft-pipeline-v1';
 export const PENDING_APPROVALS_PATH = 'data/ops/pending-approvals.jsonl';
@@ -99,7 +106,7 @@ function twoLineSummary(message = {}) {
   return [line.slice(0, 90), line.slice(90, 180)].join('\n');
 }
 
-export function buildReplyDraftPlan(message = {}, classification = null, now = new Date().toISOString()) {
+export function buildReplyDraftPlan(message = {}, classification = null, now = new Date().toISOString(), options = {}) {
   const assessment = assessReplyNeed(message, classification);
   if (!assessment.needsReply) return { action: 'skip', reason: assessment.skip || 'not_reply_needed', method: assessment.method };
   const to = senderEmail(message);
@@ -116,16 +123,37 @@ export function buildReplyDraftPlan(message = {}, classification = null, now = n
   if (draft.sendAllowed !== false) {
     return { action: 'skip', reason: 'send_path_refused', method: assessment.method };
   }
+  const profile = options.voiceProfile || loadOwnerVoiceProfile();
+  const partners = options.partners || loadPartnerNames();
+  const voiced = applyOwnerVoice(draft.body, { profile, recipients: [to] });
+  const scrubbed = scrubPartnerNames(voiced.body, [to], partners);
+  const sourced = replaceUngroundedNumbers(scrubbed.body, [
+    message.subject,
+    message.body,
+    message.body_text,
+    message.bodyPreview,
+    message.body_preview,
+    message.attachmentText,
+    options.ownerInput,
+  ]);
   const messageId = Number(message.id);
+  const suggestions = options.suggestions || (options.db ? suggestReplyAttachments({
+    db: options.db,
+    message,
+    recipient: to,
+  }) : []);
   return {
     action: 'draft',
     method: assessment.method,
     template: draft.templateId,
+    voiceVersion: voiced.voiceVersion,
+    formality: voiced.formality,
+    suggestions,
     request: {
       request_id: `reply.m${messageId}`,
       to: [to],
       subject: draft.subject.replace(/[\r\n]/g, ' ').slice(0, 998),
-      body_text: draft.body,
+      body_text: sourced.body,
       message_id: Number.isSafeInteger(messageId) && messageId > 0 ? messageId : undefined,
     },
     queue: {
@@ -477,7 +505,7 @@ export function runReplyDraftPipeline({
   };
   const queueRows = [];
   for (const message of loaded) {
-    const plan = buildReplyDraftPlan(message, message.classification || null, now);
+    const plan = buildReplyDraftPlan(message, message.classification || null, now, { db, ownerInput: '' });
     summary.byMethod[plan.method] = (summary.byMethod[plan.method] || 0) + (plan.action === 'draft' ? 1 : 0);
     if (plan.action !== 'draft') {
       summary.skipped += 1;

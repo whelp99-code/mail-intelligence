@@ -7,6 +7,12 @@ import { enqueueSentDraftCompanyMemoryOutbox } from './company-memory-donor.js';
 import { decryptAttachment } from '../storage/mail-attachment-crypto.js';
 import { digestDriveLinks, normalizeDriveLinks, renderDriveLinks } from './drive-links.js';
 import { ATTACHMENT_LIMITS, SCAN_POLICY_VERSION } from './mail-attachment-assets.js';
+import {
+  draftNeedsClarification,
+  loadPartnerNames,
+  preserveBodyLineBreaks,
+  scrubPartnerNames,
+} from '../domain/reply-draft-guardrails.js';
 
 const GRAPH_SERIALIZED_LIMIT = Math.floor(3.5 * 1024 * 1024);
 const ASSET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,7 +39,7 @@ function text(value, max, singleLine = false) {
   if (typeof value !== 'string' || value.length > max || value.includes(String.fromCharCode(0)) || (singleLine && /[\r\n]/.test(value))) {
     fail(400, 'INVALID_DRAFT_TEXT');
   }
-  return value.trim();
+  return singleLine ? value.trim() : preserveBodyLineBreaks(value);
 }
 
 function attachmentIds(value) {
@@ -238,7 +244,8 @@ export class MailSendDrafts {
     }
     const ids = attachmentIds(input.attachment_ids);
     const links = digestDriveLinks(normalizeDriveLinks(input.drive_links));
-    const userBody = text(input.body_text, 30000);
+    const scrubbed = scrubPartnerNames(text(input.body_text, 30000), [...addresses(input.to), ...addresses(input.cc)], loadPartnerNames());
+    const userBody = scrubbed.body;
     const appendix = renderDriveLinks(links);
     if (userBody.length + appendix.length > 30000) fail(400, 'INVALID_DRAFT_TEXT');
     const payload = {
@@ -262,7 +269,9 @@ export class MailSendDrafts {
         return { draft: this.get(mailboxId, previous.draft_id), replay: true };
       }
       const id = randomUUID();
-      const status = payload.to.length && payload.subject && userBody ? 'needs_approval' : 'needs_clarification';
+      const status = payload.to.length && payload.subject && userBody.trim() && !draftNeedsClarification(userBody)
+        ? 'needs_approval'
+        : 'needs_clarification';
       this.db.prepare(`INSERT INTO mail_send_drafts
         (draft_id,mailbox_id,request_id,source,owner_principal,message_id,to_json,cc_json,subject,body_text,payload_digest,status,created_at,digest_version,links_json)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
@@ -292,6 +301,7 @@ export class MailSendDrafts {
       this.assertRecipientsAllowed(draft);
       this.assertFrozenAssets(id);
       if (['approved', 'sending', 'sent'].includes(draft.status)) return draft;
+      if (draftNeedsClarification(draft.body_text)) fail(409, 'DRAFT_NEEDS_CLARIFICATION');
       if (draft.status !== 'needs_approval') fail(409, 'DRAFT_NOT_APPROVABLE');
       this.db.prepare('UPDATE mail_send_drafts SET status=?,approved_at=?,approved_by=? WHERE draft_id=?')
         .run('approved', this.now(), actor, id);
