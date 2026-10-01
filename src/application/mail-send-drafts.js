@@ -356,14 +356,17 @@ export class MailSendDrafts {
     });
   }
 
-  cancel(mailboxId, id, actor) {
-    if (typeof actor !== 'string' || !actor.startsWith('session:') || actor.length > 160) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+  cancel(mailboxId, id, actor, reason = '') {
+    const systemReply = actor === 'system:already-replied' && reason === '이미 회신함';
+    if (!systemReply && (typeof actor !== 'string' || !actor.startsWith('session:') || actor.length > 160)) fail(403, 'HUMAN_APPROVAL_REQUIRED');
     return this.transaction(() => {
       const draft = this.get(mailboxId, id);
       if (draft.status === 'cancelled') return draft;
-      if (!['needs_approval', 'needs_clarification', 'approved'].includes(draft.status)) fail(409, 'DRAFT_NOT_CANCELLABLE');
+      if (systemReply) {
+        if (draft.status !== 'needs_approval') return draft;
+      } else if (!['needs_approval', 'needs_clarification', 'approved'].includes(draft.status)) fail(409, 'DRAFT_NOT_CANCELLABLE');
       this.db.prepare('UPDATE mail_send_drafts SET status=? WHERE draft_id=?').run('cancelled', id);
-      this.event(id, 'cancelled', actor);
+      this.event(id, 'cancelled', actor, reason);
       return this.get(mailboxId, id);
     });
   }

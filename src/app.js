@@ -573,6 +573,12 @@ function messageCard(message) {
   article.querySelector('.message-next').textContent = precision
     ? precisionSummaryLine(precision)
     : insight?.nextActions?.[0]?.recommendedAction || '정밀 분류 필요';
+  if (message.replyGap) {
+    const gap = document.createElement('p');
+    gap.className = 'reply-gap';
+    gap.textContent = '회신 필요 — 아직 회신 없음';
+    article.appendChild(gap);
+  }
   if (insight?.aiEnhanced) article.classList.add('ai-enhanced');
   if (!message.isRead) article.classList.add('unread');
   if (insight?.isSpamCandidate) article.classList.add('promo');
@@ -1880,6 +1886,160 @@ fetchStatusObserver.observe(fetchStatus, { childList: true, characterData: true,
 updateFetchStatus(fetchStatus.textContent);
 
 syncExternalAiConsent();
+const sentMail = document.querySelector('#sentMail');
+const sentList = document.querySelector('#sentList');
+const sentDetail = document.querySelector('#sentDetail');
+const sentCount = document.querySelector('#sentCount');
+const sentSearch = document.querySelector('#sentSearch');
+const showInbox = document.querySelector('#showInbox');
+const showSent = document.querySelector('#showSent');
+let sentMessages = [];
+let selectedSentId = '';
+
+function sentRecipientLabel(message) {
+  const names = message.toNames?.length ? message.toNames : message.to;
+  return (names || []).join(', ') || '받는 사람 없음';
+}
+
+function renderSentDetail(message) {
+  sentDetail.replaceChildren();
+  if (!message) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'empty';
+    emptyState.textContent = '보낸 메일을 선택하면 날짜, 받는 사람, 제목, 본문이 표시됩니다. 읽기 전용입니다.';
+    sentDetail.appendChild(emptyState);
+    return;
+  }
+  const head = document.createElement('div');
+  head.className = 'detail-head';
+  const pill = document.createElement('span');
+  pill.className = 'status-pill';
+  pill.textContent = '보낸 메일 · 읽기 전용';
+  head.appendChild(pill);
+  const content = document.createElement('div');
+  content.className = 'detail-content';
+  const title = document.createElement('h3');
+  title.textContent = message.subject || '(제목 없음)';
+  const meta = document.createElement('p');
+  meta.className = 'detail-meta';
+  meta.textContent = message.sentAt ? new Date(message.sentAt).toLocaleString('ko-KR') : '날짜 없음';
+  const toBlock = document.createElement('section');
+  toBlock.className = 'detail-block first';
+  const toTitle = document.createElement('h4');
+  toTitle.textContent = '받는 사람';
+  const toBody = document.createElement('p');
+  toBody.textContent = sentRecipientLabel(message);
+  toBlock.append(toTitle, toBody);
+  const bodyBlock = document.createElement('section');
+  bodyBlock.className = 'detail-block';
+  const bodyTitle = document.createElement('h4');
+  bodyTitle.textContent = '본문';
+  const body = document.createElement('p');
+  body.className = 'detail-body';
+  body.textContent = message.body || message.bodyPreview || '(본문 없음)';
+  bodyBlock.append(bodyTitle, body);
+  content.append(title, meta, toBlock, bodyBlock);
+  sentDetail.append(head, content);
+}
+
+function renderSentList() {
+  const query = sentSearch.value.trim().toLowerCase();
+  const visible = sentMessages.filter((message) => {
+    if (!query) return true;
+    return [message.subject, ...(message.to || []), ...(message.toNames || []), message.bodyPreview]
+      .join(' ')
+      .toLowerCase()
+      .includes(query);
+  });
+  sentCount.textContent = `${visible.length}건`;
+  sentList.replaceChildren();
+  if (!visible.length) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'empty';
+    emptyState.textContent = sentMessages.length ? '검색 결과가 없습니다.' : '보낸 메일이 없습니다.';
+    sentList.appendChild(emptyState);
+    selectedSentId = '';
+    renderSentDetail(null);
+    return;
+  }
+  if (!visible.some((message) => message.id === selectedSentId)) selectedSentId = visible[0].id;
+  visible.forEach((message) => {
+    const card = document.createElement('article');
+    card.className = 'message-card';
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-selected', String(message.id === selectedSentId));
+    if (message.id === selectedSentId) card.classList.add('selected');
+    const subject = document.createElement('strong');
+    subject.className = 'message-subject';
+    subject.textContent = message.subject || '(제목 없음)';
+    const meta = document.createElement('div');
+    meta.className = 'message-meta';
+    const when = message.sentAt ? new Date(message.sentAt).toLocaleString('ko-KR') : '날짜 없음';
+    meta.textContent = `${when} · ${sentRecipientLabel(message)}`;
+    card.append(subject, meta);
+    const open = () => {
+      selectedSentId = message.id;
+      renderSentList();
+    };
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+    sentList.appendChild(card);
+  });
+  renderSentDetail(visible.find((message) => message.id === selectedSentId));
+}
+
+async function loadSentMail() {
+  sentCount.textContent = '불러오는 중';
+  try {
+    const query = sentSearch.value.trim();
+    const response = await apiFetch(`/api/mail/sent?limit=50&q=${encodeURIComponent(query)}`);
+    const payload = await readApiPayload(response);
+    if (!response.ok) throw new Error(payload.message || '보낸 편지함을 불러오지 못했습니다.');
+    sentMessages = Array.isArray(payload.messages) ? payload.messages : [];
+    renderSentList();
+  } catch (error) {
+    sentList.replaceChildren();
+    const emptyState = document.createElement('div');
+    emptyState.className = 'empty';
+    emptyState.textContent = error instanceof Error ? error.message : '보낸 편지함을 불러오지 못했습니다.';
+    sentList.appendChild(emptyState);
+    sentCount.textContent = '0건';
+  }
+}
+
+function showMailbox(which) {
+  const sent = which === 'sent';
+  sentMail.hidden = !sent;
+  document.querySelector('#mailShell').hidden = sent;
+  showInbox.classList.toggle('primary', !sent);
+  showSent.classList.toggle('primary', sent);
+  showInbox.setAttribute('aria-selected', String(!sent));
+  showSent.setAttribute('aria-selected', String(sent));
+  if (sent) {
+    history.replaceState(null, '', '#sentMail');
+    loadSentMail();
+  } else {
+    history.replaceState(null, '', '#messages');
+  }
+}
+
+showInbox.addEventListener('click', () => showMailbox('inbox'));
+showSent.addEventListener('click', () => showMailbox('sent'));
+document.querySelector('#navSent')?.addEventListener('click', (event) => {
+  event.preventDefault();
+  showMailbox('sent');
+});
+sentSearch.addEventListener('input', () => {
+  renderSentList();
+});
+if (location.hash === '#sentMail') showMailbox('sent');
+
 loadStatus().finally(() => loadOutlookMessages());
 loadMemoryStatus();
 loadPrecisionOverview();
