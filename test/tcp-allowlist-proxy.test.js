@@ -36,6 +36,11 @@ test('tailnet CIDR parser accepts Tailscale addresses and rejects unrelated netw
   assert.equal(normalizeIpv4('::ffff:100.87.81.57'), '100.87.81.57');
   assert.equal(clientAddressAllowed('::ffff:100.87.81.57', [tailnet]), true);
   assert.deepEqual(parseTailnetAllowedHosts('100.87.81.57,100.87.81.57'), ['100.87.81.57']);
+  assert.deepEqual(
+    parseTailnetAllowedHosts('100.87.81.57,jm-acloud.alpines-goldeye.ts.net'),
+    ['100.87.81.57', 'jm-acloud.alpines-goldeye.ts.net'],
+  );
+  assert.throws(() => parseTailnetAllowedHosts('localhost'), /not a tailnet address/i);
   assert.throws(
     () => parseTailnetAllowedHosts('192.168.100.5'),
     /outside the tailnet CIDR/i,
