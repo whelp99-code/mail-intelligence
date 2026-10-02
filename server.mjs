@@ -3109,6 +3109,9 @@ const mailSendApi = createMailSendApi({
     }
     return attachmentKey;
   },
+  jarvisReceiptGate: process.env.MAIL_INTELLIGENCE_JARVIS_RECEIPT_GATE === '1',
+  jarvisDecisionPublicKey: process.env.MAIL_INTELLIGENCE_JARVIS_DECISION_PUBLIC_KEY || '',
+  jarvisDecisionKeyId: process.env.MAIL_INTELLIGENCE_JARVIS_DECISION_KEY_ID || '',
   recheckDrive: async (draft) => {
     for (const item of draft.attachments || []) {
       await driveConnections.recheckAsset(draft.mailbox_id, item);
