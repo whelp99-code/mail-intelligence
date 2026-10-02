@@ -58,7 +58,25 @@ export function matchingMailItem(command, draft) {
   return items.find((item) => item
     && item.action_kind === 'mail.send'
     && item.mail_draft_id === draft.draft_id
-    && item.payload_digest === draft.payload_digest);
+    && item.payload_digest === `sha256:${draft.payload_digest}`);
+}
+
+export function verifyJarvisCommand(command, receipt, now) {
+  if (!command || typeof command !== 'object' || Array.isArray(command)
+    || command.schema_version !== 1 || command.action !== 'external.delegate' || command.action_level !== 3) return false;
+  if (command.requested_by !== 'agent:grok-bot'
+    || command.target?.environment !== 'external' || command.target?.system !== 'grok-bot'
+    || command.args?.source !== 'grok-bot') return false;
+  const requested = Date.parse(command.requested_at);
+  const expires = Date.parse(command.expires_at);
+  if (!Number.isFinite(requested) || !Number.isFinite(expires)
+    || requested > now || expires <= now || expires <= requested) return false;
+  try {
+    return receipt.request_id === command.request_id && commandDigest(command) === receipt.command_digest;
+  } catch (error) {
+    if (error instanceof Error) return false;
+    throw error;
+  }
 }
 
 export function ensureReceiptUseTable(db) {

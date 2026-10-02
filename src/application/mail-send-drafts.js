@@ -103,13 +103,14 @@ export class MailSendDrafts {
   }
 
   transaction(operation) {
-    this.db.exec('BEGIN IMMEDIATE');
+    const nested = this.db.isTransaction;
+    this.db.exec(nested ? 'SAVEPOINT mail_send_draft' : 'BEGIN IMMEDIATE');
     try {
       const result = operation();
-      this.db.exec('COMMIT');
+      this.db.exec(nested ? 'RELEASE mail_send_draft' : 'COMMIT');
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      this.db.exec(nested ? 'ROLLBACK TO mail_send_draft; RELEASE mail_send_draft' : 'ROLLBACK');
       throw error;
     }
   }
