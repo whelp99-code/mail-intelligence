@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { GraphSendClient, hasMailSendScope } from '../adapters/microsoft-graph-send.js';
 import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
-import { commandDigest, consumeReceiptItem, matchingMailItem, verifyJarvisReceipt } from './jarvis-receipt-gate.js';
+import { consumeReceiptItem, ensureReceiptUseTable, matchingMailItem, verifyJarvisCommand, verifyJarvisReceipt } from './jarvis-receipt-gate.js';
 
 function fail(statusCode, code) {
   throw Object.assign(new Error(code), { statusCode, code });
@@ -46,7 +46,7 @@ export function createMailSendApi({
         }
       }
       if (!agentSource) fail(401, 'DRAFT_TOKEN_REQUIRED');
-      if (action && !(action === 'approve' && jarvisReceiptGate)) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+      if (action && !(agentSource === 'grok-bot' && action === 'approve' && jarvisReceiptGate)) fail(403, 'HUMAN_APPROVAL_REQUIRED');
       if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!id && req.method === 'GET') fail(403, 'DRAFT_LIST_FORBIDDEN');
     } else {
@@ -104,21 +104,24 @@ export function createMailSendApi({
     if (req.method !== 'POST' || !action) fail(405, 'METHOD_NOT_ALLOWED');
     const body = await readBody(req);
     let receiptUse;
+    const verifyReceiptApproval = () => {
+      if (agentSource !== 'grok-bot' || !jarvisReceiptGate) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+      if (!jarvisDecisionPublicKey || !jarvisDecisionKeyId) fail(503, 'JARVIS_RECEIPT_UNCONFIGURED');
+      const now = Date.now();
+      if (!verifyJarvisReceipt(body.receipt, jarvisDecisionPublicKey, now, jarvisDecisionKeyId)
+        || !verifyJarvisCommand(body.command, body.receipt, now)) fail(403, 'JARVIS_RECEIPT_INVALID');
+      const item = matchingMailItem(body.command, draft);
+      if (!item) fail(403, 'JARVIS_RECEIPT_INVALID');
+      if (body.payload_digest !== draft.payload_digest) fail(409, 'DRAFT_DIGEST_MISMATCH');
+      return { receiptId: body.receipt.receipt_id, itemDigest: item.payload_digest };
+    };
     if (!bot && jarvisReceiptGate && draft.owner_principal === 'agent:grok-bot' && action === 'approve') {
       fail(403, 'SECOND_APPROVAL_DISABLED');
     }
     let actor = bot ? 'agent:grok-bot' : `session:${createHash('sha256').update(session.token).digest('hex').slice(0, 24)}`;
     if (bot && action === 'approve') {
-      if (!jarvisDecisionPublicKey || !jarvisDecisionKeyId) fail(503, 'JARVIS_RECEIPT_UNCONFIGURED');
-      const command = body.command;
-      const receipt = body.receipt;
-      if (!verifyJarvisReceipt(receipt, jarvisDecisionPublicKey, Date.now(), jarvisDecisionKeyId)) fail(403, 'JARVIS_RECEIPT_INVALID');
-      if (commandDigest(command) !== receipt.command_digest || receipt.request_id !== command.request_id) fail(403, 'JARVIS_RECEIPT_INVALID');
-      const item = matchingMailItem(command, draft);
-      if (!item) fail(403, 'JARVIS_RECEIPT_INVALID');
-      if (body.payload_digest !== draft.payload_digest) fail(409, 'DRAFT_DIGEST_MISMATCH');
-      actor = `jarvis-receipt:${receipt.receipt_id}`;
-      receiptUse = { receiptId: receipt.receipt_id, itemDigest: item.payload_digest };
+      receiptUse = verifyReceiptApproval();
+      actor = `jarvis-receipt:${receiptUse.receiptId}`;
     }
     if (action === 'cancel') {
       if (Object.keys(body).length) fail(400, 'INVALID_CANCEL_FIELDS');
@@ -136,12 +139,19 @@ export function createMailSendApi({
       }),
     });
     await recheckDrive(drafts.get(mailbox.id, id));
-    if (receiptUse) consumeReceiptItem(store.db, receiptUse.receiptId, receiptUse.itemDigest, id, Date.now());
-    draft = drafts.approve(mailbox.id, id, {
-      actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token),
-      receiptVerified: Boolean(bot && jarvisReceiptGate),
+    if (receiptUse) ensureReceiptUseTable(store.db);
+    const claimed = drafts.transaction(() => {
+      if (receiptUse) {
+        receiptUse = verifyReceiptApproval();
+        consumeReceiptItem(store.db, receiptUse.receiptId, receiptUse.itemDigest, id, Date.now());
+      }
+      draft = drafts.approve(mailbox.id, id, {
+        actor, digest: body.payload_digest, allowSend, hasSendScope: hasMailSendScope(token),
+        receiptVerified: Boolean(receiptUse),
+      });
+      return drafts.claim(mailbox.id, id);
     });
-    if (drafts.claim(mailbox.id, id)) {
+    if (claimed) {
       const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist });
       let outcome;
       try {
