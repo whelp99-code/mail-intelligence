@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { GraphMailClient } from '../adapters/microsoft-graph-mail.js';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { MailSyncService } from './mail-sync.js';
+import { ingestAfterCommittedSync } from './sync-work-intake.js';
 import { PENDING_APPROVALS_PATH, cancelAnsweredDrafts, runReplyDraftPipeline } from './reply-draft-pipeline.js';
 import { MailAssistantService } from './mail-assistant.js';
 import { PrecisionIntelligenceService } from './precision-intelligence.js';
@@ -72,6 +73,19 @@ export class PersistentMailMemoryRuntime {
     this.legacyImports = [];
     this.syncInFlight = new Map();
     this.backupInFlight = null;
+    this.getWorkIntakeBinding = null;
+    this.workIntakeGate = null;
+  }
+
+  setWorkIntakeGate(gate) {
+    this.workIntakeGate = typeof gate === 'function' ? gate : null;
+  }
+
+  bindWorkIntake(factory) {
+    if (factory != null && typeof factory !== 'function') {
+      throw new Error('Work intake binding must be a function.');
+    }
+    this.getWorkIntakeBinding = factory || null;
   }
 
   async initialize() {
@@ -286,74 +300,89 @@ export class PersistentMailMemoryRuntime {
       },
       maxAttempts: 2,
     });
-    const operation = retryOperation(
-      async (attempt) => {
-        this.store.markOperatorJobRunning(jobKey, attempt);
-        return this.syncService.syncMailbox({
-          accessToken,
-          mailboxUser,
-          recentLimit,
-          includeHiddenFolders,
-          maxFolders,
-          forceInitial,
-        });
-      },
-      {
-        attempts: 2,
-        baseDelayMs: 500,
-        shouldRetry: (error) => error?.retryable === true,
-      },
-    ).then((result) => {
-      const precision = this.precision.classifyStored(mailboxUser);
-      for (const failure of result.errors || []) {
-        this.store.recordDeadLetter({
-          jobId: job.id,
-          eventType: 'mail-sync.folder.failed',
-          entityType: 'mail_folder',
-          entityId: failure.folderId || '',
-          errorCode: failure.code || 'SYNC_FAILED',
-          errorMessage: failure.message || 'Folder synchronization failed.',
-          payload: {
-            mailbox: key,
-            displayName: failure.displayName || '',
-          },
-        });
+    let intakeCapture;
+    const operation = (async () => {
+      if (typeof this.workIntakeGate === 'function') {
+        intakeCapture = await this.workIntakeGate({ accessToken, mailboxUser });
       }
-      this.store.completeOperatorJob(jobKey, {
-        discoveredFolders: result.discoveredFolders,
-        completedFolders: result.completedFolders,
-        failedFolders: result.failedFolders,
-        pages: result.pages,
-        received: result.received,
-        upserts: result.upserts,
-        deletions: result.deletions,
-        attachmentErrors: result.attachmentErrors,
-        precision,
-      });
-      this.store.checkpointWal('TRUNCATE');
-      const replyDraftCancellation = cancelAnsweredDrafts({
-        db: this.store.db,
-        drafts: new MailSendDrafts(this.store.db),
-        mailboxId: result.mailbox?.id,
-      });
-      const replyDraftPipeline = replyDrafts === true
-        ? runReplyDraftPipeline({
+      return retryOperation(
+        async (attempt) => {
+          this.store.markOperatorJobRunning(jobKey, attempt);
+          return this.syncService.syncMailbox({
+            accessToken,
+            mailboxUser,
+            recentLimit,
+            includeHiddenFolders,
+            maxFolders,
+            forceInitial,
+          });
+        },
+        {
+          attempts: 2,
+          baseDelayMs: 500,
+          shouldRetry: (error) => error?.retryable === true,
+        },
+      ).then(async (result) => {
+        const precision = this.precision.classifyStored(mailboxUser);
+        for (const failure of result.errors || []) {
+          this.store.recordDeadLetter({
+            jobId: job.id,
+            eventType: 'mail-sync.folder.failed',
+            entityType: 'mail_folder',
+            entityId: failure.folderId || '',
+            errorCode: failure.code || 'SYNC_FAILED',
+            errorMessage: failure.message || 'Folder synchronization failed.',
+            payload: {
+              mailbox: key,
+              displayName: failure.displayName || '',
+            },
+          });
+        }
+        const intake = await this.intakeCommittedSync(job, key, mailboxUser, result, intakeCapture);
+        this.store.completeOperatorJob(jobKey, {
+          discoveredFolders: result.discoveredFolders,
+          completedFolders: result.completedFolders,
+          failedFolders: result.failedFolders,
+          pages: result.pages,
+          received: result.received,
+          upserts: result.upserts,
+          deletions: result.deletions,
+          attachmentErrors: result.attachmentErrors,
+          precision,
+          intake: intake ? {
+            accepted: intake.accepted,
+            failed: intake.failures.length,
+            skipped: intake.skipped.length,
+            mastersApplied: intake.mastersApplied,
+            code: intake.code || '',
+          } : null,
+        });
+        this.store.checkpointWal('TRUNCATE');
+        const replyDraftCancellation = cancelAnsweredDrafts({
           db: this.store.db,
           drafts: new MailSendDrafts(this.store.db),
-          since: replyDraftSince,
           mailboxId: result.mailbox?.id,
-          dryRun: false,
-          queuePath: PENDING_APPROVALS_PATH,
-        })
-        : null;
-      return {
-        ...result,
-        precision,
-        replyDraftCancellation,
-        replyDraftPipeline,
-        job: this.store.getOperatorJob(jobKey),
-      };
-    }).catch((error) => {
+        });
+        const replyDraftPipeline = replyDrafts === true
+          ? runReplyDraftPipeline({
+            db: this.store.db,
+            drafts: new MailSendDrafts(this.store.db),
+            since: replyDraftSince,
+            mailboxId: result.mailbox?.id,
+            dryRun: false,
+            queuePath: PENDING_APPROVALS_PATH,
+          })
+          : null;
+        return {
+          ...result,
+          precision,
+          intake,
+          replyDraftCancellation,
+          replyDraftPipeline,
+          job: this.store.getOperatorJob(jobKey),
+        };
+      });
+    })().catch((error) => {
       const failedJob = this.store.failOperatorJob(jobKey, error, { deadLetter: true });
       this.store.recordDeadLetter({
         jobId: failedJob.id,
@@ -371,6 +400,53 @@ export class PersistentMailMemoryRuntime {
     });
     this.syncInFlight.set(key, operation);
     return operation;
+  }
+
+  async intakeCommittedSync(job, mailboxKeyValue, mailboxUser, result, intakeCapture = undefined) {
+    if (intakeCapture && intakeCapture.enabled === false) return null;
+    if (typeof this.getWorkIntakeBinding !== 'function') return null;
+    let intake;
+    try {
+      const binding = this.getWorkIntakeBinding();
+      if (!binding?.authorization || !binding?.workSystem) return null;
+      if (intakeCapture === null) return null;
+      const authorization = intakeCapture?.authorization || binding.authorization;
+      if (authorization.bound === false) return null;
+      intake = await ingestAfterCommittedSync({
+        store: this.store,
+        workSystem: binding.workSystem,
+        authorization,
+        mailboxUser,
+        workspaceId: authorization.workspaceFor(mailboxUser),
+        messageIds: result?.upsertedMessageIds || [],
+      });
+    } catch (error) {
+      intake = {
+        denied: true,
+        code: error?.code || 'INTAKE_FAILED',
+        mastersApplied: false,
+        accepted: 0,
+        acceptedMessageIds: [],
+        failures: [{
+          messageId: '',
+          code: error?.code || 'INTAKE_FAILED',
+          message: String(error?.message || 'Mail intake failed.').slice(0, 200),
+        }],
+        skipped: [],
+      };
+    }
+    for (const failure of intake.failures || []) {
+      this.store.recordDeadLetter({
+        jobId: job.id,
+        eventType: 'mail.intake.failed',
+        entityType: failure.messageId ? 'message' : 'mailbox',
+        entityId: failure.messageId || mailboxKeyValue,
+        errorCode: failure.code || 'INTAKE_FAILED',
+        errorMessage: failure.message || failure.code || 'Mail intake failed.',
+        payload: { mailbox: mailboxKeyValue },
+      });
+    }
+    return intake;
   }
 
   async backup({ targetPath = '' } = {}) {
