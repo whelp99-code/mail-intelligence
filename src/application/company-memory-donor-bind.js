@@ -118,7 +118,8 @@ function resolveMessageCompanyMemorySource(db, input) {
        FROM messages m
        JOIN mailboxes mb ON mb.id = m.mailbox_id
        WHERE m.deleted_at IS NULL
-         AND (m.graph_id = ? OR m.graph_id = ? OR m.internet_message_id = ?)
+         AND m.graph_id = ?
+         AND (m.graph_id = ? OR m.internet_message_id = ?)
          AND (mb.address = ? OR mb.graph_user = ? OR mb.mailbox_key = ?)
        LIMIT 1`,
     ).get(input.locator, input.sourceEventId, input.sourceEventId, input.mailbox, input.mailbox, input.mailbox);
@@ -126,8 +127,8 @@ function resolveMessageCompanyMemorySource(db, input) {
     return null;
   }
   if (!row) return null;
-  const content = String(row.body_text || row.body_preview || '').normalize('NFC').trim();
-  if (!content) return null;
+  const content = String(row.body_text || row.body_preview || '');
+  if (!content.trim()) return null;
   return {
     workspaceId: input.workspaceId,
     provider: input.provider,
@@ -135,9 +136,9 @@ function resolveMessageCompanyMemorySource(db, input) {
     sourceLocator: input.locator,
     sourceEventId: input.sourceEventId,
     content,
-    parserVersion: 'mail:company-memory:1',
+    parserVersion: 'mail:company-memory:2',
     locator: {
-      kind: input.kind === 'INBOX_RECEIVED' ? 'mail_message' : 'mail_work',
+      kind: 'mail_message',
       graph_id: row.graph_id,
     },
   };
@@ -308,7 +309,9 @@ function createSbCompanyTransport(command, configPath) {
             SB_CONFIG: join(dirname(configPath), 'personal-sb-unused.toml'),
           },
         });
+        const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
         if (!child.stdin || !child.stdout || !child.stderr) {
+          clearTimeout(timeout);
           child.kill();
           reject(new Error('COMPANY_TRANSPORT_FAILED'));
           return;
@@ -324,8 +327,12 @@ function createSbCompanyTransport(command, configPath) {
         child.stdin.on('error', (error) => {
           if (error.code !== 'EPIPE') reject(error);
         });
-        child.on('error', reject);
+        child.on('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
         child.on('close', (code) => {
+          clearTimeout(timeout);
           resolve({
             exitCode: code ?? 1,
             stdout: Buffer.concat(stdout),

@@ -314,12 +314,13 @@ function receiveArguments(source) {
     }
     locator[requiredText(key, 'locator.key')] = requiredText(value, 'locator.value');
   }
+  requiredText(source.content, 'content');
   return {
     candidate_id: candidateId(source),
     source_system: 'mail',
     source_locator: requiredText(source.sourceLocator, 'source_locator'),
     source_event_id: requiredText(source.sourceEventId, 'source_event_id'),
-    content: requiredText(source.content, 'content'),
+    content_digest: `sha256:${createHash('sha256').update(source.content, 'utf8').digest('hex')}`,
     parser_version: requiredText(source.parserVersion, 'parser_version'),
     locator,
   };

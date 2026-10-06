@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -19,6 +19,7 @@ import {
 } from '../src/application/company-memory-donor.js';
 import {
   loadCompanyMemoryDonorBind,
+  resolveMailCompanyMemorySource,
   runBoundCompanyMemoryDonorTick,
 } from '../src/application/company-memory-donor-bind.js';
 
@@ -183,6 +184,44 @@ test('stays disabled when donor env is absent', async () => {
   assert.deepEqual(loadCompanyMemoryDonorBind({}), { enabled: false });
   const skipped = await runBoundCompanyMemoryDonorTick({});
   assert.deepEqual(skipped, { skipped: true });
+});
+
+test('message donor binds locator and event ID to the same source before publishing', (t) => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec(`
+    CREATE TABLE mailboxes (
+      id INTEGER PRIMARY KEY, mailbox_key TEXT, address TEXT, graph_user TEXT
+    );
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY, mailbox_id INTEGER, graph_id TEXT,
+      internet_message_id TEXT, body_text TEXT, body_preview TEXT, deleted_at TEXT
+    );
+  `);
+  db.prepare('INSERT INTO mailboxes VALUES (1, ?, ?, ?)')
+    .run(SOURCE.mailbox, SOURCE.mailbox, SOURCE.mailbox);
+  db.prepare('INSERT INTO messages VALUES (1, 1, ?, ?, ?, ?, NULL)')
+    .run(SOURCE.sourceLocator, SOURCE.sourceEventId, SOURCE.content, '');
+  const event = {
+    workspaceId: WORKSPACE,
+    kind: 'INBOX_RECEIVED',
+    provider: SOURCE.provider,
+    mailbox: SOURCE.mailbox,
+    sourceLocator: SOURCE.sourceLocator,
+    sourceEventId: SOURCE.sourceEventId,
+  };
+  assert.equal(resolveMailCompanyMemorySource(db, event).content, SOURCE.content);
+  assert.deepEqual(resolveMailCompanyMemorySource(db, { ...event, kind: 'WORK_LINKED' }),
+    resolveMailCompanyMemorySource(db, event));
+  assert.equal(resolveMailCompanyMemorySource(db, {
+    ...event, sourceEventId: 'foreign-event',
+  }), null);
+  assert.equal(resolveMailCompanyMemorySource(db, {
+    ...event, sourceLocator: 'foreign-locator',
+  }), null);
+  assert.equal(resolveMailCompanyMemorySource(db, {
+    ...event, mailbox: 'foreign@example.invalid',
+  }), null);
 });
 
 test('fails closed when donor env is incomplete or unknown', () => {
@@ -360,7 +399,8 @@ test('resolves authenticated Mail source from sqlite and does not invoke without
     const invoked = JSON.parse(readFileSync(join(dir, 'invoked.json'), 'utf8'));
     const envelope = JSON.parse(invoked.raw);
     assert.equal(envelope.arguments.source_system, 'mail');
-    assert.equal(envelope.arguments.content, SOURCE.content);
+    assert.equal(Object.hasOwn(envelope.arguments, 'content'), false);
+    assert.equal(envelope.arguments.content_digest, `sha256:${createHash('sha256').update(SOURCE.content, 'utf8').digest('hex')}`);
     assert.equal(envelope.arguments.candidate_id, `mail:v1:${SOURCE.workspaceId}:${SOURCE.provider}:${SOURCE.mailbox}:${SOURCE.sourceLocator}:${SOURCE.sourceEventId}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -6,6 +6,76 @@ unless the four `COMPANY_MEMORY_*` files are set. Inbox ingest still does not
 enqueue. A send draft that reaches status `sent` inserts one keys-only
 `INBOX_RECEIVED` outbox row keyed by `draft_id` (idempotent).
 
+## FP5 M2 source and intake evidence contract
+
+Message-source resolution requires both the graph `sourceLocator` and the
+`sourceEventId` (graph ID or internet message ID) to identify the same
+non-deleted message in the bound mailbox. Matching only one key cannot
+publish another message's content under a different event identity.
+
+Native Mail intake persists a `mail_source` evidence entry with mailbox,
+message, thread, internet message ID, received time, source URL, change
+revision, observation time, and attachment IDs/metadata/revisions. When an
+automatic candidate's source changes, its prior snapshots are retained as
+`mail_source_revision` entries. Identical replay does not duplicate those
+entries. Confirmed, rejected, or user-corrected links remain protected by
+the existing upsert guard. An attachment-only change during the awaited
+master read fails with `INTAKE_SOURCE_CHANGED` before classification or
+candidate commit, just as a message change does.
+
+This is additive evidence JSON in the existing `mail_work_links` table;
+no migration or credential is required. Existing records acquire current
+source evidence on their next eligible intake; missing historical source
+snapshots are not fabricated. Rollback leaves the added evidence readable
+as JSON; older code may overwrite it on later automatic refresh, so retain
+the database backup before a later operational rollback. This local change
+does not provision a donor binding, write CRM state, or enable publication.
+Inbox intake still does not enqueue company-memory rows.
+
+## FP5 MS-local installed-CLI boundary
+
+The receive envelope is keys-only: `candidate_id`, `source_system`,
+`source_locator`, `source_event_id`, `content_digest`, `parser_version`,
+and `locator`. It contains no source `content`. The digest is SHA-256 of
+the resolved source text's original UTF-8 bytes; `sb-company` resolves
+those bytes from its operator-configured source profile and verifies the
+exact system/event/parser/digest binding before storage.
+
+Received-message source parser `mail:company-memory:2` preserves stored
+text bytes instead of trimming or NFC-rewriting them. Its locator kind
+is consistently `mail_message` across inbox/work outbox events so the
+same source cannot collide with its own immutable candidate. Existing
+sent-draft parser semantics are unchanged. A v2 profile is explicit;
+old profile/candidate revisions are not rewritten or silently migrated.
+Live cutover still requires registered operator authority and approved
+versioned source snapshots/profile.
+
+The bound CLI subprocess has a 10-second kill deadline and clears it on
+exit; a nonzero exit or unmatched receipt never acknowledges the outbox.
+An emitted receive receipt means a company-memory **candidate**, not a
+fact approval or execution permission.
+
+The source-bound local QA command is:
+
+```text
+node scripts/verify-company-memory-installed-cli.mjs /absolute/admitted/sb/.venv/bin/sb-company /absolute/admitted/sb
+```
+
+This FP5 harness pins the admitted S1 resolver/test hashes and requires
+the CLI to belong to that checkout. It uses owned temporary Mail/company
+stores, source files and explicitly authorized fixture signing material.
+It verifies real receive/read/replay, original/corrected retention,
+workspace/signature/source denials without ack, the bound tick, and
+cleanup. It is separate from portable Mail unit tests because an
+installed admitted SB CLI is a required integration dependency; assertions
+are not skipped when that dependency is missing.
+
+Requirement coverage: REQ-MAIL-005/007/008, REQ-INT-004/011 and
+REQ-KNOW-004/006/011. Local regressions are in
+`test/mail-work-intake-provenance.test.js` and
+`test/company-memory-donor-bind.test.js`. Live workspace/grant/signature
+acceptance remains a separate gate.
+
 This repository publishes toward the Second Brain `sb-company` contract
 (`second-brain-app/docs/core5/COMPANY-MEMORY-DONOR-CONTRACT.md`). The donor
 builds one canonical `{authority, arguments}` receive envelope, signs it with

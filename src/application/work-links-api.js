@@ -1,5 +1,7 @@
 import { createNotionWorkSystem } from '../adapters/notion-work-system.js';
+import { createIntakeAuthorization } from './intake-authorization.js';
 import { WorkLinkService } from './work-links.js';
+import { MailWorkIntakeService } from './mail-work-intake.js';
 
 function fail(statusCode, code, message) {
   throw Object.assign(new Error(message || code), { statusCode, code });
@@ -10,6 +12,11 @@ export function createWorkLinksApi({
   getMailboxUser,
   getSession,
   snapshotPath = '',
+  getCwosWorkSystem,
+  getIntakeAuthorization,
+  readBody = async () => ({}),
+  prepareIntakeAuthorization = null,
+  registerIntakeIdentity = null,
 }) {
   return async function workLinksApi(req, url) {
     const session = getSession(req);
@@ -25,6 +32,39 @@ export function createWorkLinksApi({
 
     const mailboxUser = getMailboxUser();
     const store = getStore();
+    if (url.pathname === '/api/work-links/intake') {
+      if (!['GET', 'POST'].includes(req.method)) fail(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      const authorization = typeof prepareIntakeAuthorization === 'function'
+        ? await prepareIntakeAuthorization()
+        : (getIntakeAuthorization?.() || createIntakeAuthorization([]));
+      const requestedWorkspace = req.method === 'POST'
+        ? String(url.searchParams.get('workspaceId') || '').trim()
+        : '';
+      const scope = authorization.authorize({ mailboxUser, workspaceId: requestedWorkspace });
+      const captured = typeof authorization.capture === 'function' ? authorization.capture() : null;
+      const assertBinding = typeof authorization.assertCurrent === 'function'
+        ? () => authorization.assertCurrent(captured)
+        : null;
+      const providerIdentity = typeof authorization.identityProvenance === 'function'
+        ? authorization.identityProvenance()
+        : null;
+      const intake = new MailWorkIntakeService({ store, workSystem: getCwosWorkSystem?.() });
+      const messageId = String(url.searchParams.get('messageId') || '').trim();
+      const body = req.method === 'POST'
+        ? await intake.ingest(scope.mailboxUser, messageId, {
+          workspaceId: scope.workspaceId,
+          assertBinding,
+          providerIdentity,
+        })
+        : intake.get(scope.mailboxUser, messageId);
+      return { status: 200, body };
+    }
+    if (url.pathname === '/api/work-links/intake-grant') {
+      if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      if (typeof registerIntakeIdentity !== 'function') fail(404, 'INTAKE_GRANT_UNAVAILABLE', 'Intake identity registration is not available.');
+      const body = await readBody(req);
+      return { status: 200, body: await registerIntakeIdentity(body) };
+    }
     const service = new WorkLinkService({
       store,
       workSystem: createNotionWorkSystem({ snapshotPath }),

@@ -33,6 +33,27 @@ import {
   loadCompanyMemoryDonorBind,
   runBoundCompanyMemoryDonorTick,
 } from './src/application/company-memory-donor-bind.js';
+import {
+  createIntakeGrant,
+  intakeWorkspaceFromEnv,
+  noteAccessTokenReplacement,
+  noteClientTenantChange,
+  publishRefreshedAccessToken,
+} from './src/application/intake-authorization.js';
+import {
+  atomicWritePinnedBinding,
+  captureVerifiedIntakeSync,
+  classifyIdentityFailure,
+  failClosedIntakeReverify,
+  identityEndpointFromEnv,
+  intakeDenial,
+  planPinnedRegistration,
+  proveDelegatedIdentity,
+  readPinnedBinding,
+  refuseObservedRegistration,
+} from './src/application/intake-identity.js';
+import { loadCwosMasterReader } from './src/adapters/cwos-master-reader.js';
+import { createProductionIntakeBinding } from './src/application/sync-work-intake.js';
 import { createWorkLinksApi } from './src/application/work-links-api.js';
 import { createHandledElsewhereApi } from './src/application/handled-elsewhere-api.js';
 import { createMailAttachmentApi } from './src/application/mail-attachment-api.js';
@@ -1437,11 +1458,12 @@ async function getGraphAccessToken() {
       await throwUpstreamHttpError(response, 'MICROSOFT_REFRESH_FAILED', 'Microsoft refresh token request');
     }
     const payload = await readUpstreamJson(response, 'MICROSOFT_REFRESH_JSON_INVALID', 'Microsoft refresh token request');
-    runtimeConfig.accessToken = payload.access_token || '';
-    runtimeConfig.refreshToken = payload.refresh_token || runtimeConfig.refreshToken;
-    runtimeConfig.expiresAt = Date.now() + Number(payload.expires_in || 3600) * 1000;
-    await savePersistedConfig();
-    return runtimeConfig.accessToken;
+    return publishRefreshedAccessToken(
+      runtimeConfig,
+      payload,
+      noteIntakeRuntimeChange,
+      () => savePersistedConfig(),
+    );
   }
 
   const tenantId = getConfigValue('tenantId', 'MICROSOFT_TENANT_ID');
@@ -2362,14 +2384,24 @@ async function handleApi(req, res) {
             nextConfig[key] = validatedText(body[key], key, MAX_JSON_BODY_BYTES);
           }
         }
+        const previousToken = runtimeConfig.accessToken || '';
         if (body.persist !== false) await savePersistedConfig(nextConfig);
         Object.assign(runtimeConfig, nextConfig);
+        noteIntakeRuntimeChange(previousToken);
+        if (intakeGrant.configured) {
+          failClosedIntakeReverify(
+            intakeGrant,
+            await reverifyIntakeToken(getConfigValue('accessToken', 'OUTLOOK_GRAPH_ACCESS_TOKEN')),
+          );
+        }
         return json(res, 200, configStatus());
       }
       if (req.method === 'DELETE') {
         requireStateChange(req);
+        const previousToken = runtimeConfig.accessToken || '';
         await savePersistedConfig(DEFAULT_RUNTIME_CONFIG);
         Object.assign(runtimeConfig, DEFAULT_RUNTIME_CONFIG);
+        noteIntakeRuntimeChange(previousToken);
         return json(res, 200, configStatus());
       }
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
@@ -2985,6 +3017,7 @@ const server = createServer(async (req, res) => {
         await throwUpstreamHttpError(response, 'MICROSOFT_CODE_EXCHANGE_FAILED', 'Microsoft authorization code exchange');
       }
       const payload = await readUpstreamJson(response, 'MICROSOFT_CODE_EXCHANGE_JSON_INVALID', 'Microsoft authorization code exchange');
+      const previousToken = runtimeConfig.accessToken || '';
       runtimeConfig.accessToken = payload.access_token || '';
       runtimeConfig.refreshToken = payload.refresh_token || '';
       runtimeConfig.clientId = pending.clientId;
@@ -2992,12 +3025,15 @@ const server = createServer(async (req, res) => {
       runtimeConfig.loginTenant = pending.tenantId;
       runtimeConfig.mailboxUser = pending.mailboxUser;
       runtimeConfig.expiresAt = Date.now() + Number(payload.expires_in || 3600) * 1000;
+      noteIntakeRuntimeChange(previousToken);
       await savePersistedConfig();
+      failClosedIntakeReverify(intakeGrant, await reverifyIntakeToken(runtimeConfig.accessToken || ''));
       res.writeHead(200, { ...securityHeaders(), 'Content-Type': 'text/html; charset=utf-8' });
       res.end('<h1>Outlook login complete</h1><p>이 창을 닫고 Mail Intelligence 화면에서 Outlook 가져오기를 누르세요.</p>');
     } catch (exchangeError) {
-      res.writeHead(502, { ...securityHeaders(), 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`<h1>Outlook token exchange failed</h1><p>${escapeHtmlServer(exchangeError instanceof Error ? exchangeError.message : 'Unknown error')}</p>`);
+      const failure = outlookCallbackFailure(exchangeError);
+      res.writeHead(failure.statusCode, { ...securityHeaders(), 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<h1>${escapeHtmlServer(failure.title)}</h1><p>${escapeHtmlServer(failure.code)}</p>`);
     }
     return;
   }
@@ -3190,11 +3226,119 @@ const handledElsewhereApi = createHandledElsewhereApi({
   readBody: readJsonBody,
   accessKeyRequired,
 });
+const intakeWorkspaceId = intakeWorkspaceFromEnv(process.env);
+const cwosMasterReader = await loadCwosMasterReader(process.env);
+const intakeBindingPath = join(dataRoot, '.mail-intake-binding.json');
+const intakeGrant = createIntakeGrant({
+  binding: await readPinnedBinding(intakeBindingPath, readFile),
+  configuredWorkspaceId: intakeWorkspaceId,
+});
+function noteIntakeRuntimeChange(previousToken) {
+  const previous = {
+    clientId: noteIntakeRuntimeChange.clientId,
+    tenantId: noteIntakeRuntimeChange.tenantId,
+  };
+  noteAccessTokenReplacement(intakeGrant, runtimeConfig, previousToken, currentMailboxUser() || 'me');
+  const next = noteClientTenantChange(intakeGrant, previous, {
+    clientId: runtimeConfig.clientId || '',
+    tenantId: runtimeConfig.tenantId || '',
+  });
+  noteIntakeRuntimeChange.clientId = next.clientId;
+  noteIntakeRuntimeChange.tenantId = next.tenantId;
+}
+noteIntakeRuntimeChange.clientId = runtimeConfig.clientId || '';
+noteIntakeRuntimeChange.tenantId = runtimeConfig.tenantId || '';
+
+async function reverifyIntakeToken(accessToken) {
+  if (!intakeGrant.configured || !accessToken) return null;
+  const capturedEpoch = intakeGrant.captureEpoch();
+  try {
+    const verified = await proveDelegatedIdentity({
+      accessToken,
+      binding: intakeGrant.expectedBinding(),
+      selectedMailbox: currentMailboxUser() || 'me',
+      endpoint: identityEndpointFromEnv(process.env),
+      fetchImpl: fetchWithTimeout,
+      configuredClientId: getConfigValue('clientId', 'MICROSOFT_CLIENT_ID'),
+      configuredTenantId: getConfigValue('tenantId', 'MICROSOFT_TENANT_ID'),
+      expectedMailboxEmail: process.env.MAIL_INTELLIGENCE_INTAKE_EXPECTED_EMAIL || '',
+    });
+    return intakeGrant.publishProof(verified, capturedEpoch);
+  } catch (error) {
+    const refusal = classifyIdentityFailure(error);
+    if (!refusal) return null;
+    if (intakeGrant.graphIdentityProven) intakeGrant.invalidateProof();
+    return { denied: refusal };
+  }
+}
+
+async function prepareIntakeAuthorization() {
+  const accessToken = getConfigValue('accessToken', 'OUTLOOK_GRAPH_ACCESS_TOKEN');
+  const current = intakeGrant.authorization().capture();
+  if (intakeGrant.configured && (!intakeGrant.graphIdentityProven || current.token !== accessToken)) {
+    const published = await reverifyIntakeToken(accessToken);
+    if (published?.denied) throw published.denied;
+  }
+  return intakeGrant.authorization();
+}
+
+function currentIntakeBinding() {
+  return createProductionIntakeBinding({
+    db: requireMailMemory().store.db,
+    authorization: intakeGrant.authorization(),
+    readMasters: cwosMasterReader
+      ? ({ workspaceId, cursor } = {}) => cwosMasterReader.readMasters({ workspaceId, cursor })
+      : null,
+  });
+}
+
+requireMailMemory().bindWorkIntake(() => currentIntakeBinding());
+requireMailMemory().setWorkIntakeGate(({ accessToken, mailboxUser }) => captureVerifiedIntakeSync({
+  grant: intakeGrant,
+  accessToken,
+  mailboxUser,
+  reverify: reverifyIntakeToken,
+}));
+
 const workLinksApi = createWorkLinksApi({
   getStore: () => requireMailMemory().store,
   getMailboxUser: () => currentMailboxUser() || 'me',
   getSession: sessionForRequest,
   snapshotPath: workLinksSnapshotPath,
+  getCwosWorkSystem: () => currentIntakeBinding().workSystem,
+  getIntakeAuthorization: () => currentIntakeBinding().authorization,
+  prepareIntakeAuthorization,
+  readBody: readJsonBody,
+  registerIntakeIdentity: async (body) => {
+    const capturedEpoch = intakeGrant.captureEpoch();
+    const next = planPinnedRegistration({
+      current: intakeGrant.expectedBinding(),
+      body,
+      configuredWorkspaceId: intakeWorkspaceId,
+    });
+    const accessToken = getConfigValue('accessToken', 'OUTLOOK_GRAPH_ACCESS_TOKEN');
+    let verified;
+    try {
+      verified = await proveDelegatedIdentity({
+        accessToken,
+        binding: next,
+        selectedMailbox: currentMailboxUser() || 'me',
+        endpoint: identityEndpointFromEnv(process.env),
+        fetchImpl: fetchWithTimeout,
+        configuredClientId: getConfigValue('clientId', 'MICROSOFT_CLIENT_ID'),
+        configuredTenantId: getConfigValue('tenantId', 'MICROSOFT_TENANT_ID'),
+        expectedMailboxEmail: process.env.MAIL_INTELLIGENCE_INTAKE_EXPECTED_EMAIL || '',
+      });
+    } catch (error) {
+      refuseObservedRegistration(intakeGrant, error);
+    }
+    return intakeGrant.publishRegistration({
+      next,
+      verified,
+      capturedEpoch,
+      write: (record) => atomicWritePinnedBinding(intakeBindingPath, record),
+    });
+  },
 });
 mailMemoryHealth = {
   ready: mailMemoryInitialization.storage.ready,
