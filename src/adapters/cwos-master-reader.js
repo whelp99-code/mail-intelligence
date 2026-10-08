@@ -1,5 +1,5 @@
 /**
- * Read-only client for native CWOS v2 state and archive projections.
+ * Read-only client for native CWOS v2 state and explicitly selected masters.
  * Two GETs are not an atomic snapshot. Workspace, actor, plan and credential
  * come only from the explicit binding, never from a request or another process.
  */
@@ -7,6 +7,7 @@
 import { mailSourceDigest } from './cwos-mail-command.js';
 
 const STATE_ROUTE = '/api/cwos/v2/state';
+const ACCOUNT_MASTER_ROUTE = '/api/cwos/accounts';
 
 function fail(code, message = code, statusCode = 502) {
   throw Object.assign(new Error(message), { code, statusCode });
@@ -109,10 +110,17 @@ export function cwosMasterReaderConfigFromEnv(env = {}) {
   const principalId = env.MAIL_INTELLIGENCE_CWOS_PRINCIPAL_ID;
   const kind = env.MAIL_INTELLIGENCE_CWOS_PRINCIPAL_KIND;
   const planId = env.MAIL_INTELLIGENCE_CWOS_PLAN_ID;
+  const accountMasterFlag = env.MAIL_INTELLIGENCE_CWOS_ACCOUNT_MASTER_GET;
+  if (accountMasterFlag != null && !['', '0', '1'].includes(accountMasterFlag)) {
+    fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
+  }
+  const accountMasterGet = accountMasterFlag === '1';
   if (!baseUrl && !credential && !credentialFile && !principalId && !kind && !planId
-    && env.MAIL_INTELLIGENCE_CWOS_TIMEOUT_MS == null) return null;
+    && !accountMasterGet && env.MAIL_INTELLIGENCE_CWOS_TIMEOUT_MS == null) return null;
   if (!baseUrl || (!credential && !credentialFile)) fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
-  if (!['ai', 'service'].includes(kind)) fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
+  if (!['ai', 'service'].includes(kind) || (accountMasterGet && kind !== 'service')) {
+    fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
+  }
   return {
     baseUrl: assertBaseUrl(baseUrl),
     credential: credentialFile ? '' : assertCredential(credential),
@@ -120,7 +128,8 @@ export function cwosMasterReaderConfigFromEnv(env = {}) {
     workspaceId: assertWorkspaceId(env.MAIL_INTELLIGENCE_INTAKE_WORKSPACE),
     principalId: assertWorkspaceId(principalId),
     kind,
-    planId: assertWorkspaceId(planId),
+    accountMasterGet,
+    planId: accountMasterGet ? '' : assertWorkspaceId(planId),
     timeoutMs: boundedTimeoutMs(env.MAIL_INTELLIGENCE_CWOS_TIMEOUT_MS),
   };
 }
@@ -146,15 +155,19 @@ export async function loadCwosMasterReader(env = {}, {
 }
 
 export class CwosMasterReader {
-  constructor({ baseUrl, credential, workspaceId, principalId, kind, planId, timeoutMs = 10_000, fetchImpl = globalThis.fetch } = {}) {
+  constructor({ baseUrl, credential, workspaceId, principalId, kind, planId, accountMasterGet = false, timeoutMs = 10_000, fetchImpl = globalThis.fetch } = {}) {
     if (typeof fetchImpl !== 'function') fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
     if (!['ai', 'service'].includes(kind)) fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
+    if (typeof accountMasterGet !== 'boolean' || (accountMasterGet && kind !== 'service')) {
+      fail('CWOS_READER_CONFIG_INVALID', 'CWOS_READER_CONFIG_INVALID', 500);
+    }
     this.origin = assertBaseUrl(baseUrl);
     this.credential = assertCredential(credential);
     this.workspaceId = assertWorkspaceId(workspaceId);
     this.principalId = assertWorkspaceId(principalId);
     this.kind = kind;
-    this.planId = assertWorkspaceId(planId);
+    this.accountMasterGet = accountMasterGet;
+    this.planId = accountMasterGet ? '' : assertWorkspaceId(planId);
     this.timeoutMs = boundedTimeoutMs(timeoutMs);
     this.fetchImpl = fetchImpl;
   }
@@ -178,6 +191,7 @@ export class CwosMasterReader {
         && item.workspaceId === this.workspaceId && item.status === 'ACTIVE')
       || !workspaces.some(item => item.id === this.workspaceId && item.workspaceId === this.workspaceId
         && item.status === 'ACTIVE')) fail('CWOS_RESPONSE_SCOPE_MISMATCH');
+    if (this.accountMasterGet) return this.#readAccountMasters(envelope);
     const route = `/api/cwos/v2/normalized-projections/${encodeURIComponent(this.planId)}`;
     const projectionReadAt = new Date().toISOString();
     const projection = await this.#getJson(route);
@@ -230,6 +244,32 @@ export class CwosMasterReader {
     };
   }
 
+  async #readAccountMasters(envelope) {
+    const accountsReadAt = new Date().toISOString();
+    const payload = await this.#getJson(ACCOUNT_MASTER_ROUTE);
+    if (!Array.isArray(payload?.accounts) || !Number.isSafeInteger(payload.count) || payload.count < 0) {
+      fail('CWOS_RESPONSE_INVALID');
+    }
+    if (payload.count !== payload.accounts.length) fail('CWOS_MASTERS_INCOMPLETE', 'CWOS_MASTERS_INCOMPLETE', 409);
+    if (Object.hasOwn(payload, 'workspaceId') || Object.hasOwn(payload, 'workspace_id')) this.#assertTrustedWorkspace(payload);
+    const source = {
+      route: ACCOUNT_MASTER_ROUTE,
+      authority: 'ACCOUNT_MASTER_READ_ONLY', recordKind: 'ACCOUNT_MASTER_REFERENCES',
+      sourceDigest: mailSourceDigest(payload), approved: false, confirmed: false, nativeWork: false,
+    };
+    return {
+      workspaceId: this.workspaceId,
+      items: this.#mapAccounts(payload.accounts, source),
+      provenance: {
+        provider: 'cwos', contract: 'cwos-v2', atomicSnapshot: false,
+        routes: [STATE_ROUTE, ACCOUNT_MASTER_ROUTE], accountsReadAt, engagementsReadAt: '',
+        principalId: this.principalId, principalKind: this.kind,
+        runtimeVersion: envelope.version, stateHash: envelope.stateHash,
+        ...source,
+      },
+    };
+  }
+
   #assertTrustedWorkspace(payload) {
     if (!payload || (payload.workspaceId ?? payload.workspace_id) !== this.workspaceId
       || (payload.workspaceId != null && payload.workspaceId !== this.workspaceId)
@@ -240,7 +280,10 @@ export class CwosMasterReader {
     const seenIds = new Set();
     return rows.map((row) => {
       if (!row || typeof row !== 'object' || Array.isArray(row)) fail('CWOS_RESPONSE_INVALID');
-      this.#assertTrustedWorkspace(row);
+      // The admitted account-list route scopes rows using the server-bound
+      // workspace and returns id/name/status/kinds, without a workspace column.
+      if (source.authority !== 'ACCOUNT_MASTER_READ_ONLY'
+        || Object.hasOwn(row, 'workspaceId') || Object.hasOwn(row, 'workspace_id')) this.#assertTrustedWorkspace(row);
       const externalId = requiredId(row.id);
       if (seenIds.has(externalId)) fail('CWOS_RESPONSE_INVALID');
       seenIds.add(externalId);

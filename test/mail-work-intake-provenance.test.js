@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { CwosWorkSystemAdapter } from '../src/adapters/cwos-work-system.js';
+import { CwosMasterReader } from '../src/adapters/cwos-master-reader.js';
+import { mailSourceDigest } from '../src/adapters/cwos-mail-command.js';
 import { MailWorkIntakeService } from '../src/application/mail-work-intake.js';
 import { PrecisionIntelligenceService } from '../src/application/precision-intelligence.js';
 
@@ -133,4 +135,58 @@ test('source revision refresh preserves corrected work links and explicit projec
   assert.equal(replay.project.status, 'unassigned');
   assert.equal(replay.project.source, 'user-correction');
   assert.equal(replay.work.classification.workState, 'reference');
+});
+
+test('account-master reader evidence persists on customer candidates across reopen', async (t) => {
+  const { adapter, intake, ingest, databasePath } = await fixture(t);
+  const workspaceId = 'synthetic-workspace';
+  const principalId = 'synthetic-reader';
+  const masters = {
+    count: 1,
+    accounts: [{ id: 'native-account', name: 'Example Project', status: 'active', kinds: '["customer"]' }],
+  };
+  const paths = [];
+  adapter.cwosClient = new CwosMasterReader({
+    baseUrl: 'http://127.0.0.1', credential: 'fixture-reader-key-0123456789abcdef',
+    workspaceId, principalId, kind: 'service', accountMasterGet: true,
+    fetchImpl: async (url) => {
+      paths.push(url.pathname);
+      if (url.pathname === '/api/cwos/v2/state') return Response.json({
+        workspaceId, version: 1, stateHash: 'b'.repeat(64),
+        state: {
+          workspaceId,
+          admin: { workspaces: [{ id: workspaceId, workspaceId, status: 'ACTIVE' }] },
+          identity: {
+            principals: [{ id: principalId, workspaceId, kind: 'service', active: true }],
+            memberships: [{ principalId, workspaceId, status: 'ACTIVE' }],
+          },
+        },
+      });
+      assert.equal(url.pathname, '/api/cwos/accounts');
+      return Response.json(masters);
+    },
+  });
+  const result = await ingest();
+  assert.deepEqual(paths, ['/api/cwos/v2/state', '/api/cwos/accounts']);
+  assert.equal(result.customer.candidates.length, 1);
+  assert.equal(result.project.candidates.length, 0);
+  const candidate = result.customer.candidates[0];
+  assert.equal(candidate.external_id, 'native-account');
+  assert.equal(candidate.status, 'candidate');
+  const read = candidate.evidence.find(item => item.kind === 'cwos_read');
+  assert.equal(read.workspaceId, workspaceId);
+  assert.equal(read.cwosPrincipalId, principalId);
+  assert.equal(read.authority, 'ACCOUNT_MASTER_READ_ONLY');
+  assert.equal(read.recordKind, 'ACCOUNT_MASTER_REFERENCES');
+  assert.equal(read.sourceDigest, mailSourceDigest(masters));
+  assert.equal(read.approved, false);
+  assert.equal(read.nativeWork, false);
+  assert.equal(read.planId, undefined);
+  const reopened = new SQLiteMailStore({ databasePath });
+  try {
+    const reread = new MailWorkIntakeService({ store: reopened }).get('me', 'synthetic-mail');
+    assert.deepEqual(reread.customer.candidates[0].evidence, intake.get('me', 'synthetic-mail').customer.candidates[0].evidence);
+  } finally {
+    reopened.close();
+  }
 });
