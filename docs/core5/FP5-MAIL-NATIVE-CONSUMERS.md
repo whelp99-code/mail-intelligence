@@ -25,6 +25,26 @@ work; persisted evidence retains archive authority, source plan/snapshot/hash/
 version and reader principal separately from Graph identity. The two reads
 remain explicitly non-atomic. Finance values are not imported as a new ledger.
 
+### Explicit account-master GET
+
+`MAIL_INTELLIGENCE_CWOS_ACCOUNT_MASTER_GET=1` selects the account-only contract
+admitted by CRM PR56. It requires `service` identity and the existing private
+key reference. After the same native workspace/principal/membership checks,
+the reader uses GET `/api/cwos/accounts` with matching scope headers and no
+step-up header. CRM must independently enable
+`CWOS_V2_MAIL_READER_ACCOUNT_MASTER_GET=1`; this client does not change that
+policy or activate a service.
+
+Account rows are scoped by the authenticated server query, not a fabricated
+row workspace field. Any returned explicit scope must still match. Count
+mismatch, duplicate IDs, provider denial and redirects fail closed. No
+engagement, finance or mutation route is called. Candidates retain
+`ACCOUNT_MASTER_READ_ONLY` authority, semantic source digest and reader
+identity, with `approved=false`, `nativeWork=false` and non-atomic read times.
+This explicit mode does not use an archive plan or fall back on denial.
+With the flag absent/zero, the archive reader and its required plan remain
+unchanged. No schema migration or operational activation is included.
+
 `verify-cwos-v2-master-reader.mjs` reuses the admitted CRM R1/RS scratch-template,
 native HTTP commands and actual PG reader, with no network listener. Synthetic
 archive rows are explicit owned-fixture initialization; service reads cannot

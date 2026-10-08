@@ -8,7 +8,7 @@ const binding = {
   workspaceId: 'fixture-workspace', principalId: 'fixture-reader', kind: 'service', planId: 'fixture-plan',
 };
 
-function fixture() {
+function fixture({ accountMasterGet = false } = {}) {
   const state = {
     workspaceId: binding.workspaceId, version: 4, stateHash: 'a'.repeat(64),
     state: {
@@ -31,11 +31,18 @@ function fixture() {
     financialItems: [],
   };
   const calls = [];
-  const reader = new CwosMasterReader({ ...binding, fetchImpl: async (url, options) => {
+  const accountMasters = {
+    count: 1,
+    accounts: [{ id: 'native-account-fixture', name: 'Example Company', kinds: '["customer"]', status: 'active' }],
+  };
+  const reader = new CwosMasterReader({ ...binding, accountMasterGet, fetchImpl: async (url, options) => {
     calls.push({ path: url.pathname, ...options });
-    return Response.json(url.pathname.endsWith('/state') ? state : projection);
+    if (url.pathname === '/api/cwos/v2/state') return Response.json(state);
+    if (url.pathname === '/api/cwos/accounts') return Response.json(accountMasters);
+    assert.equal(url.pathname, '/api/cwos/v2/normalized-projections/fixture-plan');
+    return Response.json(projection);
   } });
-  return { reader, state, projection, calls };
+  return { reader, state, projection, accountMasters, calls };
 }
 
 test('v2 reader uses machine headers and returns only unconfirmed archive candidates', async () => {
@@ -163,4 +170,89 @@ test('v2 reader requires explicit actor and plan config and private credential f
     readFileImpl: async () => binding.credential,
   });
   assert.equal(loaded.planId, binding.planId);
+});
+
+test('explicit account-master mode uses scoped GET only and preserves candidate provenance', async () => {
+  const { reader, accountMasters, calls } = fixture({ accountMasterGet: true });
+  const result = await reader.readMasters({ workspaceId: binding.workspaceId });
+  assert.deepEqual(calls.map(call => call.path), ['/api/cwos/v2/state', '/api/cwos/accounts']);
+  for (const call of calls) {
+    assert.equal(call.method, 'GET');
+    assert.equal(call.redirect, 'manual');
+    assert.equal(call.headers['x-api-key'], binding.credential);
+    assert.equal(call.headers['x-workspace-id'], binding.workspaceId);
+    assert.equal(call.headers['x-principal-id'], binding.principalId);
+    assert.equal(call.headers['x-principal-kind'], 'service');
+    assert.equal(call.headers['x-step-up'], undefined);
+  }
+  assert.equal(result.items.length, 1);
+  const item = result.items[0];
+  assert.equal(item.externalId, accountMasters.accounts[0].id);
+  assert.equal(item.objectType, 'account');
+  assert.equal(item.type, 'customer');
+  assert.equal(item.status, 'candidate');
+  assert.equal(item.approved, false);
+  assert.equal(item.nativeWork, false);
+  assert.equal(item.source.authority, 'ACCOUNT_MASTER_READ_ONLY');
+  assert.equal(item.source.recordKind, 'ACCOUNT_MASTER_REFERENCES');
+  assert.equal(item.source.planId, undefined);
+  assert.equal(result.provenance.sourceDigest, mailSourceDigest(accountMasters));
+  assert.equal(result.provenance.atomicSnapshot, false);
+  assert.equal(result.provenance.engagementsReadAt, '');
+});
+
+test('account-master mode requires explicit service opt-in and keeps archive plan validation', () => {
+  const env = {
+    MAIL_INTELLIGENCE_CWOS_BASE_URL: binding.baseUrl,
+    MAIL_INTELLIGENCE_CWOS_API_KEY: binding.credential,
+    MAIL_INTELLIGENCE_INTAKE_WORKSPACE: binding.workspaceId,
+    MAIL_INTELLIGENCE_CWOS_PRINCIPAL_ID: binding.principalId,
+    MAIL_INTELLIGENCE_CWOS_PRINCIPAL_KIND: binding.kind,
+    MAIL_INTELLIGENCE_CWOS_ACCOUNT_MASTER_GET: '1',
+  };
+  const config = cwosMasterReaderConfigFromEnv(env);
+  assert.equal(config.accountMasterGet, true);
+  assert.equal(config.planId, '');
+  assert.equal(new CwosMasterReader(config).accountMasterGet, true);
+  for (const override of [
+    { MAIL_INTELLIGENCE_CWOS_ACCOUNT_MASTER_GET: 'true' },
+    { MAIL_INTELLIGENCE_CWOS_ACCOUNT_MASTER_GET: '0' },
+    { MAIL_INTELLIGENCE_CWOS_ACCOUNT_MASTER_GET: '' },
+    { MAIL_INTELLIGENCE_CWOS_PRINCIPAL_KIND: 'ai' },
+  ]) {
+    assert.throws(() => cwosMasterReaderConfigFromEnv({ ...env, ...override }), { code: 'CWOS_READER_CONFIG_INVALID' });
+  }
+  assert.throws(() => new CwosMasterReader({ ...binding, kind: 'ai', accountMasterGet: true }), { code: 'CWOS_READER_CONFIG_INVALID' });
+});
+
+test('account-master mode refuses inactive actor before the master GET', async () => {
+  const { reader, state, calls } = fixture({ accountMasterGet: true });
+  state.state.identity.memberships[0].status = 'SUSPENDED';
+  await assert.rejects(reader.readMasters({ workspaceId: binding.workspaceId }), { code: 'CWOS_RESPONSE_SCOPE_MISMATCH' });
+  assert.deepEqual(calls.map(call => call.path), ['/api/cwos/v2/state']);
+});
+
+test('account-master mode rejects incomplete, duplicate and foreign-scoped rows', async () => {
+  for (const [mutate, code] of [
+    [value => { value.count = 2; }, 'CWOS_MASTERS_INCOMPLETE'],
+    [value => { value.count = 2; value.accounts.push({ ...value.accounts[0] }); }, 'CWOS_RESPONSE_INVALID'],
+    [value => { value.workspaceId = 'foreign'; }, 'CWOS_RESPONSE_SCOPE_MISMATCH'],
+    [value => { value.accounts[0].workspace_id = 'foreign'; }, 'CWOS_RESPONSE_SCOPE_MISMATCH'],
+  ]) {
+    const { reader, accountMasters } = fixture({ accountMasterGet: true });
+    mutate(accountMasters);
+    await assert.rejects(reader.readMasters({ workspaceId: binding.workspaceId }), { code });
+  }
+});
+
+test('denied account-master GET never falls back to archive or engagement reads', async () => {
+  const { reader, calls } = fixture({ accountMasterGet: true });
+  const fetch = reader.fetchImpl;
+  reader.fetchImpl = async (url, options) => {
+    if (url.pathname !== '/api/cwos/accounts') return fetch(url, options);
+    calls.push({ path: url.pathname, ...options });
+    return new Response('', { status: 403 });
+  };
+  await assert.rejects(reader.readMasters({ workspaceId: binding.workspaceId }), { code: 'CWOS_UNAUTHENTICATED' });
+  assert.deepEqual(calls.map(call => call.path), ['/api/cwos/v2/state', '/api/cwos/accounts']);
 });
