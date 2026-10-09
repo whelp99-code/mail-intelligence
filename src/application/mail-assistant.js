@@ -8,6 +8,7 @@ import {
   summarizeThread,
 } from '../domain/mail-assistant-tools.js';
 import { splitMessageHistory } from '../domain/precision-classifier.js';
+import { assertReplySourceOpen, loadSentReplies, prepareReplyDraft } from './reply-draft-pipeline.js';
 
 const PERSONALITY_METADATA_PREFIX = 'assistant_personality_v1:';
 
@@ -128,6 +129,13 @@ export class MailAssistantService {
 
   draft(mailboxUser = '', messageId, options = {}) {
     const context = this.messageContext(mailboxUser, messageId);
+    assertReplySourceOpen(this.store.db, context.mailbox.id, {
+      ...context.message,
+      conversation_id: context.message.conversationId,
+      normalized_subject: context.message.normalizedSubject,
+      sender_email: context.message.senderEmail,
+      received_at: context.message.receivedAt,
+    });
     const personality = this.personality(mailboxUser);
     const meetingCandidate = options.mode === 'meeting_confirmation'
       ? this.meetingCandidate(mailboxUser, messageId, options)
@@ -135,7 +143,7 @@ export class MailAssistantService {
     const threadSummary = options.mode === 'rapid_reply'
       ? this.threadSummary(mailboxUser, messageId)
       : null;
-    const draft = generateSafeDraft({
+    const generated = generateSafeDraft({
       message: context.message,
       classification: context.classification,
       mode: options.mode || 'rapid_reply',
@@ -144,6 +152,17 @@ export class MailAssistantService {
       meetingCandidate,
       threadSummary,
     });
+    const ownerSentRows = loadSentReplies(this.store.db, { mailboxId: context.mailbox.id });
+    const prepared = prepareReplyDraft(context.message, generated, {
+      sentRows: ownerSentRows,
+      recipients: Array.isArray(generated.to) ? generated.to : [generated.to],
+      ownerInput: options.draftText || '',
+    });
+    const draft = {
+      ...prepared,
+      voiceEvidence: prepared.voiceEvidence,
+      needsClarification: prepared.needsClarification,
+    };
     this.store.audit('assistant.draft.generated', {
       entityType: 'message',
       entityId: context.message.id,
