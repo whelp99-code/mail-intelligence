@@ -236,6 +236,33 @@ for (const example of [
   });
 }
 
+for (const example of [
+  { name: 'no-reply attachment check', senderEmail: 'no-reply@example.invalid', body: '첨부파일을 확인해 주시기 바랍니다' },
+  { name: 'no-reply reply boilerplate', senderEmail: 'no-reply@example.invalid', body: '회신 부탁드립니다' },
+  { name: 'notification file check', senderEmail: 'notification@example.invalid', body: '파일을 확인 부탁드립니다' },
+  { name: 'advertisement mail check', subject: '[광고] Example Project 할인', body: '메일을 확인 부탁드립니다' },
+  { name: 'English attached-file boilerplate', senderEmail: 'no-reply@example.invalid', body: 'Please see the attached file' },
+]) {
+  test(`${example.name} remains excluded without a business target`, async (t) => {
+    const workspaceId = '44444444-4444-4444-8444-444444444444';
+    const { store, binding, run, posts } = await fixture(t, {
+      subject: 'Example Project', ...example, workspaceId,
+    });
+    binding.companyMemory = { workspaceId, provider: 'outlook' };
+    const result = await run();
+    assert.deepEqual(result.failures, []);
+    assert.equal(result.accepted, 1);
+    assert.equal(store.getPrecisionClassification(store.getMailbox('me').id, 'mail').workState, 'reference');
+    assert.equal(result.candidateSkipped.length, 1);
+    assert.equal(result.candidateSkipped[0].code, 'NON_BUSINESS_REFERENCE');
+    assert.equal(result.deliveredCandidates.length, 0);
+    assert.equal(posts.length, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages').get().n, 1);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_work_links').get().n, 1);
+  });
+}
+
 test('ordinary reference knowledge still publishes CRM and MS candidates', async (t) => {
   const workspaceId = '44444444-4444-4444-8444-444444444444';
   const { store, binding, run, posts } = await fixture(t, {
