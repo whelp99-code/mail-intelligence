@@ -2,6 +2,7 @@ import { CwosWorkSystemAdapter } from '../adapters/cwos-work-system.js';
 import { createIntakeAuthorization } from './intake-authorization.js';
 import { MailWorkIntakeService } from './mail-work-intake.js';
 import { mailSourceDigest } from '../adapters/cwos-mail-command.js';
+import { enqueueMailCompanyMemoryOutbox } from './company-memory-donor.js';
 
 function failure(error, fallbackCode) {
   return {
@@ -40,6 +41,7 @@ export function createProductionIntakeBinding({
   readMasters = null,
   authorization = null,
   candidateWriter = null,
+  companyMemory = null,
 } = {}) {
   if (!db) throw Object.assign(new Error('INTAKE_BINDING_REQUIRED'), { code: 'INTAKE_BINDING_REQUIRED' });
   const resolvedAuthorization = authorization || createIntakeAuthorization([{
@@ -50,7 +52,7 @@ export function createProductionIntakeBinding({
     db,
     cwosClient: typeof readMasters === 'function' ? { readMasters } : null,
   });
-  return { authorization: resolvedAuthorization, workSystem, candidateWriter };
+  return { authorization: resolvedAuthorization, workSystem, candidateWriter, companyMemory };
 }
 
 export async function ingestAfterCommittedSync({
@@ -61,6 +63,7 @@ export async function ingestAfterCommittedSync({
   workspaceId = '',
   messageIds = [],
   candidateWriter = null,
+  companyMemory = null,
 } = {}) {
   if (!store || !workSystem || typeof authorization?.authorize !== 'function') {
     throw Object.assign(new Error('INTAKE_BINDING_REQUIRED'), { code: 'INTAKE_BINDING_REQUIRED' });
@@ -103,6 +106,28 @@ export async function ingestAfterCommittedSync({
         ? { assertBinding, providerIdentity }
         : { workspaceId: scope.workspaceId, readResult, assertBinding, providerIdentity });
       acceptedMessageIds.push(projection.messageId);
+      if (companyMemory) {
+        try {
+          if (assertBinding) assertBinding();
+          if (companyMemory.workspaceId !== scope.workspaceId) {
+            throw Object.assign(new Error('COMPANY_WORKSPACE_MISMATCH'), { code: 'COMPANY_WORKSPACE_MISMATCH' });
+          }
+          const snapshot = intake.source(scope.mailboxUser, messageId);
+          if (mailSourceDigest(snapshot.source) !== mailSourceDigest(projection.source)) {
+            throw Object.assign(new Error('INTAKE_SOURCE_CHANGED'), { code: 'INTAKE_SOURCE_CHANGED' });
+          }
+          enqueueMailCompanyMemoryOutbox(store.db, {
+            workspaceId: scope.workspaceId,
+            kind: 'INBOX_RECEIVED',
+            provider: companyMemory.provider,
+            mailbox: snapshot.mailbox.address || snapshot.mailbox.graph_user || scope.mailboxKey,
+            sourceLocator: snapshot.source.messageId,
+            sourceEventId: snapshot.source.messageId,
+          }, new Date().toISOString());
+        } catch (error) {
+          failures.push({ messageId, ...failure(error, 'COMPANY_MEMORY_ENQUEUE_FAILED') });
+        }
+      }
       const hasCandidates = ['customer', 'project'].some(type =>
         projection[type]?.candidates?.some(item => item.status === 'candidate'))
         || projection.work?.classification?.projectResolution === 'candidate';

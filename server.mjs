@@ -3293,6 +3293,7 @@ function currentIntakeBinding() {
     db: requireMailMemory().store.db,
     authorization: intakeGrant.authorization(),
     candidateWriter: cwosCandidateWriter,
+    companyMemory,
     readMasters: cwosMasterReader
       ? ({ workspaceId, cursor } = {}) => cwosMasterReader.readMasters({ workspaceId, cursor })
       : null,

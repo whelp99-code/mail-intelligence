@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { syntheticIdentityToken } from './fixtures/synthetic-identity-token.mjs';
+import { generateKeyPairSync } from 'node:crypto';
 
 const accessKey = 'synthetic-mail-access-key';
 const cwosKey = 'synthetic-cwos-key-0123456789abcdef';
@@ -16,7 +17,7 @@ const expectedEmail = 'delegate@example.invalid';
 const pin = {
   version: 1,
   revision: 1,
-  workspaceId: 'synthetic-workspace',
+  workspaceId: '44444444-4444-4444-8444-444444444444',
   mailboxUser: 'me',
   tenantId: '11111111-1111-4111-8111-111111111111',
   principalId: '22222222-2222-4222-8222-222222222222',
@@ -40,7 +41,7 @@ async function reservePort() {
   return port;
 }
 
-function startMail(dataDir, { identityUrl, cwosUrl, graphUrl, port, writerUrl, writerKeyFile }) {
+function startMail(dataDir, { identityUrl, cwosUrl, graphUrl, port, writerUrl, writerKeyFile, companyEnv = {} }) {
   const child = spawn(process.execPath, ['server.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -66,6 +67,7 @@ function startMail(dataDir, { identityUrl, cwosUrl, graphUrl, port, writerUrl, w
       MICROSOFT_TENANT_ID: pin.tenantId,
       OUTLOOK_GRAPH_ACCESS_TOKEN: syntheticIdentityToken(pin),
       MAIL_SEND_RECONCILIATION_INTERVAL_MS: '120000',
+      ...companyEnv,
       ...(writerUrl ? {
         MAIL_INTELLIGENCE_CWOS_CANDIDATES_ENABLED: '1',
         MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_BASE_URL: writerUrl,
@@ -149,6 +151,40 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   const writerKey = 'synthetic-candidate-writer-key-0123456789';
   const writerKeyFile = join(dataDir, 'candidate-writer.key');
   await writeFile(writerKeyFile, writerKey, { mode: 0o600, flag: 'wx' });
+  const companyCommand = join(dataDir, 'sb-company');
+  await writeFile(companyCommand, `#!/usr/bin/env node
+const chunks = [];
+process.stdin.on('data', chunk => chunks.push(chunk));
+process.stdin.on('end', () => {
+  const envelope = JSON.parse(Buffer.concat(chunks).toString());
+  if (envelope.authority.operation !== 'receive') process.exit(1);
+  process.stdout.write(JSON.stringify({receipt: {
+    workspace_id: envelope.authority.workspace_id,
+    request_digest: envelope.authority.request_digest,
+    operation: 'receive', candidate_id: envelope.arguments.candidate_id,
+    result: {state: 'candidate'},
+  }}));
+});
+`, { mode: 0o700 });
+  const companyConfig = join(dataDir, 'company-config.json');
+  const companyAuthority = join(dataDir, 'company-authority.json');
+  const companyKey = join(dataDir, 'company-signing.pem');
+  const { privateKey } = generateKeyPairSync('ed25519');
+  await writeFile(companyKey, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  await writeFile(companyConfig, '{}', { mode: 0o600 });
+  await writeFile(companyAuthority, JSON.stringify({
+    keyId: 'fixture:key', providerInstanceId: 'provider:mail', workspaceId: pin.workspaceId,
+    principalId: 'fixture:principal', agentId: 'fixture:agent', sessionId: 'fixture:session',
+    projects: [], policyRevision: 'fixture:policy', deletionSequence: 0,
+    deletionSetRoot: `sha256:${'a'.repeat(64)}`,
+  }), { mode: 0o600 });
+  const companyEnv = {
+    COMPANY_MEMORY_SB_COMPANY: companyCommand,
+    COMPANY_MEMORY_SB_COMPANY_CONFIG: companyConfig,
+    COMPANY_MEMORY_SIGNING_KEY_FILE: companyKey,
+    COMPANY_MEMORY_AUTHORITY_FILE: companyAuthority,
+    MAIL_COMPANY_MEMORY_TICK_INTERVAL_MS: '5000',
+  };
   const writer = createServer((request, response) => {
     assert.equal(request.method, 'POST');
     assert.equal(request.url, '/api/cwos/v2/mail-candidates');
@@ -291,6 +327,7 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   }
 
   mail = startMail(dataDir, {
+    companyEnv,
     writerUrl, writerKeyFile,
     identityUrl: `${identityUrl}/me`,
     cwosUrl,
@@ -352,6 +389,7 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
 
   await stopChild(mail.child);
   mail = startMail(dataDir, {
+    companyEnv,
     writerUrl, writerKeyFile,
     identityUrl: `${identityUrl}/me`,
     cwosUrl,
@@ -386,6 +424,24 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   assert.deepEqual(restartedSourceEvidence, sourceEvidence);
   assert.deepEqual((afterRestartBody.project?.candidates || []).map((candidate) => candidate.external_id), candidates.map((candidate) => candidate.external_id));
 
+  const companyEmitted = new Promise((resolve, reject) => {
+    let output = '';
+    const timeout = setTimeout(() => finish(new Error('company candidate receipt timed out')), 12000);
+    const onExit = () => finish(new Error('server exited before company receipt'));
+    const onData = chunk => {
+      output += chunk;
+      if (output.includes('"emitted":1')) finish();
+    };
+    const finish = error => {
+      clearTimeout(timeout);
+      mail.child.stdout.off('data', onData);
+      mail.child.off('exit', onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    mail.child.stdout.on('data', onData);
+    mail.child.once('exit', onExit);
+  });
   const committedSync = await fetch(`${restartedOrigin}/api/outlook/sync`, {
     method: 'POST',
     headers: restartedHeaders,
@@ -399,6 +455,17 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   assert.equal(writerHits.length, 1);
   assert.equal(graphHits.length > 0, true);
   assert.equal(cwosHits.length, 6);
+  await companyEmitted;
+  const companyStore = new SQLiteMailStore({ databasePath: join(dataDir, 'mail-intelligence.sqlite') });
+  try {
+    const rows = companyStore.db.prepare('SELECT * FROM mail_company_memory_outbox').all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].source_locator, 'synthetic-mail');
+    assert.equal(rows[0].kind, 'INBOX_RECEIVED');
+    assert.equal(rows[0].status, 'EMITTED');
+  } finally {
+    companyStore.close();
+  }
   const syncedProjectionResponse = await fetch(`${restartedOrigin}/api/work-links/intake?messageId=synthetic-mail`, {
     headers: { Cookie: restartedHeaders.Cookie },
   });
