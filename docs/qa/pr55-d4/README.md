@@ -1,5 +1,9 @@
 # D4 UI QA: blocked at the bounded retry limit
 
+This is the preserved historical retry receipt. The separately authorized
+continuation is recorded in [resumed.md](resumed.md), with three fresh passing
+captures and a new product head. The failure image below remains failure evidence.
+
 Product head exercised: `a2ef78622a0a4f076891026e406b11c0c4585c4b`.
 All accounts/messages are synthetic. No production login, real browser/mail,
 send, external business write, payment, merge or deployment.
