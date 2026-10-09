@@ -3,6 +3,7 @@ import { createIntakeAuthorization } from './intake-authorization.js';
 import { MailWorkIntakeService } from './mail-work-intake.js';
 import { mailSourceDigest } from '../adapters/cwos-mail-command.js';
 import { enqueueMailCompanyMemoryOutbox } from './company-memory-donor.js';
+import { hasCurrentBusinessRequest } from '../domain/precision-classifier.js';
 
 function failure(error, fallbackCode) {
   return {
@@ -96,6 +97,7 @@ export async function ingestAfterCommittedSync({
 
   const failures = masterFailure ? [{ messageId: '', ...masterFailure }] : [];
   const skipped = [];
+  const candidateSkipped = [];
   const acceptedMessageIds = [];
   let candidateVersion = readResult?.provenance?.runtimeVersion;
   const deliveredCandidates = [];
@@ -106,6 +108,18 @@ export async function ingestAfterCommittedSync({
         ? { assertBinding, providerIdentity }
         : { workspaceId: scope.workspaceId, readResult, assertBinding, providerIdentity });
       acceptedMessageIds.push(projection.messageId);
+      const classification = projection.work?.classification;
+      const businessRequest = hasCurrentBusinessRequest(intake.source(scope.mailboxUser, messageId).message);
+      if (!businessRequest && classification?.workState === 'reference'
+        && ['promotional-no-explicit-user-action', 'marketing-reference',
+          'automatic-notification-reference', 'automated-notification-reference', 'low-value-automated-reference']
+          .includes(classification.evidence?.workState?.rule)
+        && !projection.correction
+        && projection.customer?.status !== 'confirmed'
+        && projection.project?.status !== 'confirmed') {
+        candidateSkipped.push({ messageId, code: 'NON_BUSINESS_REFERENCE', rule: classification.evidence.workState.rule });
+        continue;
+      }
       if (companyMemory) {
         try {
           if (assertBinding) assertBinding();
@@ -174,6 +188,7 @@ export async function ingestAfterCommittedSync({
     acceptedMessageIds,
     failures,
     skipped,
+    candidateSkipped,
     deliveredCandidates,
   };
   store.audit('mail.intake.completed', {
@@ -184,6 +199,7 @@ export async function ingestAfterCommittedSync({
       candidatesDelivered: deliveredCandidates.length,
       failed: failures.length,
       skipped: skipped.length,
+      candidatesSkipped: candidateSkipped.length,
       mastersApplied: summary.mastersApplied,
       code: summary.code,
       mailbox: providerIdentity?.mailboxUser || scope.mailboxKey,

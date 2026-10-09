@@ -366,6 +366,15 @@ function hasVerifiedDirectRequest(text) {
   return hasConcreteRequest(value);
 }
 
+export function hasCurrentBusinessRequest(message = {}) {
+  const currentText = splitMessageHistory(message.body || message.bodyPreview || '').currentContent;
+  return clausesWithOffsets(currentText).some((clause) =>
+    /견적|발주|계약|납품|납기|미팅|회의|심사|마케팅\s*자료|\b(?:quotation|quote|purchase\s+order|contract|delivery|meeting|marketing\s+materials?)\b/i.test(clause.text)
+    && /검토|확인|승인|회신|답변|진행|참석|보내|발행|작성|제출|공유|협의|요청|부탁|\b(?:review|check|approve|confirm|reply|respond|proceed|attend|send|provide|submit|share|request)\b/i.test(clause.text)
+    && !/(?:필요하시면|원하시면|필요한\s*경우).{0,40}(?:회신|연락|문의)/i.test(clause.text)
+    && hasVerifiedDirectRequest(clause.text));
+}
+
 function verifiedActionClauses(clauses = []) {
   const seen = new Set();
   const verified = [];
