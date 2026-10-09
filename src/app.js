@@ -376,8 +376,20 @@ function insightFor(messageId) {
   return currentResult?.messageInsights?.find((item) => item.id === messageId);
 }
 
-function precisionFor(messageId) {
-  return currentMessages.find((item) => item.id === messageId)?.precision || null;
+function precisionFor(messageId, message = currentMessages.find((item) => item.id === messageId)) {
+  const precision = message?.precision || null;
+  if (!message?.handledElsewhere) return precision;
+  return {
+    ...precision,
+    workState: 'completed',
+    nextActor: 'none',
+    operational: {
+      ...precision?.operational,
+      lane: 'reference',
+      autoPlacementAllowed: false,
+      reasons: ['외부 회신으로 처리된 메일입니다.'],
+    },
+  };
 }
 
 function precisionStateLabel(value) {
@@ -622,7 +634,7 @@ async function saveHandledElsewhere(messageId, { channel = 'kakao', note = '', u
 
 function messageCard(message) {
   const insight = insightFor(message.id);
-  const precision = message.precision;
+  const precision = precisionFor(message.id, message);
   const lane = precision?.workState || legacyToPrecisionState(effectiveStatus(insight));
   const operationalLane = precision?.operational?.lane || 'review';
   const article = document.createElement('article');
@@ -1061,7 +1073,7 @@ function selectMessage(messageId) {
   selectedMessageId = messageId;
   const message = currentMessages.find((item) => item.id === messageId);
   const insight = insightFor(messageId);
-  const precision = message?.precision || null;
+  const precision = precisionFor(messageId, message);
   if (!message && !insight) return;
 
   const tasks = insight?.tasks || [];

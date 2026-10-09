@@ -23,3 +23,71 @@ test('handled messages leave both action lanes and undo restores their classific
   assert.equal(runInContext('laneForMessage("handled-fixture")', context), 'action_required');
   assert.equal(runInContext('operationalLaneForMessage("handled-fixture")', context), 'do_now');
 });
+
+for (const channel of ['phone', 'kakao']) {
+  test(`handled ${channel} state reaches actual card and detail despite cached classification`, () => {
+    const message = {
+      id: `handled-${channel}`,
+      subject: 'Synthetic handled mail',
+      precision: {
+        workState: 'action_required', nextActor: 'me',
+        operational: { lane: 'do_now', autoPlacementAllowed: true },
+      },
+      handledElsewhere: { channel, markedAt: '2026-10-01T01:00:00Z' },
+    };
+    const raw = JSON.stringify(message.precision);
+    const node = () => {
+      const fields = new Map();
+      return {
+        dataset: {}, className: '', innerHTML: '', textContent: '',
+        classList: { add() {}, remove() {} },
+        setAttribute() {}, addEventListener() {}, appendChild() {},
+        querySelector(selector) {
+          if (!fields.has(selector)) fields.set(selector, node());
+          return fields.get(selector);
+        },
+        querySelectorAll: () => [],
+      };
+    };
+    const detail = node();
+    const context = createContext({
+      currentMessages: [message], message, selectedMessageId: null,
+      document: { createElement: node }, messageDetail: detail, messageList: node(),
+      insightFor: () => null,
+      operationalLaneLabel: value => value, precisionStateLabel: value => value,
+      precisionSummaryLine: value => `${value.operational.lane}:${value.workState}`,
+      legacyToPrecisionState: () => 'review', effectiveStatus: () => 'review',
+      statusLabel: value => value, priorityLabel: value => value,
+      escapeHtml: value => String(value ?? ''), safeExternalUrl: () => null,
+      operationalDetail: () => '', precisionCorrectionPanel: () => '',
+      assistantToolPanel: () => '', detailBlock: () => '',
+      handledElsewhereControls: node, loadReceivedAttachments() {}, renderActionPanel() {},
+      savePrecisionCorrection() {},
+    });
+    for (const name of ['precisionFor', 'messageCard', 'selectMessage']) {
+      const source = app.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
+      assert.ok(source, `real ${name} source is required`);
+      runInContext(source, context);
+    }
+    const check = () => {
+      const card = runInContext('messageCard(message)', context);
+      assert.match(card.className, /precision-completed operational-reference/);
+      assert.equal(card.querySelector('.status-pill').textContent, 'reference · completed');
+      runInContext('selectMessage(message.id)', context);
+      assert.match(detail.innerHTML, /class="status-pill">reference · completed<\/span>/);
+      assert.equal(JSON.stringify(message.precision), raw, 'model provenance is not overwritten');
+      assert.equal(JSON.stringify(context.message.precision), raw);
+    };
+    check();
+    // Re-fetch carries the stored marker with the same older classification.
+    context.currentMessages = [structuredClone(message)];
+    context.message = context.currentMessages[0];
+    check();
+    context.currentMessages = [];
+    assert.match(runInContext('messageCard(message)', context).className, /operational-reference/);
+    context.currentMessages = [context.message];
+    context.message.handledElsewhere = null;
+    const restored = runInContext('messageCard(message)', context);
+    assert.match(restored.className, /precision-action-required operational-do-now/);
+  });
+}
