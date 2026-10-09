@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
@@ -40,7 +40,7 @@ async function reservePort() {
   return port;
 }
 
-function startMail(dataDir, { identityUrl, cwosUrl, graphUrl, port }) {
+function startMail(dataDir, { identityUrl, cwosUrl, graphUrl, port, writerUrl, writerKeyFile }) {
   const child = spawn(process.execPath, ['server.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -66,6 +66,12 @@ function startMail(dataDir, { identityUrl, cwosUrl, graphUrl, port }) {
       MICROSOFT_TENANT_ID: pin.tenantId,
       OUTLOOK_GRAPH_ACCESS_TOKEN: syntheticIdentityToken(pin),
       MAIL_SEND_RECONCILIATION_INTERVAL_MS: '120000',
+      ...(writerUrl ? {
+        MAIL_INTELLIGENCE_CWOS_CANDIDATES_ENABLED: '1',
+        MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_BASE_URL: writerUrl,
+        MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_KEY_FILE: writerKeyFile,
+        MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_PRINCIPAL_ID: 'synthetic-writer',
+      } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -139,6 +145,34 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   const identityHits = [];
   const cwosHits = [];
   const graphHits = [];
+  const writerHits = [];
+  const writerKey = 'synthetic-candidate-writer-key-0123456789';
+  const writerKeyFile = join(dataDir, 'candidate-writer.key');
+  await writeFile(writerKeyFile, writerKey, { mode: 0o600, flag: 'wx' });
+  const writer = createServer((request, response) => {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.url, '/api/cwos/v2/mail-candidates');
+    assert.equal(request.headers['x-api-key'], writerKey);
+    assert.equal(request.headers['x-principal-id'], 'synthetic-writer');
+    assert.equal(request.headers['x-workspace-id'], pin.workspaceId);
+    assert.equal(request.headers['x-principal-kind'], 'service');
+    assert.equal(request.headers['x-step-up'], undefined);
+    let content = '';
+    request.on('data', chunk => { content += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(content);
+      writerHits.push(body);
+      assert.equal(body.expectedVersion, 4);
+      assert.equal(body.mailbox, expectedEmail);
+      response.writeHead(201, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        candidate: { ...body, id: `mail-candidate-${'c'.repeat(64)}`,
+          status: 'CANDIDATE', confirmed: false, freshness: 'producer_unverified',
+          createdByPrincipalId: 'synthetic-writer', version: 1 },
+        runtimeVersion: 5,
+      }));
+    });
+  });
   let identityMode = 'match';
   const identity = createServer((request, response) => {
     identityHits.push(request.headers.authorization || '');
@@ -223,10 +257,11 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   const identityUrl = await listen(identity);
   const cwosUrl = await listen(cwos);
   const graphUrl = await listen(graph);
+  const writerUrl = await listen(writer);
   let mail = null;
   t.after(async () => {
     if (mail) await stopChild(mail.child);
-    await Promise.all([closeServer(identity), closeServer(cwos), closeServer(graph)]);
+    await Promise.all([closeServer(identity), closeServer(cwos), closeServer(graph), closeServer(writer)]);
     await rm(dataDir, { recursive: true, force: true });
   });
 
@@ -256,6 +291,7 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   }
 
   mail = startMail(dataDir, {
+    writerUrl, writerKeyFile,
     identityUrl: `${identityUrl}/me`,
     cwosUrl,
     graphUrl: `${graphUrl}/v1.0`,
@@ -316,6 +352,7 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
 
   await stopChild(mail.child);
   mail = startMail(dataDir, {
+    writerUrl, writerKeyFile,
     identityUrl: `${identityUrl}/me`,
     cwosUrl,
     graphUrl: `${graphUrl}/v1.0`,
@@ -358,6 +395,8 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   assert.equal(committedSync.status, 200, JSON.stringify(committedSyncBody));
   assert.equal(committedSyncBody.connected, true);
   assert.equal(committedSyncBody.sync.upserted >= 1, true);
+  assert.equal(committedSyncBody.sync.intake.candidatesDelivered, 1);
+  assert.equal(writerHits.length, 1);
   assert.equal(graphHits.length > 0, true);
   assert.equal(cwosHits.length, 6);
   const syncedProjectionResponse = await fetch(`${restartedOrigin}/api/work-links/intake?messageId=synthetic-mail`, {
@@ -411,4 +450,5 @@ test('composed server proves identity, reads CWOS, and blocks tenant mismatch be
   assert.equal(identityHits.length, identityBeforeDeniedSync);
   assert.equal(graphHits.length, graphBeforeDeniedSync);
   assert.equal(cwosHits.length, 6);
+  assert.equal(writerHits.length, 1);
 });

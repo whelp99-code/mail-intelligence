@@ -1548,6 +1548,10 @@ async function fetchOutlookMessages(top = 25, { forceInitial = false, replyDraft
         upserted: synchronized.upserts,
         deleted: synchronized.deletions,
         attachmentErrors: synchronized.attachmentErrors,
+        intake: synchronized.intake ? {
+          candidatesDelivered: synchronized.intake.deliveredCandidates?.length || 0,
+          failures: synchronized.intake.failures?.length || 0,
+        } : null,
         cachedBefore,
         totalCached: memory.store.countMessages(synchronized.mailbox.id),
         folderResults: synchronized.folderResults,
@@ -3228,6 +3232,8 @@ const handledElsewhereApi = createHandledElsewhereApi({
 });
 const intakeWorkspaceId = intakeWorkspaceFromEnv(process.env);
 const cwosMasterReader = await loadCwosMasterReader(process.env);
+const { loadCwosMailCandidateWriter } = await import('./src/adapters/cwos-mail-candidate-writer.js');
+const cwosCandidateWriter = await loadCwosMailCandidateWriter(process.env);
 const intakeBindingPath = join(dataRoot, '.mail-intake-binding.json');
 const intakeGrant = createIntakeGrant({
   binding: await readPinnedBinding(intakeBindingPath, readFile),
@@ -3286,6 +3292,7 @@ function currentIntakeBinding() {
   return createProductionIntakeBinding({
     db: requireMailMemory().store.db,
     authorization: intakeGrant.authorization(),
+    candidateWriter: cwosCandidateWriter,
     readMasters: cwosMasterReader
       ? ({ workspaceId, cursor } = {}) => cwosMasterReader.readMasters({ workspaceId, cursor })
       : null,

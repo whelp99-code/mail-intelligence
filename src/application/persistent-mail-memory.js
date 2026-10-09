@@ -351,6 +351,7 @@ export class PersistentMailMemoryRuntime {
           precision,
           intake: intake ? {
             accepted: intake.accepted,
+            candidatesDelivered: intake.deliveredCandidates?.length || 0,
             failed: intake.failures.length,
             skipped: intake.skipped.length,
             mastersApplied: intake.mastersApplied,
@@ -419,6 +420,7 @@ export class PersistentMailMemoryRuntime {
         mailboxUser,
         workspaceId: authorization.workspaceFor(mailboxUser),
         messageIds: result?.upsertedMessageIds || [],
+        candidateWriter: binding.candidateWriter,
       });
     } catch (error) {
       intake = {

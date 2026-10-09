@@ -5,6 +5,7 @@
  */
 
 import { mailSourceDigest } from './cwos-mail-command.js';
+import { normalizeCwosPrincipalId, resolveCwosCredentialFile } from './cwos-credential-identity.js';
 
 const STATE_ROUTE = '/api/cwos/v2/state';
 const ACCOUNT_MASTER_ROUTE = '/api/cwos/accounts';
@@ -126,7 +127,7 @@ export function cwosMasterReaderConfigFromEnv(env = {}) {
     credential: credentialFile ? '' : assertCredential(credential),
     credentialFile,
     workspaceId: assertWorkspaceId(env.MAIL_INTELLIGENCE_INTAKE_WORKSPACE),
-    principalId: assertWorkspaceId(principalId),
+    principalId: assertWorkspaceId(normalizeCwosPrincipalId(principalId)),
     kind,
     accountMasterGet,
     planId: accountMasterGet ? '' : assertWorkspaceId(planId),
@@ -138,18 +139,18 @@ export async function loadCwosMasterReader(env = {}, {
   fetchImpl = globalThis.fetch,
   readFileImpl,
   statImpl,
+  realpathImpl,
 } = {}) {
   const config = cwosMasterReaderConfigFromEnv(env);
   if (!config) return null;
   let credential = config.credential;
   if (config.credentialFile) {
     const readFile = readFileImpl || (await import('node:fs/promises')).readFile;
-    const stat = statImpl || (await import('node:fs/promises')).stat;
-    const metadata = await stat(config.credentialFile);
+    const { path, metadata } = await resolveCwosCredentialFile(config.credentialFile, { statImpl, realpathImpl });
     if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) {
       fail('CWOS_READER_CONFIG_INVALID', 'CWOS credential file must be private.', 500);
     }
-    credential = assertCredential(String(await readFile(config.credentialFile, 'utf8')).trim());
+    credential = assertCredential(String(await readFile(path, 'utf8')).trim());
   }
   return new CwosMasterReader({ ...config, credential, fetchImpl });
 }
