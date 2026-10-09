@@ -385,7 +385,7 @@ function precisionFor(messageId, message = currentMessages.find((item) => item.i
     nextActor: 'none',
     operational: {
       ...precision?.operational,
-      lane: 'reference',
+      lane: 'archive',
       autoPlacementAllowed: false,
       reasons: ['외부 회신으로 처리된 메일입니다.'],
     },
@@ -483,7 +483,7 @@ function precisionSummaryLine(classification) {
 }
 
 function operationalLaneForMessage(messageId) {
-  if (currentMessages.find((message) => message.id === messageId)?.handledElsewhere) return 'reference';
+  if (currentMessages.find((message) => message.id === messageId)?.handledElsewhere) return 'archive';
   const precision = precisionFor(messageId);
   return precision?.operational?.lane || 'review';
 }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
+import { operationalLaneLabel, DISPLAY_LABELS } from '../src/ui-labels.js';
 const app=await readFile(new URL('../src/app.js',import.meta.url),'utf8');
 test('assistant and search reject stale success, rejection, and finally writes',()=>{assert.match(app,/assistantRequestSequence/);assert.match(app,/searchRequestSequence/);assert.match(app,/messageId !== selectedMessageId/);assert.match(app,/if \(requestSequence !== assistantRequestSequence \|\| messageId !== selectedMessageId\) return;\n {4}renderAssistantOutput\(error/);assert.match(app,/if \(requestSequence !== searchRequestSequence\) return;\n {4}fetchStatus/);assert.match(app,/if \(requestSequence === searchRequestSequence\) searchDatabase\.disabled = false;/);});
 test('database result state does not mutate loaded mailbox and clears on query clear',()=>{assert.doesNotMatch(app,/else currentMessages\.push/);assert.match(app,/databaseSearchResults\.hidden = true/);assert.match(app,/await loadOutlookMessages\(\);/);});
@@ -18,7 +19,8 @@ test('handled messages leave both action lanes and undo restores their classific
     runInContext(source, context);
   }
   assert.equal(runInContext('laneForMessage("handled-fixture")', context), 'completed');
-  assert.equal(runInContext('operationalLaneForMessage("handled-fixture")', context), 'reference');
+  assert.equal(runInContext('operationalLaneForMessage("handled-fixture")', context), 'archive');
+  assert.equal(operationalLaneLabel(runInContext('operationalLaneForMessage("handled-fixture")', context)), DISPLAY_LABELS.archive);
   messages[0].handledElsewhere = null;
   assert.equal(runInContext('laneForMessage("handled-fixture")', context), 'action_required');
   assert.equal(runInContext('operationalLaneForMessage("handled-fixture")', context), 'do_now');
@@ -54,7 +56,7 @@ for (const channel of ['phone', 'kakao']) {
       currentMessages: [message], message, selectedMessageId: null,
       document: { createElement: node }, messageDetail: detail, messageList: node(),
       insightFor: () => null,
-      operationalLaneLabel: value => value, precisionStateLabel: value => value,
+      operationalLaneLabel,
       precisionSummaryLine: value => `${value.operational.lane}:${value.workState}`,
       legacyToPrecisionState: () => 'review', effectiveStatus: () => 'review',
       statusLabel: value => value, priorityLabel: value => value,
@@ -64,17 +66,17 @@ for (const channel of ['phone', 'kakao']) {
       handledElsewhereControls: node, loadReceivedAttachments() {}, renderActionPanel() {},
       savePrecisionCorrection() {},
     });
-    for (const name of ['precisionFor', 'messageCard', 'selectMessage']) {
+    for (const name of ['precisionStateLabel', 'precisionFor', 'messageCard', 'selectMessage']) {
       const source = app.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
       assert.ok(source, `real ${name} source is required`);
       runInContext(source, context);
     }
     const check = () => {
       const card = runInContext('messageCard(message)', context);
-      assert.match(card.className, /precision-completed operational-reference/);
-      assert.equal(card.querySelector('.status-pill').textContent, 'reference · completed');
+      assert.match(card.className, /precision-completed operational-archive/);
+      assert.equal(card.querySelector('.status-pill').textContent, `${DISPLAY_LABELS.archive} · 완료`);
       runInContext('selectMessage(message.id)', context);
-      assert.match(detail.innerHTML, /class="status-pill">reference · completed<\/span>/);
+      assert.ok(detail.innerHTML.includes(`class="status-pill">${DISPLAY_LABELS.archive} · 완료</span>`));
       assert.equal(JSON.stringify(message.precision), raw, 'model provenance is not overwritten');
       assert.equal(JSON.stringify(context.message.precision), raw);
     };
@@ -84,7 +86,7 @@ for (const channel of ['phone', 'kakao']) {
     context.message = context.currentMessages[0];
     check();
     context.currentMessages = [];
-    assert.match(runInContext('messageCard(message)', context).className, /operational-reference/);
+    assert.match(runInContext('messageCard(message)', context).className, /operational-archive/);
     context.currentMessages = [context.message];
     context.message.handledElsewhere = null;
     const restored = runInContext('messageCard(message)', context);
