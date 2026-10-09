@@ -8,7 +8,10 @@ import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { createProductionIntakeBinding, ingestAfterCommittedSync } from '../src/application/sync-work-intake.js';
 import { CwosMailCandidateWriter } from '../src/adapters/cwos-mail-candidate-writer.js';
 
-async function fixture(t, { subject = 'Example Project quote request', body = 'Please review Example Project.' } = {}) {
+async function fixture(t, {
+  subject = 'Example Project quote request', body = 'Please review Example Project.',
+  workspaceId = 'fixture-workspace',
+} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'mr-candidates-'));
   const store = new SQLiteMailStore({ databasePath: join(directory, 'mail.sqlite') });
   t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
@@ -25,7 +28,6 @@ async function fixture(t, { subject = 'Example Project quote request', body = 'P
     })],
     deltaLink: 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?fixture=1',
   });
-  const workspaceId = 'fixture-workspace';
   const posts = [];
   const binding = createProductionIntakeBinding({
     db: store.db, mailboxUser: 'me', workspaceId,
@@ -67,12 +69,57 @@ test('committed intake automatically appends one source candidate and retains lo
 });
 
 test('disabled writer performs local intake only', async (t) => {
-  const { binding, run, posts } = await fixture(t);
+  const { binding, run, posts, store } = await fixture(t);
   binding.candidateWriter = null;
   const result = await run();
   assert.equal(result.accepted, 1);
   assert.equal(result.deliveredCandidates.length, 0);
   assert.equal(posts.length, 0);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
+});
+
+test('MS queues received source keys once without requiring CRM candidate delivery', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run, posts } = await fixture(t, { workspaceId });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  binding.candidateWriter = null;
+  await run();
+  await run();
+  const rows = store.db.prepare('SELECT * FROM mail_company_memory_outbox').all();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].workspace_id, workspaceId);
+  assert.equal(rows[0].kind, 'INBOX_RECEIVED');
+  assert.equal(rows[0].source_locator, 'mail');
+  assert.equal(rows[0].source_event_id, 'mail');
+  assert.equal(rows[0].status, 'PENDING');
+  assert.equal(rows[0].version, 1);
+  assert.equal(Object.hasOwn(rows[0], 'body'), false);
+  assert.equal(posts.length, 0);
+});
+
+test('MS scope mismatch stays visible while MR delivery remains independent', async (t) => {
+  const { store, binding, run, posts } = await fixture(t);
+  binding.companyMemory = { workspaceId: '44444444-4444-4444-8444-444444444444', provider: 'outlook' };
+  const result = await run();
+  assert.equal(result.failures[0].code, 'COMPANY_WORKSPACE_MISMATCH');
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
+  assert.equal(posts.length, 1);
+});
+
+test('MS rejects outgoing draft deleted and junk sources before queueing', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run } = await fixture(t, { workspaceId });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  store.db.prepare("UPDATE messages SET is_draft=1 WHERE graph_id='mail'").run();
+  assert.equal((await run()).skipped[0].code, 'RECEIVED_MAIL_REQUIRED');
+  store.db.prepare("UPDATE messages SET is_draft=0 WHERE graph_id='mail'").run();
+  for (const folder of ['sentitems', 'drafts', 'deleteditems', 'junkemail']) {
+    store.ensureFolder({ mailboxId: store.getMailbox('me').id, graphId: 'inbox', wellKnownName: folder, displayName: folder });
+    const result = await run();
+    assert.equal(result.accepted, 0);
+    assert.equal(result.skipped[0].code, 'RECEIVED_MAIL_REQUIRED');
+  }
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
 });
 
 test('delivery failure is visible while committed mail and local candidates survive', async (t) => {

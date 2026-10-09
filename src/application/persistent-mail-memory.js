@@ -421,6 +421,7 @@ export class PersistentMailMemoryRuntime {
         workspaceId: authorization.workspaceFor(mailboxUser),
         messageIds: result?.upsertedMessageIds || [],
         candidateWriter: binding.candidateWriter,
+        companyMemory: binding.companyMemory,
       });
     } catch (error) {
       intake = {
