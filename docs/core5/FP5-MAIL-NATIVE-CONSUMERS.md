@@ -56,6 +56,34 @@ admission. A changed producer pin refuses before owned fixture creation.
 
 ## MR: source and correction to maintained CRM v2
 
+### Automatic candidate-only MR
+
+`MAIL_INTELLIGENCE_CWOS_CANDIDATES_ENABLED=1` explicitly enables the separate
+candidate writer. Its `MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_BASE_URL`,
+`_KEY_FILE` and `_PRINCIPAL_ID` come from the existing create-only CRM service
+profile, never the reader key. The existing verified intake workspace and
+expected mailbox email bind it; disabled/default mode performs no candidate
+POST. No operational profile, key or service is created by this implementation.
+
+After committed sync and local intake, a received mail with an unconfirmed
+customer/project link or an extracted project candidate appends one source
+candidate via POST `/api/cwos/v2/mail-candidates`. The DTO is a mail-source
+envelope (subject, digest and source locator), not customer/project business
+records; detailed hypotheses and evidence remain in Mail. Non-candidate mail
+does not generate forced CRM work. Existing CRM data is never edited or
+confirmed. Reader-derived native version provides CAS; each verified receipt
+updates the batch version. Replay uses the same source revision/key, excluding
+observation time. Source and grant epoch are rechecked before/after delivery.
+Denial, CAS conflict and malformed receipts are visible intake failures/dead
+letters and stop further delivery in that batch; committed mail remains local.
+`candidatesDelivered` counts verified accepted receipts, including idempotent
+replay; it does not falsely claim a net increase in CRM records. No bodies,
+addresses or keys are printed.
+
+No generic command, GET, PATCH, DELETE, confirmation or other writer route is
+exposed. No schema migration is included. Adoption/rollback enables/disables
+only this explicit binding and does not remove append-only CRM audit records.
+
 `CwosMailCommandClient` uses the maintained state/command HTTP routes and
 explicit server-bound workspace/principal/kind/API key. No actor comes from
 mail content. `MailWorkIntakeService.receiveInCrm` exports an original

@@ -1,6 +1,7 @@
 import { CwosWorkSystemAdapter } from '../adapters/cwos-work-system.js';
 import { createIntakeAuthorization } from './intake-authorization.js';
 import { MailWorkIntakeService } from './mail-work-intake.js';
+import { mailSourceDigest } from '../adapters/cwos-mail-command.js';
 
 function failure(error, fallbackCode) {
   return {
@@ -38,6 +39,7 @@ export function createProductionIntakeBinding({
   workspaceId = '',
   readMasters = null,
   authorization = null,
+  candidateWriter = null,
 } = {}) {
   if (!db) throw Object.assign(new Error('INTAKE_BINDING_REQUIRED'), { code: 'INTAKE_BINDING_REQUIRED' });
   const resolvedAuthorization = authorization || createIntakeAuthorization([{
@@ -48,7 +50,7 @@ export function createProductionIntakeBinding({
     db,
     cwosClient: typeof readMasters === 'function' ? { readMasters } : null,
   });
-  return { authorization: resolvedAuthorization, workSystem };
+  return { authorization: resolvedAuthorization, workSystem, candidateWriter };
 }
 
 export async function ingestAfterCommittedSync({
@@ -58,6 +60,7 @@ export async function ingestAfterCommittedSync({
   mailboxUser = '',
   workspaceId = '',
   messageIds = [],
+  candidateWriter = null,
 } = {}) {
   if (!store || !workSystem || typeof authorization?.authorize !== 'function') {
     throw Object.assign(new Error('INTAKE_BINDING_REQUIRED'), { code: 'INTAKE_BINDING_REQUIRED' });
@@ -91,12 +94,42 @@ export async function ingestAfterCommittedSync({
   const failures = masterFailure ? [{ messageId: '', ...masterFailure }] : [];
   const skipped = [];
   const acceptedMessageIds = [];
+  let candidateVersion = readResult?.provenance?.runtimeVersion;
+  const deliveredCandidates = [];
+  let candidateFailure = null;
   if (masterFailure?.code !== 'INTAKE_BINDING_STALE') for (const messageId of ids) {
     try {
       const projection = await intake.ingest(scope.mailboxUser, messageId, masterFailure
         ? { assertBinding, providerIdentity }
         : { workspaceId: scope.workspaceId, readResult, assertBinding, providerIdentity });
       acceptedMessageIds.push(projection.messageId);
+      const hasCandidates = ['customer', 'project'].some(type =>
+        projection[type]?.candidates?.some(item => item.status === 'candidate'))
+        || projection.work?.classification?.projectResolution === 'candidate';
+      if (candidateWriter && hasCandidates && !candidateFailure) {
+        try {
+          const snapshot = intake.source(scope.mailboxUser, messageId);
+          const fingerprint = mailSourceDigest(snapshot.source);
+          const receipt = await candidateWriter.create({
+            workspaceId: scope.workspaceId, ...snapshot, expectedVersion: candidateVersion,
+            assertCurrent: () => {
+              if (assertBinding) assertBinding();
+              if (mailSourceDigest(intake.source(scope.mailboxUser, messageId).source) !== fingerprint) {
+                throw Object.assign(new Error('INTAKE_SOURCE_CHANGED'), { code: 'INTAKE_SOURCE_CHANGED' });
+              }
+            },
+          });
+          candidateVersion = receipt.runtimeVersion;
+          deliveredCandidates.push({ messageId, ...receipt });
+          store.audit('mail.crm_candidate.delivered', {
+            entityType: 'message', entityId: messageId,
+            payload: { candidateId: receipt.id, workspaceId: scope.workspaceId, runtimeVersion: receipt.runtimeVersion },
+          });
+        } catch (error) {
+          candidateFailure = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
+          failures.push(candidateFailure);
+        }
+      }
     } catch (error) {
       if (error?.code === 'RECEIVED_MAIL_REQUIRED' || error?.code === 'MESSAGE_NOT_FOUND') {
         skipped.push({ messageId, code: error.code });
@@ -116,12 +149,14 @@ export async function ingestAfterCommittedSync({
     acceptedMessageIds,
     failures,
     skipped,
+    deliveredCandidates,
   };
   store.audit('mail.intake.completed', {
     entityType: 'mailbox',
     entityId: scope.mailboxKey,
     payload: {
       accepted: summary.accepted,
+      candidatesDelivered: deliveredCandidates.length,
       failed: failures.length,
       skipped: skipped.length,
       mastersApplied: summary.mastersApplied,
