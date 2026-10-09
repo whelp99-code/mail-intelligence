@@ -158,6 +158,13 @@ process.stdin.on('data', chunk => chunks.push(chunk));
 process.stdin.on('end', () => {
   const envelope = JSON.parse(Buffer.concat(chunks).toString());
   if (envelope.authority.operation !== 'receive') process.exit(1);
+  if (process.argv[2] === 'register-source') {
+    process.stdout.write(JSON.stringify({registration: {
+      state: 'registered', source_locator: envelope.arguments.source_locator,
+      content_digest: envelope.arguments.content_digest,
+    }}));
+    return;
+  }
   process.stdout.write(JSON.stringify({receipt: {
     workspace_id: envelope.authority.workspace_id,
     request_digest: envelope.authority.request_digest,

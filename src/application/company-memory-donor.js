@@ -479,9 +479,10 @@ async function publishOne(input) {
 
   let result;
   try {
-    result = await input.transport.invoke(request);
-  } catch {
-    return { status: 'pending', code: 'COMPANY_TRANSPORT_FAILED' };
+    result = await input.transport.invoke(request, input.row.source.content);
+  } catch (error) {
+    return { status: 'pending', code: error instanceof CompanyMemoryDonorError
+      ? error.code : 'COMPANY_TRANSPORT_FAILED' };
   }
   if (result.exitCode !== 0) return { status: 'pending', code: 'COMPANY_RECEIPT_REQUIRED' };
 
