@@ -163,9 +163,11 @@ test('v2 reader requires explicit actor and plan config and private credential f
   }
   assert.throws(() => cwosMasterReaderConfigFromEnv({ ...env, MAIL_INTELLIGENCE_CWOS_PRINCIPAL_KIND: 'human' }), { code: 'CWOS_READER_CONFIG_INVALID' });
   await assert.rejects(loadCwosMasterReader({ ...env, MAIL_INTELLIGENCE_CWOS_API_KEY_FILE: '/fixture/key' }, {
+    realpathImpl: async path => path,
     statImpl: async () => ({ isFile: () => true, mode: 0o644 }),
   }), { code: 'CWOS_READER_CONFIG_INVALID' });
   const loaded = await loadCwosMasterReader({ ...env, MAIL_INTELLIGENCE_CWOS_API_KEY_FILE: '/fixture/key' }, {
+    realpathImpl: async path => path,
     statImpl: async () => ({ isFile: () => true, mode: 0o600 }),
     readFileImpl: async () => binding.credential,
   });

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { mailSourceDigest } from './cwos-mail-command.js';
+import { normalizeCwosPrincipalId, resolveCwosCredentialFile } from './cwos-credential-identity.js';
 
 function fail(code, statusCode = 502) {
   throw Object.assign(new Error(code), { code, statusCode });
@@ -10,22 +11,35 @@ function bounded(value, max) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 
-export async function loadCwosMailCandidateWriter(env = {}, { fetchImpl = globalThis.fetch, statImpl = lstat, readFileImpl = readFile } = {}) {
+export async function loadCwosMailCandidateWriter(env = {}, {
+  fetchImpl = globalThis.fetch, statImpl = lstat, readFileImpl = readFile, realpathImpl = realpath,
+} = {}) {
   const flag = env.MAIL_INTELLIGENCE_CWOS_CANDIDATES_ENABLED;
   if (flag === '0') return null;
   const fields = ['BASE_URL', 'KEY_FILE', 'PRINCIPAL_ID']
     .map(name => env[`MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_${name}`]);
   if (!flag && fields.every(value => !value)) return null;
-  if (flag !== '1' || fields.some(value => !value)
-    || fields[1] === env.MAIL_INTELLIGENCE_CWOS_API_KEY_FILE
-    || fields[2] === env.MAIL_INTELLIGENCE_CWOS_PRINCIPAL_ID) {
+  const principalId = normalizeCwosPrincipalId(fields[2]);
+  if (flag !== '1' || fields.some(value => !value) || !principalId || !String(fields[1]).trim()) {
     fail('CWOS_CANDIDATE_CONFIG_INVALID', 500);
   }
-  const metadata = await statImpl(fields[1]);
+  if (principalId === normalizeCwosPrincipalId(env.MAIL_INTELLIGENCE_CWOS_PRINCIPAL_ID)) {
+    fail('CWOS_CANDIDATE_READER_CREDENTIAL_REUSE', 500);
+  }
+  const writer = await resolveCwosCredentialFile(fields[1], { realpathImpl, statImpl });
+  const { metadata } = writer;
+  const readerFile = String(env.MAIL_INTELLIGENCE_CWOS_API_KEY_FILE || '').trim();
+  if (readerFile) {
+    const reader = await resolveCwosCredentialFile(readerFile, { realpathImpl, statImpl });
+    if (writer.path === reader.path || (metadata.dev != null && metadata.ino != null
+      && metadata.dev === reader.metadata.dev && metadata.ino === reader.metadata.ino)) {
+      fail('CWOS_CANDIDATE_READER_CREDENTIAL_REUSE', 500);
+    }
+  }
   if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) fail('CWOS_CANDIDATE_CONFIG_INVALID', 500);
   return new CwosMailCandidateWriter({
-    baseUrl: fields[0], apiKey: String(await readFileImpl(fields[1], 'utf8')).trim(),
-    principalId: fields[2], workspaceId: env.MAIL_INTELLIGENCE_INTAKE_WORKSPACE,
+    baseUrl: fields[0], apiKey: String(await readFileImpl(writer.path, 'utf8')).trim(),
+    principalId, workspaceId: env.MAIL_INTELLIGENCE_INTAKE_WORKSPACE,
     mailbox: env.MAIL_INTELLIGENCE_INTAKE_EXPECTED_EMAIL, fetchImpl,
   });
 }
