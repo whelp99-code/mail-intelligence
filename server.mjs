@@ -2497,19 +2497,23 @@ async function handleApi(req, res) {
       if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       requireStateChange(req);
       const body = await readJsonBody(req);
-      const messageId = validatedText(body.messageId || '', 'messageId', 500);
+      const messageId = validatedText(url.searchParams.get('messageId') || body.messageId || '', 'messageId', 500);
       const mode = validatedText(body.mode || 'rapid_reply', 'mode', 40);
       if (!messageId) throw new HttpError(400, 'MESSAGE_ID_REQUIRED', 'messageId is required.');
       if (!['rapid_reply', 'improve', 'meeting_confirmation'].includes(mode)) {
         throw new HttpError(400, 'DRAFT_MODE_INVALID', 'mode must be rapid_reply, improve, or meeting_confirmation.');
       }
       try {
-        return json(res, 200, requireMailMemory().generateAssistantDraft(currentMailboxUser(), messageId, {
+        const draft = requireMailMemory().generateAssistantDraft(currentMailboxUser(), messageId, {
           mode,
           draftText: validatedText(body.draftText || '', 'draftText', 12_000),
           timeZone: validatedText(body.timeZone || 'Asia/Seoul', 'timeZone', 80),
-        }));
+        });
+        return json(res, 200, draft);
       } catch (error) {
+        if (error?.code === 'REPLY_ALREADY_HANDLED') {
+          throw new HttpError(409, 'REPLY_ALREADY_HANDLED', error.message);
+        }
         if (/stored message/i.test(error?.message || '')) {
           throw new HttpError(404, 'MESSAGE_NOT_FOUND', 'Stored message was not found.');
         }

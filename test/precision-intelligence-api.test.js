@@ -5,7 +5,7 @@ import net from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { EventEmitter, once } from 'node:events';
 
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
@@ -52,7 +52,7 @@ function seedDatabase(dataDir) {
     databasePath: join(dataDir, 'mail-intelligence.sqlite'),
     migrationsDir: resolve('migrations'),
   });
-  const mailbox = store.ensureMailbox({ key: 'me', address: '' });
+  const mailbox = store.ensureMailbox({ key: 'me', address: 'jm@example.com' });
   const folder = store.ensureFolder({
     mailboxId: mailbox.id,
     graphId: 'inbox',
@@ -92,24 +92,18 @@ function seedDatabase(dataDir) {
   store.close();
 }
 
-async function waitForHealth(baseUrl, child, logs) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`server exited early: ${logs.join('')}`);
-    try {
-      const response = await fetch(`${baseUrl}/api/health`);
-      if (response.ok) return await response.json();
-    } catch {
-      // Starting.
-    }
-    await delay(50);
-  }
-  throw new Error(`server did not become healthy: ${logs.join('')}`);
+async function waitForHealth(baseUrl, readiness) {
+  await readiness;
+  const response = await fetch(`${baseUrl}/api/health`);
+  assert.equal(response.status, 200);
+  return response.json();
 }
 
 async function api(baseUrl, path, { method = 'GET', cookie = '', csrfToken = '', body } = {}) {
   const headers = {};
   if (cookie) headers.Cookie = cookie;
   if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  headers.Origin = baseUrl;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch(`${baseUrl}${path}`, {
     method,
@@ -125,6 +119,10 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const logs = [];
+  const readySignal = new EventEmitter();
+  const readiness = once(readySignal, 'ready', { signal: AbortSignal.timeout(30_000) });
+  readiness.catch(() => {});
+  let ready = false;
   const child = spawn(process.execPath, ['server.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -136,15 +134,28 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
+  child.stdout.on('data', (chunk) => {
+    logs.push(chunk.toString());
+    if (!ready && /Mail Intelligence .+ app running at /.test(logs.join(''))) {
+      ready = true;
+      readySignal.emit('ready');
+    }
+  });
   child.stderr.on('data', (chunk) => logs.push(chunk.toString()));
+  child.on('error', (error) => readySignal.emit('error', error));
+  child.once('exit', (code) => {
+    if (!ready) readySignal.emit('error', new Error(`server exited early (${code}): ${logs.join('')}`));
+  });
   t.after(async () => {
-    if (child.exitCode === null) child.kill('SIGTERM');
-    await delay(100);
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit', { signal: AbortSignal.timeout(10_000) });
+      child.kill('SIGTERM');
+      await exited;
+    }
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  const health = await waitForHealth(baseUrl, child, logs);
+  const health = await waitForHealth(baseUrl, readiness);
   assert.equal(health.storage.schemaVersion, 9);
   assert.equal(health.safety.mode, 'read-only');
   assert.equal(health.graphConsent.includes('Mail.Send'), false);
@@ -211,14 +222,30 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(result.response.status, 200);
   assert.equal(result.body.personality.role, '기술 엔지니어');
 
-  result = await api(baseUrl, '/api/intelligence/draft', {
+  result = await api(baseUrl, '/api/intelligence/draft?messageId=action-api', {
     method: 'POST', cookie, csrfToken: session.csrfToken,
-    body: { messageId: 'action-api', mode: 'rapid_reply' },
+    body: { mode: 'rapid_reply' },
   });
   assert.equal(result.response.status, 200);
   assert.equal(result.body.sendAllowed, false);
   assert.equal(result.body.requiresHumanApproval, true);
   assert.equal(result.body.action, 'copy_only');
+  assert.equal(typeof result.body.voiceVersion, 'string');
+  assert.equal(typeof result.body.formality, 'string');
+  assert.ok(Array.isArray(result.body.voiceEvidence));
+
+  result = await api(baseUrl, '/api/messages/handled-elsewhere', {
+    method: 'POST', cookie, csrfToken: session.csrfToken,
+    body: { messageId: 'action-api', channel: 'phone', note: 'Fixture handled reply' },
+  });
+  assert.equal(result.response.status, 200);
+  result = await api(baseUrl, '/api/intelligence/draft?messageId=action-api', {
+    method: 'POST', cookie, csrfToken: session.csrfToken,
+    body: { mode: 'rapid_reply' },
+  });
+  assert.equal(result.response.status, 409);
+  assert.equal(result.body.code, 'REPLY_ALREADY_HANDLED');
+  assert.match(result.body.message, /외부에서 회신 처리/);
 
   result = await api(baseUrl, '/api/intelligence/attachment-summary', {
     method: 'POST', cookie, csrfToken: session.csrfToken,

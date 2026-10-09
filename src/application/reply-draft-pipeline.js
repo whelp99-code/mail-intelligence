@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { classifyMessage } from '../domain/precision-classifier.js';
 import { generateSafeDraft } from '../domain/mail-assistant-tools.js';
-import { applyOwnerVoice, loadOwnerVoiceProfile } from '../domain/owner-voice.js';
+import { applyOwnerVoice, deriveOwnerVoiceProfile, loadOwnerVoiceProfile } from '../domain/owner-voice.js';
 import {
   loadPartnerNames,
   replaceUngroundedNumbers,
@@ -10,6 +10,7 @@ import {
 } from '../domain/reply-draft-guardrails.js';
 import { HANDLED_ELSEWHERE_ACTOR, HANDLED_ELSEWHERE_REASON, loadActiveHandledElsewhere, markerForMessage } from './handled-elsewhere.js';
 import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
+import { UNFILLED } from '../domain/mail-style-templates.js';
 
 export const REPLY_DRAFT_PIPELINE_VERSION = 'reply-draft-pipeline-v1';
 export const PENDING_APPROVALS_PATH = 'data/ops/pending-approvals.jsonl';
@@ -19,6 +20,7 @@ export function replyDraftsEnabled(env = process.env) {
 }
 export const MORNING_DIGEST_DIR = 'data/ops';
 export const REPLY_NEEDED_STATES = Object.freeze(['action_required', 'decision_required']);
+export const REPLY_ALREADY_HANDLED = 'REPLY_ALREADY_HANDLED';
 export const ALREADY_REPLIED_REASON = '이미 회신함';
 export const ALREADY_REPLIED_ACTOR = 'system:already-replied';
 const SENT_WELL_KNOWN = new Set(['sentitems', 'sent']);
@@ -123,19 +125,7 @@ export function buildReplyDraftPlan(message = {}, classification = null, now = n
   if (draft.sendAllowed !== false) {
     return { action: 'skip', reason: 'send_path_refused', method: assessment.method };
   }
-  const profile = options.voiceProfile || loadOwnerVoiceProfile();
-  const partners = options.partners || loadPartnerNames();
-  const voiced = applyOwnerVoice(draft.body, { profile, recipients: [to] });
-  const scrubbed = scrubPartnerNames(voiced.body, [to], partners);
-  const sourced = replaceUngroundedNumbers(scrubbed.body, [
-    message.subject,
-    message.body,
-    message.body_text,
-    message.bodyPreview,
-    message.body_preview,
-    message.attachmentText,
-    options.ownerInput,
-  ]);
+  const prepared = prepareReplyDraft(message, draft, { ...options, recipients: [to] });
   const messageId = Number(message.id);
   const suggestions = options.suggestions || (options.db ? suggestReplyAttachments({
     db: options.db,
@@ -146,14 +136,16 @@ export function buildReplyDraftPlan(message = {}, classification = null, now = n
     action: 'draft',
     method: assessment.method,
     template: draft.templateId,
-    voiceVersion: voiced.voiceVersion,
-    formality: voiced.formality,
+    voiceVersion: prepared.voiceVersion,
+    formality: prepared.formality,
+    voiceEvidence: prepared.voiceEvidence,
+    needsClarification: prepared.needsClarification,
     suggestions,
     request: {
       request_id: `reply.m${messageId}`,
       to: [to],
       subject: draft.subject.replace(/[\r\n]/g, ' ').slice(0, 998),
-      body_text: sourced.body,
+      body_text: prepared.body,
       message_id: Number.isSafeInteger(messageId) && messageId > 0 ? messageId : undefined,
     },
     queue: {
@@ -163,6 +155,34 @@ export function buildReplyDraftPlan(message = {}, classification = null, now = n
       summary: twoLineSummary(message),
       created_at: now,
     },
+  };
+}
+
+export function prepareReplyDraft(message = {}, draft = {}, options = {}) {
+  const recipients = options.recipients || [];
+  const sentRows = options.sentRows || (options.db
+    ? loadSentReplies(options.db, { mailboxId: message.mailboxId || message.mailbox_id })
+    : []);
+  const baseProfile = options.voiceProfile || loadOwnerVoiceProfile();
+  const profile = options.voiceProfile || deriveOwnerVoiceProfile(sentRows, baseProfile);
+  const voiced = applyOwnerVoice(draft.body, { profile, recipients });
+  const scrubbed = scrubPartnerNames(voiced.body, recipients, options.partners || loadPartnerNames());
+  const sourced = replaceUngroundedNumbers(scrubbed.body, [
+    message.subject,
+    message.body,
+    message.body_text,
+    message.bodyPreview,
+    message.body_preview,
+    message.attachmentText,
+    options.ownerInput,
+  ]);
+  return {
+    ...draft,
+    body: sourced.body,
+    needsClarification: Boolean(draft.needsClarification || draft.unfilled?.length || sourced.body.includes(UNFILLED)),
+    voiceVersion: voiced.voiceVersion,
+    formality: voiced.formality,
+    voiceEvidence: profile.builtFrom?.evidenceIds || [],
   };
 }
 
@@ -295,6 +315,25 @@ function tableColumns(db, table) {
   return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
 }
 
+export function assertReplySourceOpen(db, mailboxId, message) {
+  const handled = loadActiveHandledElsewhere(db, mailboxId);
+  if (markerForMessage(handled, message)) {
+    throw Object.assign(new Error('이 메일은 외부에서 회신 처리되었습니다.'), {
+      code: REPLY_ALREADY_HANDLED,
+    });
+  }
+  const sent = loadSentReplies(db, {
+    mailboxId,
+    conversationIds: [message.conversation_id || message.conversationId],
+    subjects: [message.normalized_subject || message.normalizedSubject || message.subject],
+  });
+  if (hasLaterSentReply(message, sent)) {
+    throw Object.assign(new Error('이 메일은 이미 회신되었습니다.'), {
+      code: REPLY_ALREADY_HANDLED,
+    });
+  }
+}
+
 export function isSentFolderMessage(message = {}) {
   const wellKnown = String(message.well_known_name || message.wellKnownName || message.folderWellKnownName || '').toLowerCase();
   const display = String(message.display_name || message.displayName || message.folderName || message.folder_display_name || '').toLowerCase();
@@ -334,6 +373,7 @@ export function hasLaterSentReply(inbound = {}, sentMessages = []) {
     if (inboundTime && !sentTime) return false;
     const sentConversation = String(sent.conversation_id || sent.conversationId || '').trim();
     if (conversation && sentConversation && conversation === sentConversation) return true;
+    if (conversation && sentConversation && conversation !== sentConversation) return false;
     const sentSubject = normalizeReplySubject(sent.normalized_subject || sent.normalizedSubject || sent.subject || '');
     return Boolean(subject && sentSubject === subject && domain && recipientDomains(sent).includes(domain));
   });
@@ -359,6 +399,7 @@ export function loadSentReplies(db, { mailboxId = null, conversationIds = [], su
   if (!db) return [];
   const folderColumns = tableColumns(db, 'mail_folders');
   const messageColumns = tableColumns(db, 'messages');
+  const mailboxColumns = tableColumns(db, 'mailboxes');
   if (!folderColumns.size || !messageColumns.has('id')) return [];
   const conversations = [...new Set(conversationIds.map((item) => String(item || '').trim()).filter(Boolean))];
   const normalized = [...new Set(subjects.map((item) => normalizeReplySubject(item)).filter(Boolean))];
@@ -367,6 +408,11 @@ export function loadSentReplies(db, { mailboxId = null, conversationIds = [], su
   if (mailboxId != null) {
     clauses.push('s.mailbox_id = ?');
     params.push(mailboxId);
+  }
+  if (mailboxColumns.has('address')) {
+    clauses.push(`lower(trim(COALESCE(s.sender_email, ''))) = lower(trim(COALESCE((
+      SELECT address FROM mailboxes WHERE id = s.mailbox_id
+    ), '')))`);
   }
   const match = [];
   if (conversations.length && messageColumns.has('conversation_id')) {
@@ -385,6 +431,7 @@ export function loadSentReplies(db, { mailboxId = null, conversationIds = [], su
   const display = folderColumns.has('display_name') ? 'f.display_name' : '\'\'';
   const rows = db.prepare(`
     SELECT s.id, s.mailbox_id, s.subject, ${normalizedSubject} AS normalized_subject, s.sender_email,
+           ${messageColumns.has('body_text') ? 's.body_text' : '\'\' '} AS body_text,
            s.received_at, ${sentAt} AS sent_at, ${conversation} AS conversation_id,
            f.well_known_name, ${display} AS display_name, s.folder_id
     FROM messages s
@@ -428,7 +475,7 @@ export function cancelAnsweredDrafts({ db, drafts, mailboxId = null } = {}) {
   const pending = db.prepare(`
     SELECT d.draft_id, d.mailbox_id, d.message_id, d.status
     FROM mail_send_drafts d
-    WHERE d.status = 'needs_approval'${mailboxClause}
+    WHERE d.status IN ('needs_approval', 'needs_clarification')${mailboxClause}
   `).all(...params);
   if (!pending.length) return summary;
   const messageColumns = tableColumns(db, 'messages');
@@ -489,6 +536,7 @@ export function runReplyDraftPipeline({
     conversationIds: loaded.map((message) => message.conversation_id),
     subjects: loaded.map((message) => message.normalized_subject || message.subject),
   }) : [];
+  const ownerSentRows = db ? loadSentReplies(db, { mailboxId }) : [];
   const handledIds = db ? loadActiveHandledElsewhere(db, mailboxId).ids : new Set();
   const summary = {
     version: REPLY_DRAFT_PIPELINE_VERSION,
@@ -505,7 +553,11 @@ export function runReplyDraftPipeline({
   };
   const queueRows = [];
   for (const message of loaded) {
-    const plan = buildReplyDraftPlan(message, message.classification || null, now, { db, ownerInput: '' });
+    const plan = buildReplyDraftPlan(message, message.classification || null, now, {
+      db,
+      ownerInput: '',
+      sentRows: ownerSentRows,
+    });
     summary.byMethod[plan.method] = (summary.byMethod[plan.method] || 0) + (plan.action === 'draft' ? 1 : 0);
     if (plan.action !== 'draft') {
       summary.skipped += 1;

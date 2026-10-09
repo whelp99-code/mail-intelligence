@@ -1,5 +1,8 @@
 {
   "version": "owner-voice-profile-v1",
+  "salutationsByDomain": {
+    "nexias.co.kr": "양해광 상무님"
+  },
   "builtFrom": {
     "folders": ["Sent Items", "보낸 편지함"],
     "sender": "jm.park@blro.co.kr",
