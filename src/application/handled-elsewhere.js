@@ -113,7 +113,7 @@ function cancelPendingDrafts(db, mailboxId, messageId, actor) {
   const drafts = new MailSendDrafts(db);
   const pending = db.prepare(`
     SELECT draft_id FROM mail_send_drafts
-    WHERE mailbox_id = ? AND message_id = ? AND status = 'needs_approval'
+    WHERE mailbox_id = ? AND message_id = ? AND status IN ('needs_approval', 'needs_clarification')
   `).all(mailboxId, messageId);
   let cancelled = 0;
   for (const row of pending) {

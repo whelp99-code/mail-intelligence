@@ -376,7 +376,7 @@ export class MailSendDrafts {
       const draft = this.get(mailboxId, id);
       if (draft.status === 'cancelled') return draft;
       if (systemReply) {
-        if (draft.status !== 'needs_approval') return draft;
+        if (!['needs_approval', 'needs_clarification'].includes(draft.status)) return draft;
       } else if (!['needs_approval', 'needs_clarification', 'approved'].includes(draft.status)) fail(409, 'DRAFT_NOT_CANCELLABLE');
       this.db.prepare('UPDATE mail_send_drafts SET status=? WHERE draft_id=?').run('cancelled', id);
       this.event(id, 'cancelled', actor, reason);

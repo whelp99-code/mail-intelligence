@@ -471,6 +471,7 @@ function precisionSummaryLine(classification) {
 }
 
 function operationalLaneForMessage(messageId) {
+  if (currentMessages.find((message) => message.id === messageId)?.handledElsewhere) return 'reference';
   const precision = precisionFor(messageId);
   return precision?.operational?.lane || 'review';
 }
@@ -577,7 +578,7 @@ function handledElsewhereControls(message, { compact = false } = {}) {
   select.value = 'kakao';
   const button = document.createElement('button');
   button.type = 'button';
-  button.textContent = '✓ 외부 회신';
+  button.textContent = '카톡·전화로 처리함';
   let noteInput = null;
   if (!compact) {
     noteInput = document.createElement('input');
@@ -900,7 +901,9 @@ function mountAssistantDraft(draft) {
     mailSubject: draft.subject || '',
     body: draft.body || '',
   });
-  renderAssistantOutput('초안을 만들었습니다. 내용을 직접 확인한 뒤 클립보드로 복사하세요. 자동 발송은 차단되어 있습니다.');
+  renderAssistantOutput(draft.needsClarification
+    ? '보낼 수 없음 · {확인 필요} 항목을 먼저 확인해 주세요. 초안은 검토용으로만 복사할 수 있습니다.'
+    : '초안을 만들었습니다. 내용을 직접 확인한 뒤 클립보드로 복사하세요. 자동 발송은 차단되어 있습니다.');
 }
 
 async function loadReceivedAttachments(messageId, expectFiles) {
@@ -1194,6 +1197,7 @@ async function savePrecisionCorrection(event) {
 }
 
 function laneForMessage(messageId) {
+  if (currentMessages.find((message) => message.id === messageId)?.handledElsewhere) return 'completed';
   const precision = precisionFor(messageId);
   if (precision?.workState) return precision.workState;
   const insight = insightFor(messageId);
