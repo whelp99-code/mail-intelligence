@@ -194,6 +194,48 @@ test('automated business requests still publish CRM and MS candidates', async (t
   assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
 });
 
+for (const example of [
+  { name: 'no-reply quote review', senderEmail: 'no-reply@example.invalid', body: '견적서 검토 부탁드립니다.' },
+  { name: 'no-reply purchase and delivery reply', senderEmail: 'no-reply@example.invalid', body: '발주 승인 후 납품 일정 회신 부탁드립니다.' },
+  { name: 'alert meeting attendance', senderEmail: 'alert@example.invalid', body: '내일 고객 미팅 참석 부탁드립니다.' },
+  { name: 'discounted quote review', subject: 'Example Project 할인 견적서', body: '할인 견적서 검토 부탁드립니다.' },
+  { name: 'marketing material request', subject: 'Example Project 마케팅 자료', body: '마케팅 자료 보내 주세요.' },
+  { name: 'review completion and contract request', subject: 'Example Project 심사 완료 안내', body: '심사 완료 안내입니다. 계약 진행 부탁드립니다.' },
+]) {
+  test(`${example.name} retains CRM and MS candidates despite a reference rule`, async (t) => {
+    const workspaceId = '44444444-4444-4444-8444-444444444444';
+    const { store, binding, run, posts } = await fixture(t, { ...example, workspaceId });
+    binding.companyMemory = { workspaceId, provider: 'outlook' };
+    const result = await run();
+    assert.deepEqual(result.failures, []);
+    assert.equal(store.getPrecisionClassification(store.getMailbox('me').id, 'mail').workState, 'reference');
+    assert.deepEqual(result.candidateSkipped, []);
+    assert.equal(posts.length, 1);
+    assert.equal(result.deliveredCandidates.length, 1);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+  });
+}
+
+for (const example of [
+  {
+    name: 'quoted request',
+    body: 'Example Project 자동 알림입니다.\n\n-----Original Message-----\nFrom: sender@example.invalid\n\n견적서 검토 부탁드립니다.',
+  },
+  { name: 'negated request', body: 'Example Project 견적서 검토할 필요 없습니다. 자동 알림입니다.' },
+  { name: 'conditional contact footer', body: 'Example Project 자동 알림입니다. 자료가 필요하시면 연락 부탁드립니다.' },
+]) {
+  test(`${example.name} does not override automatic-reference exclusion`, async (t) => {
+    const workspaceId = '44444444-4444-4444-8444-444444444444';
+    const { store, binding, run, posts } = await fixture(t, { ...example, workspaceId, senderEmail: 'no-reply@example.invalid' });
+    binding.companyMemory = { workspaceId, provider: 'outlook' };
+    const result = await run();
+    assert.equal(store.getPrecisionClassification(store.getMailbox('me').id, 'mail').workState, 'reference');
+    assert.equal(result.candidateSkipped.length, 1);
+    assert.equal(posts.length, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
+  });
+}
+
 test('ordinary reference knowledge still publishes CRM and MS candidates', async (t) => {
   const workspaceId = '44444444-4444-4444-8444-444444444444';
   const { store, binding, run, posts } = await fixture(t, {

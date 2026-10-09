@@ -366,6 +366,14 @@ function hasVerifiedDirectRequest(text) {
   return hasConcreteRequest(value);
 }
 
+export function hasCurrentBusinessRequest(message = {}) {
+  const currentText = splitMessageHistory(message.body || message.bodyPreview || '').currentContent;
+  return clausesWithOffsets(currentText).some((clause) =>
+    ACTION_OBJECT_PATTERN.test(clause.text)
+    && !/(?:필요하시면|원하시면|필요한\s*경우).{0,40}(?:회신|연락|문의)/i.test(clause.text)
+    && hasVerifiedDirectRequest(clause.text));
+}
+
 function verifiedActionClauses(clauses = []) {
   const seen = new Set();
   const verified = [];

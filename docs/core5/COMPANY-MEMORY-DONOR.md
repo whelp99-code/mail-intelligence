@@ -118,6 +118,11 @@ records `candidatesSkipped`. They remain accepted mail, not intake failures.
 Explicit corrections and confirmed customer/project assignments outrank this
 automatic gate. Ordinary reference knowledge and actionable automated
 business mail retain the existing candidate flow.
+Current-body concrete business requests take precedence over these reference
+rules even for no-reply/alert senders or marketing wording. The gate reuses
+the classifier's direct-request and business-object checks after splitting
+quoted history; quoted requests, negations and conditional contact footers
+do not grant that exception.
 
 Coverage: REQ-MAIL-007/008 and REQ-INT-004/011 in
 `test/sync-crm-candidates.test.js`. No migration, env or approval boundary is
