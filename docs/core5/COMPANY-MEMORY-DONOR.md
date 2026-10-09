@@ -50,6 +50,24 @@ old profile/candidate revisions are not rewritten or silently migrated.
 Live cutover still requires registered operator authority and approved
 versioned source snapshots/profile.
 
+The production bind registers each resolved original before receive with
+`sb-company register-source --config CONFIG`. Registration stdin is the
+same signed receive `{authority, arguments}` plus top-level `content`;
+the original UTF-8 text is not trimmed or rewritten. Only exit 0 with
+`registration.state=registered` and the matching source locator/digest
+admits the subsequent keys-only receive. Registration failure or mismatch
+leaves PENDING with `COMPANY_SOURCE_REGISTRATION_FAILED` or
+`COMPANY_SOURCE_REGISTRATION_MISMATCH`; the next tick registers again.
+Only the matching receive receipt may mark EMITTED. No signing-key rotation
+or fact confirmation is part of registration.
+
+SB owns atomic original/config publication. Its CLI requires write access
+to the company source directory and config directory for rename/locking;
+an approved live activation must admit those paths in the owned unit.
+This increment adds no env, database migration, unit, or live activation.
+Rollback to the prior sender keeps registered originals/profile bindings
+on the SB side; it does not delete source evidence or rewrite keys.
+
 The bound CLI subprocess has a 10-second kill deadline and clears it on
 exit; a nonzero exit or unmatched receipt never acknowledges the outbox.
 An emitted receive receipt means a company-memory **candidate**, not a
