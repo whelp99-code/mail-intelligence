@@ -386,7 +386,6 @@ function precisionFor(messageId, message = currentMessages.find((item) => item.i
     operational: {
       ...precision?.operational,
       lane: 'archive',
-      autoPlacementAllowed: false,
       reasons: ['외부 회신으로 처리된 메일입니다.'],
     },
   };

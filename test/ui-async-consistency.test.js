@@ -33,7 +33,7 @@ for (const channel of ['phone', 'kakao']) {
       subject: 'Synthetic handled mail',
       precision: {
         workState: 'action_required', nextActor: 'me',
-        operational: { lane: 'do_now', autoPlacementAllowed: true },
+        operational: { lane: 'do_now', autoConfirmed: true },
       },
       handledElsewhere: { channel, markedAt: '2026-10-01T01:00:00Z' },
     };
