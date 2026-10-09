@@ -1331,7 +1331,7 @@ function renderActionPanel() {
   clear(calendarList);
   clear(reminderList);
   const selectedInsight = insightFor(selectedMessageId);
-  const actions = (selectedInsight?.nextActions || []).slice(0, 3);
+  const actions = (currentMessages.find((message) => message.id === selectedMessageId)?.handledElsewhere ? [] : selectedInsight?.nextActions || []).slice(0, 3);
   const calendar = (currentResult.calendar || []).filter(actionVisible);
   const reminders = (currentResult.reminders || []).filter(actionVisible);
   actionCount.textContent = `${actions.length}건`;

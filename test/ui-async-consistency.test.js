@@ -55,18 +55,23 @@ for (const channel of ['phone', 'kakao']) {
     const context = createContext({
       currentMessages: [message], message, selectedMessageId: null,
       document: { createElement: node }, messageDetail: detail, messageList: node(),
-      insightFor: () => null,
+      insightFor: () => ({ nextActions: [{ id: 'cached-reply' }] }),
       operationalLaneLabel,
       precisionSummaryLine: value => `${value.operational.lane}:${value.workState}`,
       legacyToPrecisionState: () => 'review', effectiveStatus: () => 'review',
       statusLabel: value => value, priorityLabel: value => value,
       escapeHtml: value => String(value ?? ''), safeExternalUrl: () => null,
       operationalDetail: () => '', precisionCorrectionPanel: () => '',
-      assistantToolPanel: () => '', detailBlock: () => '',
-      handledElsewhereControls: node, loadReceivedAttachments() {}, renderActionPanel() {},
+      assistantToolPanel: () => '', detailBlock: () => '', feedbackPanel: () => '',
+      handledElsewhereControls: node, loadReceivedAttachments() {},
       savePrecisionCorrection() {},
+      currentResult: { calendar: [], reminders: [] },
+      actionList: node(), calendarList: node(), reminderList: node(),
+      actionCount: node(), calendarCount: node(), reminderCount: node(),
+      clear: element => { element.innerHTML = ''; }, empty: node,
+      actionVisible: () => true, scenarioActionCard: node, simpleCard: node,
     });
-    for (const name of ['precisionStateLabel', 'precisionFor', 'messageCard', 'selectMessage']) {
+    for (const name of ['precisionStateLabel', 'precisionFor', 'messageCard', 'selectMessage', 'renderActionPanel']) {
       const source = app.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
       assert.ok(source, `real ${name} source is required`);
       runInContext(source, context);
@@ -77,6 +82,7 @@ for (const channel of ['phone', 'kakao']) {
       assert.equal(card.querySelector('.status-pill').textContent, `${DISPLAY_LABELS.archive} · 완료`);
       runInContext('selectMessage(message.id)', context);
       assert.ok(detail.innerHTML.includes(`class="status-pill">${DISPLAY_LABELS.archive} · 완료</span>`));
+      assert.equal(Number.parseInt(context.actionCount.textContent, 10), 0);
       assert.equal(JSON.stringify(message.precision), raw, 'model provenance is not overwritten');
       assert.equal(JSON.stringify(context.message.precision), raw);
     };
@@ -91,5 +97,7 @@ for (const channel of ['phone', 'kakao']) {
     context.message.handledElsewhere = null;
     const restored = runInContext('messageCard(message)', context);
     assert.match(restored.className, /precision-action-required operational-do-now/);
+    runInContext('renderActionPanel()', context);
+    assert.equal(Number.parseInt(context.actionCount.textContent, 10), 1);
   });
 }
