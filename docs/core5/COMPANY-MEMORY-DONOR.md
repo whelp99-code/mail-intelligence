@@ -106,6 +106,24 @@ Timeout, non-zero exit, malformed stdout, or receipt mismatch leave the row
 
 ## Mail-only outbox interface
 
+Committed received intake retains source mail, classification and local link
+evidence, but does not automatically enqueue MS or POST CRM candidates for
+`reference` classifications whose work-state evidence rule is
+`promotional-no-explicit-user-action`, `marketing-reference`,
+`automatic-notification-reference`, `automated-notification-reference`, or
+`low-value-automated-reference`. These cover both clause and event-frame
+classifications. The intake summary reports these separately
+as `candidateSkipped` with `NON_BUSINESS_REFERENCE`; the completed audit
+records `candidatesSkipped`. They remain accepted mail, not intake failures.
+Explicit corrections and confirmed customer/project assignments outrank this
+automatic gate. Ordinary reference knowledge and actionable automated
+business mail retain the existing candidate flow.
+
+Coverage: REQ-MAIL-007/008 and REQ-INT-004/011 in
+`test/sync-crm-candidates.test.js`. No migration, env or approval boundary is
+added. Rollback restores the previous automatic candidate selection only;
+retained source evidence and existing SB/CRM candidates are not deleted.
+
 Source events are keys-only rows in migration `013_mail_company_memory_outbox`
 (`INBOX_RECEIVED`, `WORK_LINKED`, `WORK_LINK_CORRECTED`). The publisher derives
 workspace, provider, mailbox, source locator, and source event from an

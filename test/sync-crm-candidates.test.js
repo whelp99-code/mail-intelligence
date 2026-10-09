@@ -11,6 +11,7 @@ import { CwosMailCandidateWriter } from '../src/adapters/cwos-mail-candidate-wri
 async function fixture(t, {
   subject = 'Example Project quote request', body = 'Please review Example Project.',
   workspaceId = 'fixture-workspace',
+  senderEmail = 'sender@example.invalid',
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'mr-candidates-'));
   const store = new SQLiteMailStore({ databasePath: join(directory, 'mail.sqlite') });
@@ -22,7 +23,7 @@ async function fixture(t, {
     syncRunId: store.startSyncRun({ mailboxId: mailbox.id, folderId: folder.id, runType: 'delta' }), pageIndex: 0,
     items: [normalizeGraphMessage({
       id: 'mail', changeKey: 'v1', subject,
-      from: { emailAddress: { address: 'sender@example.invalid' } },
+      from: { emailAddress: { address: senderEmail } },
       receivedDateTime: '2026-10-09T00:00:00Z',
       body: { contentType: 'text', content: body },
     })],
@@ -143,6 +144,108 @@ test('non-candidate mail does not append CRM data', async (t) => {
   assert.equal(result.deliveredCandidates.length, 0);
   assert.equal(posts.length, 0);
 });
+
+for (const example of [
+  {
+    name: 'advertisement',
+    subject: '[광고] Example Project newsletter',
+    body: 'Example Project weekly offers. Unsubscribe to stop receiving this newsletter.',
+    rule: 'marketing-reference',
+  },
+  {
+    name: 'automatic notification',
+    subject: 'Example Project notification',
+    body: 'Example Project notification. This email is automatically generated. Do not reply.',
+    senderEmail: 'no-reply@example.invalid',
+    rule: 'automated-notification-reference',
+  },
+]) {
+  test(`${example.name} reference retains evidence without CRM or MS publication`, async (t) => {
+    const workspaceId = '44444444-4444-4444-8444-444444444444';
+    const { store, binding, run, posts } = await fixture(t, { ...example, workspaceId });
+    binding.companyMemory = { workspaceId, provider: 'outlook' };
+    const result = await run();
+    assert.equal(result.accepted, 1);
+    assert.deepEqual(result.failures, []);
+    const classification = store.getPrecisionClassification(store.getMailbox('me').id, 'mail');
+    assert.equal(classification.workState, 'reference');
+    assert.equal(classification.evidence.workState.rule, example.rule);
+    assert.deepEqual(result.candidateSkipped, [{ messageId: 'mail', code: 'NON_BUSINESS_REFERENCE', rule: example.rule }]);
+    assert.equal(posts.length, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages').get().n, 1);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_work_links').get().n, 1);
+    const audit = store.db.prepare("SELECT payload_json FROM audit_events WHERE event_type='mail.intake.completed' ORDER BY id DESC LIMIT 1").get();
+    assert.equal(JSON.parse(audit.payload_json).candidatesSkipped, 1);
+  });
+}
+
+test('automated business requests still publish CRM and MS candidates', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run, posts } = await fixture(t, {
+    workspaceId, senderEmail: 'no-reply@example.invalid',
+    subject: 'Example Project 견적 검토', body: '자동 시스템 알림입니다. Example Project 견적서를 오늘 보내 주세요.',
+  });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  const result = await run();
+  assert.notEqual(store.getPrecisionClassification(store.getMailbox('me').id, 'mail').workState, 'reference');
+  assert.deepEqual(result.candidateSkipped, []);
+  assert.equal(posts.length, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+});
+
+test('ordinary reference knowledge still publishes CRM and MS candidates', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run, posts } = await fixture(t, {
+    workspaceId, subject: 'Example Project reference material',
+    body: 'Example Project information. FYI, no action required.',
+  });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  const result = await run();
+  assert.equal(store.getPrecisionClassification(store.getMailbox('me').id, 'mail').workState, 'reference');
+  assert.deepEqual(result.candidateSkipped, []);
+  assert.equal(posts.length, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+});
+
+test('an explicit correction outranks the automatic reference publication gate', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run, posts } = await fixture(t, {
+    workspaceId, subject: '[광고] Example Project newsletter',
+    body: 'Example Project weekly offers. Unsubscribe to stop receiving this newsletter.',
+  });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  await run();
+  store.savePrecisionCorrection(store.getMailbox('me').id, 'mail', {
+    overrides: { priority: 'normal' }, reasonCode: 'user-classification',
+  });
+  const result = await run();
+  assert.equal(store.getPrecisionClassification(store.getMailbox('me').id, 'mail').workState, 'reference');
+  assert.deepEqual(result.candidateSkipped, []);
+  assert.equal(posts.length, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+});
+
+for (const objectType of ['account', 'engagement']) {
+  test(`a confirmed ${objectType} assignment retains MS publication for reference mail`, async (t) => {
+    const workspaceId = '44444444-4444-4444-8444-444444444444';
+    const { store, binding, run } = await fixture(t, {
+      workspaceId, subject: '[광고] Example Project newsletter',
+      body: 'Example Project weekly offers. Unsubscribe to stop receiving this newsletter.',
+    });
+    binding.companyMemory = { workspaceId, provider: 'outlook' };
+    binding.workSystem.cwosClient.readMasters = async () => ({
+      workspaceId, items: [{ objectType, externalId: 'confirmed-context', name: 'Example Project' }],
+      provenance: { runtimeVersion: 4 },
+    });
+    await run();
+    store.db.prepare("UPDATE mail_work_links SET status='confirmed', corrected_by='fixture-user'").run();
+    const result = await run();
+    assert.deepEqual(result.candidateSkipped, []);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+    assert.equal(store.db.prepare("SELECT count(*) AS n FROM mail_work_links WHERE status='confirmed'").get().n, 1);
+  });
+}
 
 test('unknown native version refuses delivery rather than fabricating CAS state', async (t) => {
   const { binding, run, posts } = await fixture(t);
