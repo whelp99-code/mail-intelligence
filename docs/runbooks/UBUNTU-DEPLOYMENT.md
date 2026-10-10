@@ -32,6 +32,22 @@ bash scripts/activate-tailnet-proxy.sh
 6. Tailnet 프록시는 정확한 Tailscale IPv4 하나에만 바인딩한다.
 7. 프록시는 Tailscale 주소 범위만 허용하고 `127.0.0.1:3010`으로 전달한다.
 
+## 승인된 immutable release 재배포
+
+기존 서비스·0600 `runtime.env`·접근키와 SQLite 일관 백업이 있는 경우에만
+release 디렉터리에서 `bash scripts/deploy-user-service.sh --release <40자리 commit> <기존 data 절대경로>`를 실행한다.
+디렉터리 이름과 `VERSION.json.commit`, `serverSha256`가 정확히 일치해야 한다.
+로컬 준비 또는 테스트 통과는 운영 adoption 승인이 아니다.
+
+release 준비는 `.deployment/`에 환경과 unit을 생성하며 기존 환경·토큰은 변경하지 않는다.
+승인된 activation은 `zz-mail-intelligence-release.conf`만 설치하고 기존 base와 90/91/92 drop-in을 보존한다.
+`systemctl --user show`의 merged ExecStart·WorkingDirectory·전체 EnvironmentFiles 및 최종 환경을 검증한 뒤에만
+기존 `runtime.env`를 원자적으로 교체하고 재시작한다. 발송 등 외부 행동 플래그는 모두 0이고
+`COMPANY_MEMORY_*`는 EnvironmentFile에서 제거하며 manager 상속도 UnsetEnvironment로 차단한다.
+HTTP 200과 PID의 실제 경로·명령·환경·release bytes를 확인한다.
+activation 실패 시 자신이 바꾼 환경과 owned drop-in을 복원하고 재시작을 시도했다면 기존 설정으로 다시 시작한다.
+SQLite와 OAuth token cache를 자동으로 되감지 않는다. 별도 intake 검증 전에는 실사용 완료로 판정하지 않는다.
+
 ## 상태 확인
 
 ```bash

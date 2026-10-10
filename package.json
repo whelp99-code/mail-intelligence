@@ -72,10 +72,14 @@
     "collect:notion-readonly": "node scripts/collect-notion-readonly-snapshot.mjs"
   },
   "devDependencies": {
+    "braces": "file:vendor/braces",
     "eslint": "^8.57.0",
     "htmlhint": "^1.1.4",
     "stylelint": "^16.0.0",
     "stylelint-config-standard": "^36.0.0"
+  },
+  "overrides": {
+    "braces": "$braces"
   },
   "description": "Read-only Outlook intelligence with SQLite memory, precision classification, and official OpenAI/xAI OAuth CLI providers",
   "engines": {

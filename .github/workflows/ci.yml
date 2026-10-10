@@ -27,6 +27,11 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      - name: Provide the production systemd Node path
+        run: |
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          /usr/bin/node --version
+
       - name: Syntax check
         run: npm run check
 

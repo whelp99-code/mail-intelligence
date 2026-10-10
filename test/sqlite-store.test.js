@@ -140,10 +140,17 @@ test('delta page atomically stores message, people, thread, recipients and attac
   assert.equal(messages[0].from, 'owner@example.com');
   assert.deepEqual(messages[0].cc, ['engineer@example.com']);
   assert.match(messages[0].body, /9월 10일 오후 2시/);
+  assert.equal(messages[0].receivedAt, '2026-08-28T01:00:00.000Z');
   assert.equal(messages[0].hasAttachments, true);
 
   const record = store.getMessageRecord(mailbox.id, 'graph-message-1');
-  assert.equal(store.getAttachments(record.id)[0].name, '일정표.pdf');
+  const source = JSON.parse(record.source_json);
+  assert.equal(source.receivedDateTime, '2026-08-28T01:00:00.000Z');
+  assert.equal(source.webLink, 'https://outlook.office.com/mail/id/1');
+  const [attachment] = store.getAttachments(record.id);
+  assert.equal(attachment.name, '일정표.pdf');
+  assert.equal(attachment.contentType, 'application/pdf');
+  assert.equal(attachment.source.lastModifiedDateTime, '2026-08-28T01:00:05.000Z');
   const counts = store.counts();
   assert.equal(counts.persons, 3);
   assert.equal(counts.threads, 1);

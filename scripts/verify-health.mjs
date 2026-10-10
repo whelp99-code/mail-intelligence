@@ -11,7 +11,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 
 const mode = process.argv.includes('--full') ? 'full' : 'syntax';
 const configuredPort = String(process.env.PORT || process.env.MAIL_INTELLIGENCE_PORT || '').trim();
@@ -88,28 +87,49 @@ function verifyStatusContract(body) {
   }
 }
 
-async function waitForStatus(baseUrl, serverLog) {
-  let lastError;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      return await probeStatus(baseUrl);
-    } catch (error) {
-      lastError = error;
-      await delay(100);
-    }
-  }
-  throw new Error(`API probe did not become ready: ${lastError?.message || 'unknown error'}\n${serverLog()}`);
+async function waitForStatus(baseUrl, server, serverLog) {
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      server.stdout.off('data', onData);
+      server.off('close', onClose);
+      server.off('error', onError);
+    };
+    const onData = () => {
+      if (!serverLog().includes(`app running at ${baseUrl}`)) return;
+      cleanup();
+      resolve();
+    };
+    const onClose = (code) => {
+      cleanup();
+      reject(new Error(`server exited before listening (${code})\n${serverLog()}`));
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`server did not become ready\n${serverLog()}`));
+    }, 5000);
+    server.stdout.on('data', onData);
+    server.once('close', onClose);
+    server.once('error', onError);
+    onData();
+  });
+  return probeStatus(baseUrl);
 }
 
 async function stopServer(server) {
   if (server.exitCode != null) return;
-  server.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => server.once('close', resolve)),
-    delay(1500).then(() => {
-      if (server.exitCode == null) server.kill('SIGKILL');
-    })
-  ]);
+  await new Promise((resolve) => {
+    const timeout = setTimeout(() => server.kill('SIGKILL'), 1500);
+    server.once('close', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    server.kill('SIGTERM');
+  });
 }
 
 async function verifyDuplicateStart(env) {
@@ -122,13 +142,20 @@ async function verifyDuplicateStart(env) {
   duplicate.stdout.on('data', (chunk) => { log += chunk.toString(); });
   duplicate.stderr.on('data', (chunk) => { log += chunk.toString(); });
 
-  const exitCode = await Promise.race([
-    new Promise((resolve) => duplicate.once('close', resolve)),
-    delay(3000).then(() => {
+  const exitCode = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
       duplicate.kill('SIGKILL');
-      throw new Error(`duplicate server did not exit promptly\n${log}`);
-    })
-  ]);
+      reject(new Error(`duplicate server did not exit promptly\n${log}`));
+    }, 3000);
+    duplicate.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    duplicate.once('close', (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
   assert.equal(exitCode, 0, `duplicate server must exit successfully\n${log}`);
   assert.match(log, /Mail Intelligence is already running at /);
 }
@@ -154,7 +181,7 @@ async function runFullCheck() {
   server.stderr.on('data', (chunk) => { log += chunk.toString(); });
 
   try {
-    const body = await waitForStatus(baseUrl, () => log);
+    const body = await waitForStatus(baseUrl, server, () => log);
     verifyStatusContract(body);
     await verifyDuplicateStart(serverEnv);
     console.log(`[verify-health] OK ${baseUrl}/api/health`, {

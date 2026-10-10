@@ -12,6 +12,8 @@ import { createPrivateKey, sign } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import {
+  canonicalCompanyMemoryBytes,
+  CompanyMemoryDonorError,
   createMailProductDonorPort,
   mailSentDraftSourceLocator,
   publishCompanyMemoryDonor,
@@ -118,7 +120,8 @@ function resolveMessageCompanyMemorySource(db, input) {
        FROM messages m
        JOIN mailboxes mb ON mb.id = m.mailbox_id
        WHERE m.deleted_at IS NULL
-         AND (m.graph_id = ? OR m.graph_id = ? OR m.internet_message_id = ?)
+         AND m.graph_id = ?
+         AND (m.graph_id = ? OR m.internet_message_id = ?)
          AND (mb.address = ? OR mb.graph_user = ? OR mb.mailbox_key = ?)
        LIMIT 1`,
     ).get(input.locator, input.sourceEventId, input.sourceEventId, input.mailbox, input.mailbox, input.mailbox);
@@ -126,8 +129,8 @@ function resolveMessageCompanyMemorySource(db, input) {
     return null;
   }
   if (!row) return null;
-  const content = String(row.body_text || row.body_preview || '').normalize('NFC').trim();
-  if (!content) return null;
+  const content = String(row.body_text || row.body_preview || '');
+  if (!content.trim()) return null;
   return {
     workspaceId: input.workspaceId,
     provider: input.provider,
@@ -135,9 +138,9 @@ function resolveMessageCompanyMemorySource(db, input) {
     sourceLocator: input.locator,
     sourceEventId: input.sourceEventId,
     content,
-    parserVersion: 'mail:company-memory:1',
+    parserVersion: 'mail:company-memory:2',
     locator: {
-      kind: input.kind === 'INBOX_RECEIVED' ? 'mail_message' : 'mail_work',
+      kind: 'mail_message',
       graph_id: row.graph_id,
     },
   };
@@ -298,42 +301,68 @@ function loadSigner(file, keyId) {
 }
 
 function createSbCompanyTransport(command, configPath) {
-  return {
-    async invoke(canonicalRequest) {
-      return await new Promise((resolve, reject) => {
-        const child = spawn(command, ['--config', configPath], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: {
-            ...process.env,
-            SB_CONFIG: join(dirname(configPath), 'personal-sb-unused.toml'),
-          },
-        });
-        if (!child.stdin || !child.stdout || !child.stderr) {
-          child.kill();
-          reject(new Error('COMPANY_TRANSPORT_FAILED'));
-          return;
-        }
-        const stdout = [];
-        const stderr = [];
-        child.stdout.on('data', (chunk) => {
-          stdout.push(chunk);
-        });
-        child.stderr.on('data', (chunk) => {
-          stderr.push(chunk);
-        });
-        child.stdin.on('error', (error) => {
-          if (error.code !== 'EPIPE') reject(error);
-        });
-        child.on('error', reject);
-        child.on('close', (code) => {
-          resolve({
-            exitCode: code ?? 1,
-            stdout: Buffer.concat(stdout),
-            stderr: Buffer.concat(stderr),
-          });
-        });
-        child.stdin.end(Buffer.from(canonicalRequest));
+  const invoke = (args, canonicalRequest) => new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        SB_CONFIG: join(dirname(configPath), 'personal-sb-unused.toml'),
+      },
+    });
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    if (!child.stdin || !child.stdout || !child.stderr) {
+      clearTimeout(timeout);
+      child.kill();
+      reject(new Error('COMPANY_TRANSPORT_FAILED'));
+      return;
+    }
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => {
+      stdout.push(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr.push(chunk);
+    });
+    child.stdin.on('error', (error) => {
+      if (error.code !== 'EPIPE') reject(error);
+    });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({
+        exitCode: code ?? 1,
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr),
       });
+    });
+    child.stdin.end(Buffer.from(canonicalRequest));
+  });
+  return {
+    async invoke(canonicalRequest, content) {
+      const envelope = JSON.parse(Buffer.from(canonicalRequest).toString('utf8'));
+      const registrationRequest = canonicalCompanyMemoryBytes({ ...envelope, content });
+      let registration;
+      try {
+        const result = await invoke(['register-source', '--config', configPath], registrationRequest);
+        if (result.exitCode !== 0) throw new Error('registration failed');
+        registration = JSON.parse(Buffer.from(result.stdout).toString('utf8')).registration;
+      } catch {
+        throw new CompanyMemoryDonorError(
+          'COMPANY_SOURCE_REGISTRATION_FAILED', 'company source registration failed',
+        );
+      }
+      if (registration?.state !== 'registered'
+        || registration.source_locator !== envelope.arguments.source_locator
+        || registration.content_digest !== envelope.arguments.content_digest) {
+        throw new CompanyMemoryDonorError(
+          'COMPANY_SOURCE_REGISTRATION_MISMATCH', 'company source registration receipt mismatch',
+        );
+      }
+      return invoke(['--config', configPath], canonicalRequest);
     },
   };
 }
