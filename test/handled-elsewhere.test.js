@@ -191,3 +191,22 @@ test('marking drops the reply gap, cancels the pending draft, and undo restores 
   assert.equal(undone.body.replyGap, true);
   assert.equal(store.getHandledElsewhere(mailbox.id, message.id), null);
 });
+
+test('phone handling also cancels an unresolved draft and preserves its cancellation record on undo', async (t) => {
+  const { store, mailbox, message } = await withStore(t);
+  const drafts = new MailSendDrafts(store.db, { now: () => '2026-10-01T02:30:00.000Z' });
+  const pending = drafts.create(mailbox.id, 'jarvis', {
+    request_id: 'd4-handled-unresolved', to: ['lotte@example.com'], subject: 'RE: 회신 요청',
+    body_text: '일정은 {확인 필요}입니다.', message_id: message.id,
+  }).draft;
+  const api = apiFor(store, mailbox);
+  const marked = await api(request({ headers: human, body: { messageId: message.id, channel: 'phone', note: '통화로 일정 확인 완료' } }), url);
+  assert.equal(marked.body.cancelledDrafts, 1);
+  assert.equal(marked.body.replyGap, false);
+  assert.equal(marked.body.handledElsewhere.note, '통화로 일정 확인 완료');
+  assert.ok(marked.body.handledElsewhere.markedAt);
+  assert.equal(drafts.get(mailbox.id, pending.draft_id).status, 'cancelled');
+  await api(request({ headers: human, body: { messageId: message.id, undo: true } }), url);
+  assert.equal(drafts.get(mailbox.id, pending.draft_id).status, 'cancelled');
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM mail_send_draft_events WHERE draft_id=? AND status=\'cancelled\'').get(pending.draft_id).n, 1);
+});

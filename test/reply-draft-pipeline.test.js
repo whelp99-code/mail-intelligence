@@ -10,6 +10,7 @@ import {
   buildReplyDraftPlan,
   cancelAnsweredDrafts,
   hasLaterSentReply,
+  loadSentReplies,
   needsUnansweredReply,
   renderMorningDigest,
   runReplyDraftPipeline,
@@ -20,8 +21,8 @@ function fixtureDb() {
   const db = new DatabaseSync(':memory:');
   db.exec(`
     PRAGMA foreign_keys=ON;
-    CREATE TABLE mailboxes(id INTEGER PRIMARY KEY);
-    INSERT INTO mailboxes VALUES (1);
+    CREATE TABLE mailboxes(id INTEGER PRIMARY KEY, address TEXT NOT NULL DEFAULT '');
+    INSERT INTO mailboxes VALUES (1, 'me@whelp.example');
     CREATE TABLE mail_folders(id INTEGER PRIMARY KEY, well_known_name TEXT, display_name TEXT NOT NULL DEFAULT '');
     INSERT INTO mail_folders(id, well_known_name, display_name) VALUES
       (1, 'inbox', '받은 편지함'), (2, 'sentitems', 'Sent Items'), (6, 'inbox', '받은 편지함'),
@@ -141,6 +142,33 @@ test('reply gap is only inbound action or decision mail with no later sent reply
   assert.equal(needsUnansweredReply({ ...inbound, classification: { workState: 'reference' } }, []), false);
   assert.equal(needsUnansweredReply({ ...inbound, classification: { workState: 'decision_required' } }, []), true);
   assert.equal(hasLaterSentReply(inbound, [{ ...later, well_known_name: 'inbox', folder_id: 6 }]), false);
+  assert.equal(needsUnansweredReply(inbound, [{ ...later, conversation_id: 'different-thread', to: ['buyer@vendor.example'] }]), true);
+});
+
+test('owner voice evidence loads only Sent Items authored by the mailbox owner', () => {
+  const db = fixtureDb();
+  insertSent(db, {
+    id: 41, folder: 8, subject: 'Re: 자료 요청', normalized: '자료 요청',
+    sent: '2026-10-01T02:00:00.000Z', conversation: 'voice-1',
+    body: '안녕하세요.\n\n확인했습니다.\n\n감사합니다.\n박재민 드림',
+  });
+  db.prepare('UPDATE messages SET sender_email=\'colleague@example.com\' WHERE id=41').run();
+  insertSent(db, {
+    id: 42, folder: 8, subject: 'Re: 자료 요청', normalized: '자료 요청',
+    sent: '2026-10-01T03:00:00.000Z', conversation: 'voice-2',
+    body: '안녕하십니까.\n\n내용 확인했습니다.\n\n감사합니다.\n박재민 드림',
+  });
+  const rows = loadSentReplies(db, { mailboxId: 1 });
+  assert.deepEqual(rows.map((row) => row.id), [42]);
+  assert.match(rows[0].body_text, /안녕하십니까/);
+  const plan = buildReplyDraftPlan({
+    id: 43, mailbox_id: 1, sender_email: 'buyer@nexias.co.kr', subject: '자료 요청',
+    body_text: '자료를 회신 부탁드립니다.',
+  }, { workState: 'action_required' }, '2026-10-01T04:00:00.000Z', { db, suggestions: [] });
+  assert.match(plan.request.body_text, /안녕하십니까/);
+  assert.match(plan.request.body_text, /양해광 상무님/);
+  assert.deepEqual(plan.voiceEvidence, ['42']);
+  db.close();
 });
 
 test('reply gap falls back to normalized Re subject and recipient domain', () => {
@@ -289,6 +317,25 @@ test('missing classification uses a labeled rules-based decision', () => {
   assert.equal(plan.action, 'draft');
   assert.equal(plan.method, 'rules-based');
   assert.equal(plan.template, 'T6');
+});
+
+test('later owner reply cancels an unresolved draft without deleting it or changing approved drafts', () => {
+  const db = fixtureDb();
+  insert(db, { id: 31, subject: '자료 요청', email: 'buyer@example.com', body: '자료 회신 부탁드립니다.', workState: 'action_required' });
+  db.prepare('UPDATE messages SET conversation_id=\'d4-reply\', received_at=\'2026-10-01T01:00:00.000Z\' WHERE id=31').run();
+  const drafts = new MailSendDrafts(db, { now: () => '2026-10-01T02:00:00.000Z' });
+  const pending = drafts.create(1, 'jarvis', { request_id: 'd4-unresolved', to: ['buyer@example.com'], subject: 'RE: 자료 요청', body_text: '일정은 {확인 필요}입니다.', message_id: 31 }).draft;
+  const approved = drafts.create(1, 'jarvis', { request_id: 'd4-approved', to: ['buyer@example.com'], subject: 'RE: 자료 요청', body_text: '확인했습니다.', message_id: 31 }).draft;
+  drafts.approve(1, approved.draft_id, { actor: 'session:owner', digest: approved.payload_digest, allowSend: true, hasSendScope: true });
+  insertSent(db, { id: 32, folder: 8, subject: 'Re: 자료 요청', normalized: '자료 요청', sent: '2026-10-01T03:00:00.000Z', conversation: 'd4-reply', to: ['buyer@example.com'] });
+  assert.equal(pending.status, 'needs_clarification');
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 1);
+  assert.equal(drafts.get(1, pending.draft_id).status, 'cancelled');
+  assert.equal(drafts.get(1, pending.draft_id).body_text, pending.body_text);
+  assert.equal(drafts.get(1, approved.draft_id).status, 'approved');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_send_draft_events WHERE draft_id=? AND status=\'cancelled\' AND actor=? AND reason=?').get(pending.draft_id, 'system:already-replied', ALREADY_REPLIED_REASON).n, 1);
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 0);
+  db.close();
 });
 
 test('folder copies of one mail produce one reply draft; distinct mails stay separate', () => {
