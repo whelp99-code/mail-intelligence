@@ -111,9 +111,9 @@ test('MS rejects outgoing draft deleted and junk sources before queueing', async
   const workspaceId = '44444444-4444-4444-8444-444444444444';
   const { store, binding, run } = await fixture(t, { workspaceId });
   binding.companyMemory = { workspaceId, provider: 'outlook' };
-  store.db.prepare("UPDATE messages SET is_draft=1 WHERE graph_id='mail'").run();
+  store.db.prepare('UPDATE messages SET is_draft=1 WHERE graph_id=\'mail\'').run();
   assert.equal((await run()).skipped[0].code, 'RECEIVED_MAIL_REQUIRED');
-  store.db.prepare("UPDATE messages SET is_draft=0 WHERE graph_id='mail'").run();
+  store.db.prepare('UPDATE messages SET is_draft=0 WHERE graph_id=\'mail\'').run();
   for (const folder of ['sentitems', 'drafts', 'deleteditems', 'junkemail']) {
     store.ensureFolder({ mailboxId: store.getMailbox('me').id, graphId: 'inbox', wellKnownName: folder, displayName: folder });
     const result = await run();
@@ -175,7 +175,7 @@ for (const example of [
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 0);
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages').get().n, 1);
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_work_links').get().n, 1);
-    const audit = store.db.prepare("SELECT payload_json FROM audit_events WHERE event_type='mail.intake.completed' ORDER BY id DESC LIMIT 1").get();
+    const audit = store.db.prepare('SELECT payload_json FROM audit_events WHERE event_type=\'mail.intake.completed\' ORDER BY id DESC LIMIT 1').get();
     assert.equal(JSON.parse(audit.payload_json).candidatesSkipped, 1);
   });
 }
@@ -308,11 +308,11 @@ for (const objectType of ['account', 'engagement']) {
       provenance: { runtimeVersion: 4 },
     });
     await run();
-    store.db.prepare("UPDATE mail_work_links SET status='confirmed', corrected_by='fixture-user'").run();
+    store.db.prepare('UPDATE mail_work_links SET status=\'confirmed\', corrected_by=\'fixture-user\'').run();
     const result = await run();
     assert.deepEqual(result.candidateSkipped, []);
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
-    assert.equal(store.db.prepare("SELECT count(*) AS n FROM mail_work_links WHERE status='confirmed'").get().n, 1);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_work_links WHERE status=\'confirmed\'').get().n, 1);
   });
 }
 
