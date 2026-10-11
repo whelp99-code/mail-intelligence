@@ -376,8 +376,19 @@ function insightFor(messageId) {
   return currentResult?.messageInsights?.find((item) => item.id === messageId);
 }
 
-function precisionFor(messageId) {
-  return currentMessages.find((item) => item.id === messageId)?.precision || null;
+function precisionFor(messageId, message = currentMessages.find((item) => item.id === messageId)) {
+  const precision = message?.precision || null;
+  if (!message?.handledElsewhere) return precision;
+  return {
+    ...precision,
+    workState: 'completed',
+    nextActor: 'none',
+    operational: {
+      ...precision?.operational,
+      lane: 'archive',
+      reasons: ['외부 회신으로 처리된 메일입니다.'],
+    },
+  };
 }
 
 function precisionStateLabel(value) {
@@ -471,6 +482,7 @@ function precisionSummaryLine(classification) {
 }
 
 function operationalLaneForMessage(messageId) {
+  if (currentMessages.find((message) => message.id === messageId)?.handledElsewhere) return 'archive';
   const precision = precisionFor(messageId);
   return precision?.operational?.lane || 'review';
 }
@@ -577,7 +589,7 @@ function handledElsewhereControls(message, { compact = false } = {}) {
   select.value = 'kakao';
   const button = document.createElement('button');
   button.type = 'button';
-  button.textContent = '✓ 외부 회신';
+  button.textContent = '카톡·전화로 처리함';
   let noteInput = null;
   if (!compact) {
     noteInput = document.createElement('input');
@@ -621,7 +633,7 @@ async function saveHandledElsewhere(messageId, { channel = 'kakao', note = '', u
 
 function messageCard(message) {
   const insight = insightFor(message.id);
-  const precision = message.precision;
+  const precision = precisionFor(message.id, message);
   const lane = precision?.workState || legacyToPrecisionState(effectiveStatus(insight));
   const operationalLane = precision?.operational?.lane || 'review';
   const article = document.createElement('article');
@@ -900,7 +912,9 @@ function mountAssistantDraft(draft) {
     mailSubject: draft.subject || '',
     body: draft.body || '',
   });
-  renderAssistantOutput('초안을 만들었습니다. 내용을 직접 확인한 뒤 클립보드로 복사하세요. 자동 발송은 차단되어 있습니다.');
+  renderAssistantOutput(draft.needsClarification
+    ? '보낼 수 없음 · {확인 필요} 항목을 먼저 확인해 주세요. 초안은 검토용으로만 복사할 수 있습니다.'
+    : '초안을 만들었습니다. 내용을 직접 확인한 뒤 클립보드로 복사하세요. 자동 발송은 차단되어 있습니다.');
 }
 
 async function loadReceivedAttachments(messageId, expectFiles) {
@@ -1058,7 +1072,7 @@ function selectMessage(messageId) {
   selectedMessageId = messageId;
   const message = currentMessages.find((item) => item.id === messageId);
   const insight = insightFor(messageId);
-  const precision = message?.precision || null;
+  const precision = precisionFor(messageId, message);
   if (!message && !insight) return;
 
   const tasks = insight?.tasks || [];
@@ -1194,6 +1208,7 @@ async function savePrecisionCorrection(event) {
 }
 
 function laneForMessage(messageId) {
+  if (currentMessages.find((message) => message.id === messageId)?.handledElsewhere) return 'completed';
   const precision = precisionFor(messageId);
   if (precision?.workState) return precision.workState;
   const insight = insightFor(messageId);
@@ -1316,7 +1331,7 @@ function renderActionPanel() {
   clear(calendarList);
   clear(reminderList);
   const selectedInsight = insightFor(selectedMessageId);
-  const actions = (selectedInsight?.nextActions || []).slice(0, 3);
+  const actions = (currentMessages.find((message) => message.id === selectedMessageId)?.handledElsewhere ? [] : selectedInsight?.nextActions || []).slice(0, 3);
   const calendar = (currentResult.calendar || []).filter(actionVisible);
   const reminders = (currentResult.reminders || []).filter(actionVisible);
   actionCount.textContent = `${actions.length}건`;
