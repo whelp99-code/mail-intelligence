@@ -46,7 +46,6 @@ import {
   classifyIdentityFailure,
   failClosedIntakeReverify,
   identityEndpointFromEnv,
-  intakeDenial,
   planPinnedRegistration,
   proveDelegatedIdentity,
   readPinnedBinding,
