@@ -52,6 +52,7 @@ import {
   refuseObservedRegistration,
 } from './src/application/intake-identity.js';
 import { loadCwosMasterReader } from './src/adapters/cwos-master-reader.js';
+import { authorizeJarvisMailReader, loadJarvisMailReader } from './src/security/jarvis-mail-reader.js';
 import { createProductionIntakeBinding } from './src/application/sync-work-intake.js';
 import { createWorkLinksApi } from './src/application/work-links-api.js';
 import { createHandledElsewhereApi } from './src/application/handled-elsewhere-api.js';
@@ -2959,6 +2960,11 @@ async function handleApi(req, res) {
 const server = createServer(async (req, res) => {
   try {
     assertAllowedHost(req);
+    if (authorizeJarvisMailReader(req, jarvisMailReader)) {
+      // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox.
+      const { ready, counts } = requireMailMemory().store.storageStatus();
+      return json(res, 200, { ready, counts: { messages: counts.messages, threads: counts.threads } });
+    }
   } catch (error) {
     json(res, error.statusCode || 403, {
       code: error.code || 'HOST_NOT_ALLOWED',
@@ -3125,6 +3131,9 @@ async function readPrivateToken(envValue, fileEnv, label) {
 }
 const draftServiceToken = await readPrivateToken('MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE', 'Grok draft');
 const jarvisDraftToken = await readPrivateToken('MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN_FILE', 'JARVIS draft');
+const jarvisMailReader = await loadJarvisMailReader(process.env, {
+  forbiddenCredentials: [configuredAccessKey, draftServiceToken, jarvisDraftToken],
+});
 const companyMemoryDonorBind = loadCompanyMemoryDonorBind(process.env);
 const companyMemory = companyMemoryDonorBind.enabled
   ? { workspaceId: companyMemoryDonorBind.workspaceId, provider: 'outlook' }
