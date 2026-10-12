@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -19,6 +19,7 @@ import {
 } from '../src/application/company-memory-donor.js';
 import {
   loadCompanyMemoryDonorBind,
+  resolveMailCompanyMemorySource,
   runBoundCompanyMemoryDonorTick,
 } from '../src/application/company-memory-donor-bind.js';
 
@@ -61,11 +62,34 @@ const chunks = [];
 process.stdin.on("data", (chunk) => chunks.push(chunk));
 process.stdin.on("end", () => {
   const raw = Buffer.concat(chunks).toString("utf8");
+  const call = { argv: process.argv.slice(2), raw, sbConfig: process.env.SB_CONFIG || "" };
+  const callsPath = path.join(dir, "calls.json");
+  const calls = fs.existsSync(callsPath) ? JSON.parse(fs.readFileSync(callsPath, "utf8")) : [];
+  fs.writeFileSync(callsPath, JSON.stringify([...calls, call]));
+  const envelope = JSON.parse(raw);
+  if (process.argv[2] === "register-source") {
+    const faultPath = path.join(dir, "registration-fault.txt");
+    const fault = fs.existsSync(faultPath) ? fs.readFileSync(faultPath, "utf8") : "";
+    if (fault === "fail") { process.stderr.write("private error detail"); process.exit(2); }
+    if (fault === "malformed") { process.stdout.write("not JSON"); return; }
+    const registration = {
+      state: "registered", source_locator: envelope.arguments.source_locator,
+      content_digest: envelope.arguments.content_digest,
+    };
+    if (fault === "state") registration.state = "candidate";
+    if (fault === "locator") registration.source_locator = "foreign-locator";
+    if (fault === "digest") registration.content_digest = "sha256:${'0'.repeat(64)}";
+    fs.writeFileSync(path.join(dir, "registered.json"), JSON.stringify(envelope));
+    process.stdout.write(JSON.stringify({ registration }) + "\\n");
+    return;
+  }
+  const registered = JSON.parse(fs.readFileSync(path.join(dir, "registered.json"), "utf8"));
+  if (JSON.stringify(registered.arguments) !== JSON.stringify(envelope.arguments)
+    || JSON.stringify(registered.authority) !== JSON.stringify(envelope.authority)) process.exit(2);
   fs.writeFileSync(
     path.join(dir, "invoked.json"),
-    JSON.stringify({ argv: process.argv.slice(2), raw, sbConfig: process.env.SB_CONFIG || "" }),
+    JSON.stringify(call),
   );
-  const envelope = JSON.parse(raw);
   process.stdout.write(
     JSON.stringify({
       receipt: {
@@ -185,6 +209,44 @@ test('stays disabled when donor env is absent', async () => {
   assert.deepEqual(skipped, { skipped: true });
 });
 
+test('message donor binds locator and event ID to the same source before publishing', (t) => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec(`
+    CREATE TABLE mailboxes (
+      id INTEGER PRIMARY KEY, mailbox_key TEXT, address TEXT, graph_user TEXT
+    );
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY, mailbox_id INTEGER, graph_id TEXT,
+      internet_message_id TEXT, body_text TEXT, body_preview TEXT, deleted_at TEXT
+    );
+  `);
+  db.prepare('INSERT INTO mailboxes VALUES (1, ?, ?, ?)')
+    .run(SOURCE.mailbox, SOURCE.mailbox, SOURCE.mailbox);
+  db.prepare('INSERT INTO messages VALUES (1, 1, ?, ?, ?, ?, NULL)')
+    .run(SOURCE.sourceLocator, SOURCE.sourceEventId, SOURCE.content, '');
+  const event = {
+    workspaceId: WORKSPACE,
+    kind: 'INBOX_RECEIVED',
+    provider: SOURCE.provider,
+    mailbox: SOURCE.mailbox,
+    sourceLocator: SOURCE.sourceLocator,
+    sourceEventId: SOURCE.sourceEventId,
+  };
+  assert.equal(resolveMailCompanyMemorySource(db, event).content, SOURCE.content);
+  assert.deepEqual(resolveMailCompanyMemorySource(db, { ...event, kind: 'WORK_LINKED' }),
+    resolveMailCompanyMemorySource(db, event));
+  assert.equal(resolveMailCompanyMemorySource(db, {
+    ...event, sourceEventId: 'foreign-event',
+  }), null);
+  assert.equal(resolveMailCompanyMemorySource(db, {
+    ...event, sourceLocator: 'foreign-locator',
+  }), null);
+  assert.equal(resolveMailCompanyMemorySource(db, {
+    ...event, mailbox: 'foreign@example.invalid',
+  }), null);
+});
+
 test('fails closed when donor env is incomplete or unknown', () => {
   const dir = tempDir();
   try {
@@ -246,6 +308,16 @@ test('ticks the isolated sb-company command with key files and marks outbox emit
     assert.deepEqual(invoked.argv, ['--config', env.COMPANY_MEMORY_SB_COMPANY_CONFIG]);
     assert.equal(invoked.sbConfig.endsWith('personal-sb-unused.toml'), true);
     const envelope = JSON.parse(invoked.raw);
+    const calls = JSON.parse(readFileSync(join(dir, 'calls.json'), 'utf8'));
+    assert.deepEqual(calls.map(call => call.argv), [
+      ['register-source', '--config', env.COMPANY_MEMORY_SB_COMPANY_CONFIG],
+      ['--config', env.COMPANY_MEMORY_SB_COMPANY_CONFIG],
+    ]);
+    const registration = JSON.parse(calls[0].raw);
+    assert.deepEqual(Object.keys(registration).sort(), ['arguments', 'authority', 'content']);
+    assert.equal(registration.content, SOURCE.content);
+    assert.deepEqual(registration.arguments, envelope.arguments);
+    assert.deepEqual(registration.authority, envelope.authority);
     assert.deepEqual(Object.keys(envelope).sort(), ['arguments', 'authority']);
     assert.equal(envelope.arguments.source_system, 'mail');
     assert.equal(envelope.authority.workspace_id, WORKSPACE);
@@ -253,6 +325,69 @@ test('ticks the isolated sb-company command with key files and marks outbox emit
     assert.equal(existsSync(join(dir, 'sb-invoked.txt')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registration preserves original UTF-8 whitespace and Korean text', async (t) => {
+  const dir = tempDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = completeEnv(dir);
+  const db = openOutboxDb();
+  t.after(() => db.close());
+  const source = { ...SOURCE, content: '  한글 원본 "evidence"\n끝  ', parserVersion: 'mail:company-memory:2' };
+  const event = seedOutbox(db, source);
+  const result = await runBoundCompanyMemoryDonorTick(env, {
+    now: NOW, outbox: createMailProductDonorPort({ db, resolveSource: () => source }),
+  });
+  assert.deepEqual(result.result.emitted, [event.id]);
+  const registered = JSON.parse(readFileSync(join(dir, 'registered.json'), 'utf8'));
+  assert.equal(registered.content, source.content);
+  assert.equal(registered.arguments.content_digest,
+    `sha256:${createHash('sha256').update(source.content, 'utf8').digest('hex')}`);
+  const received = JSON.parse(JSON.parse(readFileSync(join(dir, 'invoked.json'), 'utf8')).raw);
+  assert.equal(Object.hasOwn(received, 'content'), false);
+  assert.equal(Object.hasOwn(received.arguments, 'content'), false);
+});
+
+test('registration failure leaves SQLite PENDING, retries next tick, and replay does not invoke again', async (t) => {
+  const dir = tempDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = completeEnv(dir);
+  const db = openOutboxDb();
+  t.after(() => db.close());
+  const event = seedOutbox(db);
+  const outbox = createMailProductDonorPort({ db, resolveSource: () => SOURCE });
+  const fault = join(dir, 'registration-fault.txt');
+  writeFileSync(fault, 'fail');
+  const first = await runBoundCompanyMemoryDonorTick(env, { now: NOW, outbox });
+  assert.deepEqual(first.result.rejected, [{ id: event.id, code: 'COMPANY_SOURCE_REGISTRATION_FAILED' }]);
+  assert.equal(db.prepare('SELECT status FROM mail_company_memory_outbox').get().status, 'PENDING');
+  assert.equal(existsSync(join(dir, 'invoked.json')), false);
+  rmSync(fault);
+  const second = await runBoundCompanyMemoryDonorTick(env, { now: new Date(NOW.getTime() + 30000), outbox });
+  assert.deepEqual(second.result.emitted, [event.id]);
+  assert.equal(db.prepare('SELECT status FROM mail_company_memory_outbox').get().status, 'EMITTED');
+  const third = await runBoundCompanyMemoryDonorTick(env, { now: new Date(NOW.getTime() + 60000), outbox });
+  assert.equal(third.result.attempted, 0);
+  const calls = JSON.parse(readFileSync(join(dir, 'calls.json'), 'utf8'));
+  assert.deepEqual(calls.map(call => call.argv[0]), ['register-source', 'register-source', '--config']);
+});
+
+test('malformed and mismatched registration receipts never invoke receive', async (t) => {
+  const dir = tempDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = completeEnv(dir);
+  for (const fault of ['malformed', 'state', 'locator', 'digest']) {
+    writeFileSync(join(dir, 'registration-fault.txt'), fault);
+    const outbox = pendingOutbox();
+    const result = await runBoundCompanyMemoryDonorTick(env, { now: NOW, outbox });
+    assert.deepEqual(result.result.emitted, []);
+    assert.deepEqual(outbox.emitted, []);
+    assert.deepEqual(result.result.rejected, [{
+      id: 'mail:v1:fixture',
+      code: fault === 'malformed' ? 'COMPANY_SOURCE_REGISTRATION_FAILED' : 'COMPANY_SOURCE_REGISTRATION_MISMATCH',
+    }]);
+    assert.equal(existsSync(join(dir, 'invoked.json')), false);
   }
 });
 
@@ -360,7 +495,8 @@ test('resolves authenticated Mail source from sqlite and does not invoke without
     const invoked = JSON.parse(readFileSync(join(dir, 'invoked.json'), 'utf8'));
     const envelope = JSON.parse(invoked.raw);
     assert.equal(envelope.arguments.source_system, 'mail');
-    assert.equal(envelope.arguments.content, SOURCE.content);
+    assert.equal(Object.hasOwn(envelope.arguments, 'content'), false);
+    assert.equal(envelope.arguments.content_digest, `sha256:${createHash('sha256').update(SOURCE.content, 'utf8').digest('hex')}`);
     assert.equal(envelope.arguments.candidate_id, `mail:v1:${SOURCE.workspaceId}:${SOURCE.provider}:${SOURCE.mailbox}:${SOURCE.sourceLocator}:${SOURCE.sourceEventId}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });

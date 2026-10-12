@@ -6,6 +6,17 @@ function mailboxKey(value = '') {
   return String(value || 'me').trim().toLowerCase() || 'me';
 }
 
+function uniqueMessageIds(ids = []) {
+  const seen = new Set();
+  const unique = [];
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
+}
+
 function safeMessage(error) {
   return String(error?.message || 'Mail synchronization failed.').slice(0, 1000);
 }
@@ -17,12 +28,13 @@ function auditStatusCode(error) {
 }
 
 export class MailSyncService {
-  constructor({ store, graphClientFactory, attachmentMetadataLimit = 10 }) {
+  constructor({ store, graphClientFactory, attachmentMetadataLimit = 10, retrySleep = null }) {
     if (!store) throw new Error('store is required.');
     if (typeof graphClientFactory !== 'function') throw new Error('graphClientFactory is required.');
     this.store = store;
     this.graphClientFactory = graphClientFactory;
     this.attachmentMetadataLimit = Math.min(Math.max(Number(attachmentMetadataLimit) || 0, 0), 50);
+    this.retrySleep = typeof retrySleep === 'function' ? retrySleep : null;
   }
 
   async syncFolder({
@@ -56,6 +68,20 @@ export class MailSyncService {
       folder = this.store.getFolder({ mailboxId: mailbox.id, graphId: folderId });
     }
 
+    const committedIds = [];
+    const retainCommitted = (error) => {
+      if (Array.isArray(error?.upsertedMessageIds)) committedIds.push(...error.upsertedMessageIds);
+      if (error && typeof error === 'object') error.upsertedMessageIds = uniqueMessageIds(committedIds);
+    };
+    const folderReceipt = (result, extra = {}) => ({
+      ...result,
+      ...extra,
+      upsertedMessageIds: uniqueMessageIds(committedIds),
+      mailbox,
+      folder: this.store.getFolder({ mailboxId: mailbox.id, graphId: folderId }),
+      messages: this.store.getRecentMessages(mailbox.id, { limit: recentLimit }),
+    });
+
     try {
       const result = await this.runSync({
         client,
@@ -64,34 +90,31 @@ export class MailSyncService {
         mailboxPath,
         folderId,
       });
-      return {
-        ...result,
-        mailbox,
-        folder: this.store.getFolder({ mailboxId: mailbox.id, graphId: folderId }),
-        messages: this.store.getRecentMessages(mailbox.id, { limit: recentLimit }),
-      };
+      committedIds.push(...(result.upsertedMessageIds || []));
+      return folderReceipt(result);
     } catch (error) {
+      retainCommitted(error);
       if (error?.code !== 'DELTA_CURSOR_EXPIRED' || forceInitial) throw error;
-      this.store.clearFolderCursor(folder.id, {
-        errorCode: 'DELTA_CURSOR_EXPIRED',
-        errorMessage: 'Expired delta cursor was reset before a fresh synchronization.',
-      });
-      folder = this.store.getFolder({ mailboxId: mailbox.id, graphId: folderId });
-      const resetResult = await this.runSync({
-        client,
-        mailbox,
-        folder,
-        mailboxPath,
-        folderId,
-        forcedRunType: 'cursor-reset',
-      });
-      return {
-        ...resetResult,
-        cursorReset: true,
-        mailbox,
-        folder: this.store.getFolder({ mailboxId: mailbox.id, graphId: folderId }),
-        messages: this.store.getRecentMessages(mailbox.id, { limit: recentLimit }),
-      };
+      try {
+        this.store.clearFolderCursor(folder.id, {
+          errorCode: 'DELTA_CURSOR_EXPIRED',
+          errorMessage: 'Expired delta cursor was reset before a fresh synchronization.',
+        });
+        folder = this.store.getFolder({ mailboxId: mailbox.id, graphId: folderId });
+        const resetResult = await this.runSync({
+          client,
+          mailbox,
+          folder,
+          mailboxPath,
+          folderId,
+          forcedRunType: 'cursor-reset',
+        });
+        committedIds.push(...(resetResult.upsertedMessageIds || []));
+        return folderReceipt(resetResult, { cursorReset: true });
+      } catch (resetError) {
+        retainCommitted(resetError);
+        throw resetError;
+      }
     }
   }
 
@@ -118,22 +141,34 @@ export class MailSyncService {
     });
     const folderResults = [];
     const errors = [];
+    const upsertedMessageIds = [];
     for (const folder of folders) {
+      const committedIds = [];
       try {
         const result = await retryOperation(
-          () => this.syncFolder({
-            accessToken,
-            mailboxUser,
-            folderId: folder.id,
-            displayName: folder.displayName || folder.id,
-            parentGraphId: folder.parentFolderId || '',
-            recentLimit: 1,
-            forceInitial,
-          }),
+          async () => {
+            try {
+              const folderResult = await this.syncFolder({
+                accessToken,
+                mailboxUser,
+                folderId: folder.id,
+                displayName: folder.displayName || folder.id,
+                parentGraphId: folder.parentFolderId || '',
+                recentLimit: 1,
+                forceInitial,
+              });
+              committedIds.push(...(folderResult.upsertedMessageIds || []));
+              return folderResult;
+            } catch (error) {
+              if (Array.isArray(error?.upsertedMessageIds)) committedIds.push(...error.upsertedMessageIds);
+              throw error;
+            }
+          },
           {
             attempts: 3,
             baseDelayMs: 250,
             shouldRetry: (error) => error?.retryable === true,
+            ...(this.retrySleep ? { sleep: this.retrySleep } : {}),
           },
         );
         folderResults.push({
@@ -155,6 +190,7 @@ export class MailSyncService {
           message: safeMessage(error),
         });
       }
+      upsertedMessageIds.push(...committedIds);
     }
     const totals = folderResults.reduce((acc, item) => ({
       pages: acc.pages + item.pages,
@@ -182,6 +218,7 @@ export class MailSyncService {
       errors,
       ...totals,
       messages: this.store.getRecentMessages(mailbox.id, { limit: recentLimit }),
+      upsertedMessageIds: uniqueMessageIds(upsertedMessageIds),
     };
   }
 
@@ -195,6 +232,7 @@ export class MailSyncService {
       cursorStart: startUrl,
     });
     const totals = { pages: 0, received: 0, upserts: 0, deletions: 0, attachmentErrors: 0 };
+    const upsertedMessageIds = [];
     let lastCursor = startUrl;
     let attachmentsRemaining = this.attachmentMetadataLimit;
 
@@ -205,6 +243,7 @@ export class MailSyncService {
         startUrl,
       })) {
         const normalized = [];
+        const pageIds = [];
         for (const raw of page.items) {
           let payload = raw;
           if (raw && !raw['@removed'] && graphItemLacksContent(raw)) {
@@ -258,6 +297,7 @@ export class MailSyncService {
             }
           }
           normalized.push(item);
+          if (item.kind === 'upsert' && item.graphId) pageIds.push(item.graphId);
         }
         const applied = this.store.applyDeltaPage({
           mailboxId: mailbox.id,
@@ -269,6 +309,7 @@ export class MailSyncService {
           nextLink: page.nextLink,
           deltaLink: page.deltaLink,
         });
+        upsertedMessageIds.push(...pageIds);
         totals.pages += 1;
         totals.received += applied.items;
         totals.upserts += applied.upserts;
@@ -281,8 +322,9 @@ export class MailSyncService {
         entityId: folder.id,
         payload: { runType, ...totals },
       });
-      return { syncRunId, runType, ...totals };
+      return { syncRunId, runType, ...totals, upsertedMessageIds };
     } catch (error) {
+      if (error && typeof error === 'object') error.upsertedMessageIds = upsertedMessageIds.slice();
       const status = error?.retryable ? 'interrupted' : 'failed';
       this.store.recordSyncFailure(syncRunId, folder.id, error, status);
       this.store.audit('mail.sync.failed', {

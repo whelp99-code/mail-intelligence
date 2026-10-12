@@ -33,7 +33,7 @@ async function waitForOutput(child, stream, marker) {
         resolve();
       }
     };
-    const onExit = (code) => { cleanup(); reject(new Error(`${marker}: process exited ${code}`)); };
+    const onExit = (code, signal) => { cleanup(); reject(new Error(`${marker}: process exited ${signal || code}`)); };
     const onAbort = () => { cleanup(); reject(new Error(`${marker}: startup timeout`)); };
     const timer = setTimeout(onAbort, 10_000);
     const cleanup = () => {
@@ -55,6 +55,21 @@ function collectOutput(child, limit = 12_000) {
   child.stdout?.on('data', append);
   child.stderr?.on('data', append);
   return () => text;
+}
+
+async function stopChild(child) {
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(2_000) });
+    child.kill('SIGTERM');
+    try { await exited; }
+    catch {
+      if (child.exitCode === null && child.signalCode === null) {
+        const killed = once(child, 'exit', { signal: AbortSignal.timeout(2_000) });
+        child.kill('SIGKILL');
+        await killed;
+      }
+    }
+  }
 }
 
 function attachCdp(ws) {
@@ -126,6 +141,17 @@ function fontsConf(cacheDir) {
 `;
 }
 
+test('cleanup completes for an already signal-terminated child', { timeout: 4_000 }, async (t) => {
+  const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  t.after(() => { child.kill('SIGKILL'); });
+  const exited = once(child, 'exit');
+  child.kill('SIGTERM');
+  await exited;
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, 'SIGTERM');
+  await stopChild(child);
+});
+
 test('isolated Chrome drives file input, errors, download, keyboard, and CJK labels', { timeout: 60_000 }, async (t) => {
   const directory = await mkdtemp(join('/var/tmp', 'mi-g8-'));
   const profile = join(directory, 'chrome');
@@ -183,6 +209,9 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
     env: {
       ...process.env,
       HOME: directory,
+      // Chrome's SingletonSocket must fit a Unix socket path; release TMPDIRs
+      // can exceed that limit. Keep its sockets in this short owned fixture.
+      TMPDIR: directory,
       FONTCONFIG_FILE: fontConfig,
       FONTCONFIG_PATH: directory,
       XDG_CACHE_HOME: join(directory, 'cache'),
@@ -194,14 +223,7 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
   const appLog = collectOutput(app);
   const chromeLog = collectOutput(chrome);
   t.after(async () => {
-    for (const child of [chrome, app]) {
-      if (child.exitCode === null) {
-        const exited = once(child, 'exit', { signal: AbortSignal.timeout(2_000) });
-        child.kill('SIGTERM');
-        try { await exited; }
-        catch { if (child.exitCode === null) { child.kill('SIGKILL'); await once(child, 'exit'); } }
-      }
-    }
+    for (const child of [chrome, app]) await stopChild(child);
     await rm(directory, { recursive: true, force: true });
   });
 

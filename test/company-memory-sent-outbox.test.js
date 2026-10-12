@@ -210,8 +210,15 @@ const chunks = [];
 process.stdin.on("data", (chunk) => chunks.push(chunk));
 process.stdin.on("end", () => {
   const raw = Buffer.concat(chunks).toString("utf8");
-  fs.writeFileSync(path.join(dir, "invoked.json"), JSON.stringify({ raw }));
   const envelope = JSON.parse(raw);
+  if (process.argv[2] === "register-source") {
+    process.stdout.write(JSON.stringify({registration: {
+      state: "registered", source_locator: envelope.arguments.source_locator,
+      content_digest: envelope.arguments.content_digest,
+    }}));
+    return;
+  }
+  fs.writeFileSync(path.join(dir, "invoked.json"), JSON.stringify({ raw }));
   process.stdout.write(JSON.stringify({
     receipt: {
       receipt_id: "cmreceipt:v1:${'b'.repeat(64)}",

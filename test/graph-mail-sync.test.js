@@ -204,7 +204,11 @@ test('sync service commits each page and resumes from persisted nextLink after i
 
   await assert.rejects(
     service.syncFolder({ accessToken: 'token' }),
-    (error) => error.code === 'GRAPH_NETWORK_ERROR',
+    (error) => {
+      assert.equal(error.code, 'GRAPH_NETWORK_ERROR');
+      assert.deepEqual(error.upsertedMessageIds, ['m1']);
+      return true;
+    },
   );
   const mailbox = store.getMailbox('me');
   assert.equal(store.getRecentMessages(mailbox.id).length, 1);
@@ -215,6 +219,7 @@ test('sync service commits each page and resumes from persisted nextLink after i
   phase = 2;
   const result = await service.syncFolder({ accessToken: 'token' });
   assert.equal(result.runType, 'resume');
+  assert.deepEqual(result.upsertedMessageIds, ['m2']);
   assert.equal(store.getRecentMessages(mailbox.id).length, 2);
   status = store.getSyncStatus(mailbox.id);
   assert.equal(status.folders[0].has_resume_cursor, 0);
@@ -259,6 +264,7 @@ test('expired delta cursor is cleared and followed by a fresh cursor-reset sync'
   const reset = await service.syncFolder({ accessToken: 'token' });
   assert.equal(reset.cursorReset, true);
   assert.equal(reset.runType, 'cursor-reset');
+  assert.deepEqual(reset.upsertedMessageIds, ['m1']);
   assert.equal(reset.messages[0].isRead, true);
   const mailbox = store.getMailbox('me');
   const status = store.getSyncStatus(mailbox.id);
@@ -303,6 +309,7 @@ test('syncMailbox synchronizes every discovered folder and preserves partial fai
   assert.equal(result.completedFolders, 2);
   assert.equal(result.failedFolders, 1);
   assert.equal(result.messages.length, 2);
+  assert.deepEqual(result.upsertedMessageIds, ['mail-folder-inbox', 'mail-folder-project']);
   assert.equal(result.errors[0].code, 'GRAPH_REQUEST_FAILED');
   const mailbox = store.getMailbox('me');
   const status = store.getSyncStatus(mailbox.id);

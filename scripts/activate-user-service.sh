@@ -14,6 +14,13 @@ USER_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$USER_RUNTIME_DIR}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
+if [[ "${1:-}" == "--release" && "$#" -eq 3 ]]; then
+  DATA_DIR="$3"
+  RUNTIME_ENV="$DATA_DIR/runtime.env"
+  ACCESS_KEY_FILE="$DATA_DIR/.mail-intelligence-access-key"
+  exec /usr/bin/node "$ROOT/scripts/activate-user-release.mjs" "$ROOT" "$DATA_DIR" "$2"
+else
+  [[ "$#" -eq 0 ]] || exit 64
 mkdir -p "$DATA_DIR" "$BACKUP_DIR"
 chmod 0700 "$DATA_DIR" "$BACKUP_DIR"
 
@@ -64,6 +71,7 @@ chmod 0600 "$RUNTIME_ENV.tmp"
 mv "$RUNTIME_ENV.tmp" "$RUNTIME_ENV"
 chmod 0600 "$RUNTIME_ENV"
 unset ACCESS_KEY
+fi
 
 systemd-analyze --user verify "$UNIT_SOURCE"
 systemctl --user link --force "$UNIT_SOURCE"

@@ -177,7 +177,8 @@ test('builds a signed workspace-scoped receive request and marks outbox emitted 
   assert.equal(envelope.arguments.source_system, 'mail');
   assert.equal(envelope.arguments.source_locator, SOURCE.sourceLocator);
   assert.equal(envelope.arguments.source_event_id, SOURCE.sourceEventId);
-  assert.equal(envelope.arguments.content, SOURCE.content);
+  assert.equal(Object.hasOwn(envelope.arguments, 'content'), false);
+  assert.equal(envelope.arguments.content_digest, `sha256:${createHash('sha256').update(SOURCE.content, 'utf8').digest('hex')}`);
   assert.equal(
     envelope.arguments.candidate_id,
     `mail:v1:${SOURCE.workspaceId}:${SOURCE.provider}:${SOURCE.mailbox}:${SOURCE.sourceLocator}:${SOURCE.sourceEventId}`,
