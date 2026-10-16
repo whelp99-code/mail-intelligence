@@ -27,6 +27,9 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
       - name: Provide the production systemd Node path
         run: |
           sudo ln -sf "$(command -v node)" /usr/bin/node
@@ -55,9 +58,6 @@ jobs:
 
       - name: Real local startup and health probe
         run: npm run verify:health:full
-
-      - name: Dependency audit
-        run: npm audit --audit-level=high
 
   config-contract:
     name: Configuration contract
