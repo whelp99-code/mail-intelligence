@@ -21,6 +21,11 @@ function fail(code, statusCode = 403) {
   throw error;
 }
 
+function acceptedSendActor(value) {
+  return typeof value === 'string' && value.length <= 160
+    && (value.startsWith('session:') || value.startsWith('jarvis-receipt:'));
+}
+
 // This is a fail-closed preflight, not token signature verification. Graph is
 // the authority validating the token and granting the actual permission.
 export function hasMailSendScope(token, now = Date.now()) {
@@ -109,7 +114,7 @@ export class GraphSendClient {
   async sendOnce(draft, { allowSend = false, attachments = [] } = {}) {
     if (allowSend !== true) fail('MAIL_SEND_DISABLED');
     if (!hasMailSendScope(this.accessToken)) fail('MAIL_SEND_SCOPE_REQUIRED');
-    if (draft.status !== 'sending' || !draft.approved_at || !draft.approved_by?.startsWith('session:')) fail('HUMAN_APPROVAL_REQUIRED');
+    if (draft.status !== 'sending' || !draft.approved_at || !acceptedSendActor(draft.approved_by)) fail('HUMAN_APPROVAL_REQUIRED');
     if (!/^[0-9a-f-]{36}$/.test(draft.draft_id) || !draft.to?.length || !draft.subject || !draft.body_text) fail('INVALID_SEND_DRAFT', 400);
     if (draftNeedsClarification(draft.body_text)) fail('DRAFT_NEEDS_CLARIFICATION', 409);
     if (partnerLeak(draft.body_text, [...draft.to, ...(draft.cc || [])], loadPartnerNames()).length) fail('PARTNER_NAME_BLOCKED', 409);

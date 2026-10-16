@@ -48,6 +48,23 @@ test('configured recipient allowlist rejects disallowed to and cc with zero HTTP
   }
 });
 
+test('a verified jarvis receipt is a send approval and any other actor is not', async () => {
+  let posts = 0;
+  const client = new GraphSendClient({
+    accessToken: token(),
+    fetchImpl: async (_url, options) => {
+      if (options.method === 'POST') posts += 1;
+      return options.method === 'POST' ? new Response(null, { status: 202 }) : json({ value: [] });
+    },
+  });
+  const receiptDraft = { ...draft, approved_by: 'jarvis-receipt:rcpt:mail-1' };
+  const result = await client.sendOnce(receiptDraft, { allowSend: true });
+  assert.equal(result.failureCode, 'GRAPH_RECEIPT_PENDING');
+  assert.equal(posts, 1);
+  await assert.rejects(client.sendOnce({ ...draft, approved_by: 'agent:grok-bot' }, { allowSend: true }), { code: 'HUMAN_APPROVAL_REQUIRED' });
+  assert.equal(posts, 1);
+});
+
 test('one approved POST then matching Sent Items receipt', async () => {
   const calls = [];
   const client = new GraphSendClient({ accessToken: token(), fetchImpl: async (url, options) => {
