@@ -1476,21 +1476,27 @@ textarea {
 
 @media (width <= 720px) {
   .topbar { align-items: stretch; }
+
   .actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     justify-content: stretch;
     width: 100%;
   }
+
   .mailbox-switch {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
+
+  /* stylelint-disable-next-line selector-id-pattern */
   .mailbox-switch button, #searchDatabase, #loadOutlook, .field-inline { width: 100%; }
   .search-field { flex: none; grid-column: 1 / -1; min-width: 0; width: 100%; }
   .field-inline { justify-content: space-between; min-width: 0; }
   .field-inline select { flex: 1 1 auto; min-width: 0; }
+
+  /* stylelint-disable-next-line selector-id-pattern */
   #loadOutlook { grid-column: 1 / -1; }
   .safety-notice { align-items: flex-start; flex-direction: column; height: fit-content; }
   .safety-notice span { flex: 0 1 auto; }
