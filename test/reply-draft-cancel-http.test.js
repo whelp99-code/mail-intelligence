@@ -226,7 +226,6 @@ test('POST /api/outlook/sync cancels answered reply drafts and keeps unanswered 
       'Content-Type': 'application/json',
       'X-CSRF-Token': session.csrfToken,
       'x-mail-intelligence-request': '1',
-      'x-mail-intelligence-request': '1',
     },
     body: JSON.stringify({ top: 25, forceInitial: false }),
   });
