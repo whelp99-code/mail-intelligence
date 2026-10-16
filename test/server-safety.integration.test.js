@@ -241,6 +241,55 @@ test('루프백 HTTPS 프록시의 https Origin만 변경을 통과한다', asyn
   const otherBody = await otherHost.json();
   assert.equal(otherHost.status, 403);
   assert.equal(otherBody.code, 'ORIGIN_REJECTED');
+
+  const session = await json(await fetch(`${baseUrl}/api/session`, { headers: { Cookie: cookie } }));
+  const mutation = {
+    ...common,
+    Origin: `https://${host}`,
+    'X-Forwarded-Proto': 'https',
+    'X-CSRF-Token': session.csrfToken,
+  };
+  const handled = await fetch(`${baseUrl}/api/messages/handled-elsewhere`, {
+    method: 'POST',
+    headers: mutation,
+    body: JSON.stringify({ messageId: 'missing-message', channel: 'phone' }),
+  });
+  const handledBody = await json(handled);
+  assert.notEqual(handledBody.code, 'ORIGIN_REJECTED');
+
+  const created = await fetch(`${baseUrl}/api/mail/send-drafts`, {
+    method: 'POST',
+    headers: mutation,
+    body: JSON.stringify({
+      request_id: 'https-origin-draft',
+      to: ['self@example.invalid'],
+      subject: 'HTTPS origin fixture',
+      body_text: 'Synthetic draft. This test must not send it.',
+    }),
+  });
+  const createdBody = await json(created);
+  assert.equal(created.status, 201);
+  const approved = await fetch(`${baseUrl}/api/mail/send-drafts/${createdBody.draft.draft_id}/approve`, {
+    method: 'POST',
+    headers: mutation,
+    body: JSON.stringify({ confirm: true, payload_digest: createdBody.draft.payload_digest }),
+  });
+  const approvedBody = await json(approved);
+  assert.notEqual(approvedBody.code, 'ORIGIN_REJECTED');
+  assert.notEqual(approvedBody.draft?.status, 'sent');
+
+  const foreignHandled = await fetch(`${baseUrl}/api/messages/handled-elsewhere`, {
+    method: 'POST',
+    headers: { ...mutation, Origin: 'https://attacker.invalid' },
+    body: JSON.stringify({ messageId: 'missing-message', channel: 'phone' }),
+  });
+  assert.equal((await json(foreignHandled)).code, 'ORIGIN_REJECTED');
+  const foreignDraft = await fetch(`${baseUrl}/api/mail/send-drafts/${createdBody.draft.draft_id}/approve`, {
+    method: 'POST',
+    headers: { ...mutation, Origin: 'https://attacker.invalid' },
+    body: JSON.stringify({ confirm: true, payload_digest: createdBody.draft.payload_digest }),
+  });
+  assert.equal((await json(foreignDraft)).code, 'ORIGIN_REJECTED');
 });
 
 test('로그아웃하면 그 세션은 바로 무효가 된다', async () => {

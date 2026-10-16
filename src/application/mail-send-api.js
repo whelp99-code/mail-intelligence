@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { browserOriginAllowed } from '../security/request-origin.js';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { GraphSendClient, hasMailSendScope } from '../adapters/microsoft-graph-send.js';
 import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
@@ -54,7 +55,7 @@ export function createMailSendApi({
       if (!session) fail(401, 'SESSION_REQUIRED');
       if (req.method === 'POST') {
         if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
-        if (req.headers.origin !== url.origin) fail(403, 'ORIGIN_REJECTED');
+        if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');
       }
     }
     const store = getStore();

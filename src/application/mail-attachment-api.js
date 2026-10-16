@@ -1,4 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { browserOriginAllowed } from '../security/request-origin.js';
 import {
   createAttachmentAssetService,
   createUnavailableScanner,
@@ -89,7 +90,7 @@ export function createMailAttachmentApi({
         if (!session) fail(401, 'AUTH_REQUIRED');
         if (req.method === 'POST') {
           if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
-          if (req.headers.origin !== url.origin) fail(403, 'ORIGIN_REJECTED');
+          if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');
         }
       }
 
