@@ -389,6 +389,35 @@ test('human restore of an already-replied cancellation survives the next sync ca
   db.close();
 });
 
+test('a reply sent after human restore cancels that restored draft again', () => {
+  const db = fixtureDb();
+  insert(db, { id: 51, subject: '자료 요청', email: 'buyer@example.com', body: '자료 회신 부탁드립니다.', workState: 'action_required' });
+  db.prepare('UPDATE messages SET conversation_id=\'conv-again\', received_at=\'2026-10-01T01:00:00.000Z\' WHERE id=51').run();
+  let now = '2026-10-01T02:00:00.000Z';
+  const drafts = new MailSendDrafts(db, { now: () => now });
+  const pending = drafts.create(1, 'jarvis', {
+    request_id: 'restore-again', to: ['buyer@example.com'], subject: 'RE: 자료 요청', body_text: '사람이 고친 본문입니다.', message_id: 51,
+  }).draft;
+  insertSent(db, {
+    id: 52, folder: 8, subject: 'Re: 자료 요청', normalized: '자료 요청', sent: '2026-10-01T03:00:00.000Z', conversation: 'conv-again', to: ['buyer@example.com'],
+  });
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 1);
+  now = '2026-10-01T04:00:00.000Z';
+  const restored = drafts.restore(1, pending.draft_id, 'session:owner');
+  assert.equal(restored.status, 'needs_approval');
+  assert.equal(restored.body_text, '사람이 고친 본문입니다.');
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 0);
+  insertSent(db, {
+    id: 53, folder: 8, subject: 'Re: 자료 요청', normalized: '자료 요청', sent: '2026-10-01T05:00:00.000Z', conversation: 'conv-again', to: ['buyer@example.com'],
+  });
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 1);
+  const again = drafts.get(1, pending.draft_id);
+  assert.equal(again.status, 'cancelled');
+  assert.equal(again.body_text, '사람이 고친 본문입니다.');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_send_draft_events WHERE draft_id=? AND status=\'cancelled\' AND actor=? AND reason=?').get(pending.draft_id, 'system:already-replied', ALREADY_REPLIED_REASON).n, 2);
+  db.close();
+});
+
 test('folder copies of one mail produce one reply draft; distinct mails stay separate', () => {
   const db = fixtureDb();
   const body = '견적 요청드립니다. 회신 부탁드립니다.';
