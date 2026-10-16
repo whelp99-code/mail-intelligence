@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   ANALYSIS_FIELDS,
   UNLINKED_PROJECT,
@@ -76,5 +77,30 @@ test('the same project and conversation share a thread key', () => {
   ]);
   assert.equal(first, second);
   assert.notEqual(first, other);
-  assert.equal(threadKey({ subject: '대화 없음' }, waiting), '');
+  assert.equal(threadKey({ subject: '대화 없음' }, waiting), `${UNLINKED_PROJECT}\nsubject:`);
+});
+
+test('the same sender and subject without a conversation form two groups when the projects differ', () => {
+  const message = { from: 'same@example.test', fromName: '합성 발신', subject: '합성 제목' };
+  const label = 'example.test · 합성 발신 · 합성 제목';
+  const groups = new Map();
+  for (const name of ['프로젝트 A', '프로젝트 B']) {
+    const key = threadKey(message, waiting, [
+      { objectType: 'engagement', status: 'linked', name },
+    ], label);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(message);
+  }
+  assert.equal(groups.size, 2);
+  const again = threadKey(message, waiting, [
+    { objectType: 'engagement', status: 'linked', name: '프로젝트 A' },
+  ], label);
+  assert.equal(again, [...groups.keys()][0]);
+  const unlinked = threadKey(message, waiting, [
+    { objectType: 'engagement', status: 'candidate', name: '후보만' },
+  ], label);
+  assert.equal(unlinked.startsWith(`${UNLINKED_PROJECT}\n`), true);
+  assert.equal([...groups.keys()].includes(unlinked), false);
+  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.match(app, /threadKey\(message, classification, linksForMessage\(message\.id\), groupLabelFor\(message\)\)/);
 });

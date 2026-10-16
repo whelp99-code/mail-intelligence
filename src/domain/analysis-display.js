@@ -114,9 +114,10 @@ export function analysisLine(classification, links = []) {
   return parts.join(' · ');
 }
 
-/** Same registered project and the same conversation are one thread. */
-export function threadKey(message, classification, links = []) {
+/** Same registered project and the same conversation are one thread. Without a conversation, the project still separates the sender and subject. */
+export function threadKey(message, classification, links = [], subjectLabel = '') {
+  const project = registeredProjectName(classification, links);
   const conversation = String(message?.conversationId || '').trim();
-  if (!conversation) return '';
-  return `${registeredProjectName(classification, links)}\n${conversation}`;
+  if (conversation) return `${project}\n${conversation}`;
+  return `${project}\nsubject:${subjectLabel}`;
 }

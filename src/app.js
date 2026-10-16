@@ -1284,7 +1284,7 @@ function renderFilteredView() {
     const groups = new Map();
     visibleMessages.forEach((message) => {
       const classification = precisionFor(message.id, message);
-      const key = threadKey(message, classification, linksForMessage(message.id)) || `subject:${groupLabelFor(message)}`;
+      const key = threadKey(message, classification, linksForMessage(message.id), groupLabelFor(message));
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(message);
     });
