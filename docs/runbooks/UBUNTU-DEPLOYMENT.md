@@ -10,7 +10,7 @@
 - Tailnet 허용 원본: `100.64.0.0/10`
 - 저장소: `data/mail-intelligence.sqlite`
 - 백업: `data/backups/`
-- 인증: HTTP Basic 사용자. `MAIL_INTELLIGENCE_ACCESS_USER`가 비어 있으면 `mailintelligence`이고, 값이 있으면 그 아이디만 통과한다. 비밀번호는 서버의 0600 접근키이며 비교는 상수 시간 비교다. 브라우저별로 한 번 입력하면 30일 세션이 발급되며, 세션은 토큰 해시로 `data/.mail-intelligence-sessions.json`(0600)에 저장돼 서비스 재시작 후에도 유지된다. 접근키를 바꾸면 기존 세션은 모두 무효화되고, 이 파일을 지우고 재시작해도 모든 브라우저가 로그아웃된다.
+- 인증: HTTP Basic 사용자. `MAIL_INTELLIGENCE_ACCESS_USER`가 비어 있으면 `mailintelligence`이고, 값이 있으면 그 아이디만 통과한다. 비밀번호는 서버의 0600 접근키이며 비교는 상수 시간 비교다. 브라우저별로 한 번 입력하면 30일 세션이 발급되며, 세션은 토큰 해시로 `mail-intelligence.sqlite`의 `browser_sessions`에 저장돼 서비스 재시작 후에도 유지된다. 쿠키는 HttpOnly·SameSite=Strict이고, Tailscale Serve처럼 `X-Forwarded-Proto: https`인 요청에는 Secure가 붙는다. 접근키를 바꾸면 기존 세션은 모두 무효화된다. `DELETE /api/session`(Origin과 `X-Mail-Intelligence-Request: 1`)은 그 브라우저 세션만 무효화한다. 예전 `data/.mail-intelligence-sessions.json`은 다음 기동 때 같은 접근키의 세션만 SQLite로 옮긴 뒤 지운다.
 - Microsoft Graph: 기본 `Mail.Read`; 승인 발송 파일럿에만 `Mail.Send` 재동의
 - 외부 행동: 기본 모두 비활성. 발송만 별도 플래그와 사람 승인을 요구하며 읽음 변경·이동·삭제·Data Plane 전송은 계속 비활성
 
