@@ -28,12 +28,15 @@ test('the analysis table has one slot for each visible value', () => {
   ]);
 });
 
-test('a card line names each field and does not say 대기 twice', () => {
+test('waiting classification is 회신 대기 beside the status 대기', () => {
   const line = analysisLine(waiting);
-  assert.equal(line, `처리 상태 대기 · 다음 행동 고객·외부 차례 · 긴급도 보통 · 프로젝트 ${UNLINKED_PROJECT}`);
-  assert.equal(line.split('대기').length - 1, 1);
+  assert.equal(line, `처리 상태 대기 · 다음 행동 고객·외부 차례 · 긴급도 보통 · 분류 회신 대기 · 프로젝트 ${UNLINKED_PROJECT}`);
+  assert.equal(analysisValues(waiting).status, '대기');
+  assert.equal(analysisValues(waiting).kind, '회신 대기');
   assert.equal(line.includes('프로젝트 후보'), false);
-  assert.equal(analysisValues(waiting).kind, '');
+  const kind = ANALYSIS_FIELDS.find((field) => field.key === 'kind');
+  assert.equal(kind.values.includes('회신 대기'), true);
+  assert.equal(kind.values.includes('대기'), false);
 });
 
 test('a different classification stays beside the status', () => {

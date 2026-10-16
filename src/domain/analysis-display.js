@@ -26,8 +26,8 @@ export const ANALYSIS_FIELDS = Object.freeze([
   {
     key: 'kind',
     name: '분류',
-    values: Object.freeze(['내 행동 필요', '결정 필요', '완료', '참고', '검토 필요']),
-    meaning: '일의 종류. 처리 상태와 같은 말인 대기는 여기서 빼 한 번만 보여 줌',
+    values: Object.freeze(['내 행동 필요', '회신 대기', '결정 필요', '완료', '참고', '검토 필요']),
+    meaning: '일의 종류. 저장값 waiting은 회신 대기로 보여 처리 상태의 대기와 구분한다',
     decidedBy: '운영 규칙. 정밀 분류 보정으로 바꿀 수 있음',
   },
   {
@@ -50,7 +50,7 @@ const NEXT_ACTION = Object.freeze({
 
 const KIND = Object.freeze({
   action_required: '내 행동 필요',
-  waiting: '대기',
+  waiting: '회신 대기',
   decision_required: '결정 필요',
   completed: '완료',
   reference: '참고',

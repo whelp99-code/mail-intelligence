@@ -396,7 +396,7 @@ function precisionFor(messageId, message = currentMessages.find((item) => item.i
 function precisionStateLabel(value) {
   return {
     action_required: '내 행동 필요',
-    waiting: '대기',
+    waiting: '회신 대기',
     decision_required: '결정 필요',
     completed: '완료',
     reference: '참고',
