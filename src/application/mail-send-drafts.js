@@ -96,6 +96,7 @@ export class MailSendDrafts {
     this.now = now;
     this.recipientAllowlist = normalizeMailSendRecipientAllowlist(recipientAllowlist);
     this.companyMemory = companyMemory && typeof companyMemory === 'object' ? companyMemory : null;
+    this.transactionDepth = 0;
   }
 
   assertRecipientsAllowed(draft) {
@@ -103,14 +104,18 @@ export class MailSendDrafts {
   }
 
   transaction(operation) {
-    const nested = this.db.isTransaction;
-    this.db.exec(nested ? 'SAVEPOINT mail_send_draft' : 'BEGIN IMMEDIATE');
+    const nested = this.transactionDepth > 0 || this.db.isTransaction === true;
+    const savepoint = `mail_send_draft_${this.transactionDepth + 1}`;
+    this.db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth += 1;
     try {
       const result = operation();
-      this.db.exec(nested ? 'RELEASE mail_send_draft' : 'COMMIT');
+      this.transactionDepth -= 1;
+      this.db.exec(nested ? `RELEASE ${savepoint}` : 'COMMIT');
       return result;
     } catch (error) {
-      this.db.exec(nested ? 'ROLLBACK TO mail_send_draft; RELEASE mail_send_draft' : 'ROLLBACK');
+      this.transactionDepth -= 1;
+      this.db.exec(nested ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
       throw error;
     }
   }

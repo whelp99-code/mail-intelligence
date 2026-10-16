@@ -17,12 +17,20 @@ const other = generateKeyPairSync('ed25519');
 
 function fixture(t, options = {}) {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
-  const db = new DatabaseSync(':memory:');
+  const { hideIsTransaction, ...apiOptions } = options;
+  const raw = new DatabaseSync(':memory:');
+  const db = hideIsTransaction ? new Proxy(raw, {
+    get(target, prop, receiver) {
+      if (prop === 'isTransaction') return undefined;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) : raw;
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE mailboxes(id INTEGER PRIMARY KEY); INSERT INTO mailboxes VALUES(1); CREATE TABLE messages(id INTEGER PRIMARY KEY,mailbox_id INTEGER,deleted_at TEXT,subject TEXT,web_link TEXT);');
   db.exec(readFileSync(new URL('../migrations/005_mail_send_drafts.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/009_mail_send_draft_principals.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/006_mail_attachments.sql', import.meta.url), 'utf8'));
-  t.after(() => db.close());
+  t.after(() => raw.close());
   let sends = 0;
   const api = createMailSendApi({
     getStore: () => ({ db }), getMailbox: () => ({ id: 1, graphUser: 'me' }),
@@ -38,7 +46,7 @@ function fixture(t, options = {}) {
       sendOnce: async () => { sends += 1; return { graphMessageId: 'fixture-sent', sentAt: '2026-10-02T01:00:00Z' }; },
       reconcile: async () => ({ uncertain: true }),
     }),
-    ...options,
+    ...apiOptions,
   });
   const call = (method, path, payload = {}, headers = {}) => api({ method, body: payload, headers }, new URL('http://127.0.0.1:3010/api/mail/send-drafts' + path));
   return {
@@ -186,6 +194,24 @@ test('flag on accepts one real receipt for the draft digest and rejects a second
   await assert.rejects(f.call('POST', `/${draft.draft_id}/approve`, { confirm: true, payload_digest: draft.payload_digest, receipt, command }, f.bot), { code: 'RECEIPT_ALREADY_USED' });
   assert.equal(f.sends(), 1);
   await assert.rejects(f.call('POST', `/${draft.draft_id}/approve`, { confirm: true, payload_digest: draft.payload_digest }, f.human), { code: 'SECOND_APPROVAL_DISABLED' });
+});
+
+test('receipt approval sends once when DatabaseSync has no isTransaction', async (t) => {
+  const f = fixture(t, { hideIsTransaction: true });
+  assert.equal(f.db.isTransaction, undefined);
+  const { body: { draft } } = await f.call('POST', '', {
+    request_id: 'no-istransaction', to: ['self@example.com'], subject: 'Fixture', body_text: 'Synthetic only.',
+  }, f.bot);
+  const command = commandFor(draft);
+  const body = { confirm: true, payload_digest: draft.payload_digest, command, receipt: receiptFor(command) };
+  const approved = await f.call('POST', `/${draft.draft_id}/approve`, body, f.bot);
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.draft.status, 'sent');
+  assert.equal(approved.body.draft.approved_by, 'jarvis-receipt:rcpt:mail-1');
+  assert.equal(f.sends(), 1);
+  await assert.rejects(f.call('POST', `/${draft.draft_id}/approve`, body, f.bot), { code: 'RECEIPT_ALREADY_USED' });
+  assert.equal(f.sends(), 1);
+  assert.equal(f.db.prepare('SELECT status FROM mail_send_drafts WHERE draft_id=?').get(draft.draft_id).status, 'sent');
 });
 
 test('flag off still rejects a grok approve', async (t) => {
