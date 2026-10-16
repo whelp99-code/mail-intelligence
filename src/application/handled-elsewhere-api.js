@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { browserOriginAllowed } from '../security/request-origin.js';
 import { annotateReplyGaps } from './reply-draft-pipeline.js';
 import { markHandledElsewhere, undoHandledElsewhere, resolveHandledMessage } from './handled-elsewhere.js';
 
@@ -50,7 +51,7 @@ export function createHandledElsewhereApi({
     const session = getSession(req);
     if (!session?.token || !session.csrfToken) fail(401, 'SESSION_REQUIRED', 'A browser session is required.');
     if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED', 'A valid CSRF token is required.');
-    if (req.headers.origin !== url.origin) fail(403, 'ORIGIN_REJECTED', 'Cross-origin state changes are not allowed.');
+    if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED', 'Cross-origin state changes are not allowed.');
     if (accessKeyRequired && String(req.headers['x-mail-intelligence-request'] || '') !== '1') {
       fail(403, 'MUTATION_PROTECTION_REQUIRED', 'Mutation protection header is required.');
     }

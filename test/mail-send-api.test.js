@@ -42,7 +42,7 @@ function fixture(t, options = {}, onSend = async () => {}) {
     }),
     ...options,
   });
-  const call = (method, path, payload = {}, headers = {}) => api({ method, body: payload, headers }, new URL('http://127.0.0.1:3010/api/mail/send-drafts' + path));
+  const call = (method, path, payload = {}, headers = {}, extra = {}) => api({ method, body: payload, headers, ...extra }, new URL('http://127.0.0.1:3010/api/mail/send-drafts' + path));
   const human = { cookie: 'fixture-session', origin: 'http://127.0.0.1:3010', 'x-csrf-token': 'fixture-csrf' };
   const bot = { authorization: `Bearer ${secret}` };
   return { db, call, human, bot, sends: () => sends, sentAttachments, ATTACH_KEY };
@@ -77,6 +77,40 @@ test('flag OFF and missing Mail.Send scope both deny approval with no send', asy
     await assert.rejects(f.call('POST', `/${draft.draft_id}/approve`, { confirm: true, payload_digest: draft.payload_digest }, f.human), { code });
     assert.equal(f.sends(), 0);
   }
+});
+
+test('loopback https origin approves through the fake sender', async (t) => {
+  const f = fixture(t);
+  const draft = (await f.call('POST', '', body, f.bot)).body.draft;
+  const headers = {
+    ...f.human,
+    host: '127.0.0.1:3010',
+    origin: 'https://127.0.0.1:3010',
+    'x-forwarded-proto': 'https',
+  };
+  const approved = await f.call('POST', `/${draft.draft_id}/approve`, {
+    confirm: true,
+    payload_digest: draft.payload_digest,
+  }, headers, { socket: { remoteAddress: '127.0.0.1' } });
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.draft.status, 'sent');
+  assert.equal(approved.body.draft.graph_message_id, 'fixture-sent');
+  assert.equal(f.sends(), 1);
+
+  const blocked = fixture(t);
+  const other = (await blocked.call('POST', '', { ...body, request_id: 'api-request-002' }, blocked.bot)).body.draft;
+  const approve = { confirm: true, payload_digest: other.payload_digest };
+  await assert.rejects(blocked.call('POST', `/${other.draft_id}/approve`, approve, {
+    ...headers,
+    'x-real-ip': '127.0.0.1',
+    forwarded: 'for=127.0.0.1;proto=https',
+  }, { socket: { remoteAddress: '172.30.0.2' } }), { code: 'ORIGIN_REJECTED' });
+  await assert.rejects(blocked.call('POST', `/${other.draft_id}/approve`, approve, {
+    ...headers,
+    origin: 'https://attacker.invalid',
+  }, { socket: { remoteAddress: '127.0.0.1' } }), { code: 'ORIGIN_REJECTED' });
+  assert.equal(blocked.sends(), 0);
+  assert.equal(blocked.db.prepare('SELECT status FROM mail_send_drafts WHERE draft_id=?').get(other.draft_id).status, 'needs_approval');
 });
 
 test('human approval enforces csrf, origin and explicit confirmation', async (t) => {

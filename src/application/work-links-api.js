@@ -1,3 +1,4 @@
+import { browserOriginAllowed } from '../security/request-origin.js';
 import { createNotionWorkSystem } from '../adapters/notion-work-system.js';
 import { createIntakeAuthorization } from './intake-authorization.js';
 import { WorkLinkService } from './work-links.js';
@@ -25,7 +26,7 @@ export function createWorkLinksApi({
       if (String(req.headers['x-csrf-token'] || '') !== String(session.csrfToken || '')) {
         fail(403, 'CSRF_REQUIRED', 'CSRF token required.');
       }
-      if (req.headers.origin && url.origin && req.headers.origin !== url.origin) {
+      if (req.headers.origin && !browserOriginAllowed(req, url)) {
         fail(403, 'ORIGIN_REJECTED', 'Origin rejected.');
       }
     }

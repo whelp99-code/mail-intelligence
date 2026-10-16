@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { basicAccessGranted } from './src/security/access-user.js';
+import { expectedRequestOrigin } from './src/security/request-origin.js';
 import { openBrowserSessionStore } from './src/security/browser-session-store.js';
 import { resolveStaticFile } from './src/security/static-path.js';
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
@@ -834,11 +835,7 @@ function issueLocalSession(req, res) {
 }
 
 function expectedOrigin(req) {
-  try {
-    return new URL(`http://${req.headers.host || `127.0.0.1:${port}`}`).origin;
-  } catch {
-    return localBaseUrl;
-  }
+  return expectedRequestOrigin(req, { host: req.headers.host || `127.0.0.1:${port}` }) || localBaseUrl;
 }
 
 function assertAllowedHost(req) {
@@ -2209,7 +2206,7 @@ async function classifyLatestWithLlm({ limit = 8, force = false, messageIds = []
 }
 
 async function handleApi(req, res) {
-  const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+  const url = new URL(req.url || '/', expectedOrigin(req));
   try {
     assertAllowedHost(req);
 
