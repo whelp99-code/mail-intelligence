@@ -2,6 +2,7 @@
 import { request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile } from 'node:fs/promises';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const baseUrl = process.env.MAIL_INTELLIGENCE_BASE_URL || 'http://127.0.0.1:3010';
 const limit = Number(process.argv[2] || 5);
@@ -34,7 +35,7 @@ function valueOf(text, key) {
 const runtime = await readFile(new URL('../data/runtime.env', import.meta.url), 'utf8');
 const accessKey = valueOf(runtime, 'MAIL_INTELLIGENCE_ACCESS_KEY');
 if (!accessKey) throw new Error('MAIL_INTELLIGENCE_ACCESS_KEY is missing.');
-const authorization = `Basic ${Buffer.from(`mailintelligence:${accessKey}`).toString('base64')}`;
+const authorization = accessAuthorizationHeader(accessKey);
 
 const sessionResponse = await request(`${baseUrl}/api/session`, {
   headers: { Authorization: authorization },

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
 import { MailSendDrafts } from '../src/application/mail-send-drafts.js';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const CHROME = process.env.CHROME_PATH || '/usr/bin/chromium';
 const operatorKey = 'fixture-operator-key-012345678901234567890123';
@@ -163,7 +164,7 @@ test('issue #69 restore button visible at 390px', { timeout: 90_000 }, async (t)
   await cdp('Page.enable');
   await cdp('Network.enable');
   await cdp('Network.setExtraHTTPHeaders', {
-    headers: { Authorization: `Basic ${Buffer.from(`mailintelligence:${operatorKey}`).toString('base64')}` },
+    headers: { Authorization: accessAuthorizationHeader(operatorKey) },
   });
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await cdp('Page.navigate', { url: `http://127.0.0.1:${appPort}/#sendDraftReview` });

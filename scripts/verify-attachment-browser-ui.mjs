@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const CHROME = '/usr/bin/google-chrome';
 const ARTIFACT_DIR = join(dirname(fileURLToPath(import.meta.url)), '../artifacts/attachments-acceptance');
@@ -243,7 +244,7 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
   await cdp('Network.enable');
   await cdp('DOM.enable');
   await cdp('Network.setExtraHTTPHeaders', {
-    headers: { Authorization: `Basic ${Buffer.from(`mailintelligence:${operatorKey}`).toString('base64')}` },
+    headers: { Authorization: accessAuthorizationHeader(operatorKey) },
   });
   try {
     await cdp('Browser.setDownloadBehavior', {

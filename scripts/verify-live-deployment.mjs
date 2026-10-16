@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const latestMigrationVersion = Math.max(...(await readdir(new URL('../migrations/', import.meta.url)))
   .map((name) => /^(\d+)_.*\.sql$/.exec(name))
@@ -45,7 +46,7 @@ const unauthenticatedRoot = await fetch(`${baseUrl}/`, { redirect: 'manual' });
 assert.equal(unauthenticatedRoot.status, 401);
 assert.match(unauthenticatedRoot.headers.get('www-authenticate') || '', /Mail Intelligence/);
 
-const authorization = `Basic ${Buffer.from(`mailintelligence:${accessKey}`, 'utf8').toString('base64')}`;
+const authorization = accessAuthorizationHeader(accessKey);
 const authenticatedRoot = await fetch(`${baseUrl}/`, {
   redirect: 'manual',
   headers: { Authorization: authorization },

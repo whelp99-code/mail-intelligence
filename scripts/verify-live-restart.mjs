@@ -2,10 +2,11 @@
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const baseUrl = 'http://127.0.0.1:3010';
 const key = (await readFile(new URL('../data/.mail-intelligence-access-key', import.meta.url), 'utf8')).trim();
-const authorization = `Basic ${Buffer.from(`mailintelligence:${key}`, 'utf8').toString('base64')}`;
+const authorization = accessAuthorizationHeader(key);
 
 const healthResponse = await fetch(`${baseUrl}/api/health`, { cache: 'no-store' });
 const health = await healthResponse.json();

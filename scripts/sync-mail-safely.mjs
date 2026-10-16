@@ -2,6 +2,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3010';
 const APPROVED_AI_PROVIDERS = new Set(['xai-grok-oauth', 'openai-codex-oauth']);
@@ -131,7 +132,7 @@ export async function syncMailSafely({
   if (!healthAllowsSync(health.body)) fail('HEALTH_UNSAFE');
   const allowApprovedSend = health.body?.safety?.mode === 'human-approved-mail-send';
 
-  const authorization = `Basic ${Buffer.from(`mailintelligence:${accessKey}`, 'utf8').toString('base64')}`;
+  const authorization = accessAuthorizationHeader(accessKey);
   const root = await sessionResponse(safeUrl, authorization);
   const cookie = (root.headers.get('set-cookie') || '').split(';')[0];
   await root.arrayBuffer().catch(() => fail('ROOT_RESPONSE_INVALID'));

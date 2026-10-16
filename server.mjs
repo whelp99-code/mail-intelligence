@@ -3,6 +3,7 @@ import { randomBytes, createHash, createCipheriv, createDecipheriv, timingSafeEq
 import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { basicAccessGranted } from './src/security/access-user.js';
 import { resolveStaticFile } from './src/security/static-path.js';
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
 import { mailSendRecipientAllowlistFromEnvironment } from './src/security/mail-send-recipient-policy.js';
@@ -744,7 +745,7 @@ function validBasicAccess(req) {
   if (separator < 0) return false;
   const username = decoded.slice(0, separator);
   const password = decoded.slice(separator + 1);
-  return username === 'mailintelligence' && constantTimeEquals(password, configuredAccessKey);
+  return basicAccessGranted(username, password, configuredAccessKey, constantTimeEquals);
 }
 
 function writeBasicChallenge(res) {

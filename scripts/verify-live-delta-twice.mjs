@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const baseUrl = String(process.env.MAIL_INTELLIGENCE_BASE_URL || 'http://127.0.0.1:3010').replace(/\/$/, '');
 const accessKeyPath = process.env.MAIL_INTELLIGENCE_ACCESS_KEY_FILE
@@ -68,7 +69,7 @@ function summarize(body) {
   };
 }
 
-const authorization = `Basic ${Buffer.from(`mailintelligence:${accessKey}`, 'utf8').toString('base64')}`;
+const authorization = accessAuthorizationHeader(accessKey);
 const root = await fetch(`${baseUrl}/`, {
   redirect: 'manual',
   headers: { Authorization: authorization },
