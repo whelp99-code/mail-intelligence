@@ -59,6 +59,9 @@ test('responsive layout hides desktop resizers and connection state has one rend
   assert.match(css, /@media \(width <= 1180px\) \{[\s\S]*?\.col-resizer\s*\{\s*display:\s*none;/);
   assert.match(css, /\.search-field span \{[\s\S]*?white-space:\s*nowrap;/);
   assert.match(css, /@media \(width <= 720px\) \{[\s\S]*?\.actions\s*\{[\s\S]*?display:\s*grid;/);
+  assert.match(css, /\.safety-notice \{[\s\S]*?height:\s*fit-content;/);
+  assert.doesNotMatch(css, /\.safety-notice span \{[^}]*18rem/);
+  assert.match(css, /@media \(width <= 1180px\) \{[\s\S]*?\.safety-notice span \{[\s\S]*?flex:\s*0 1 auto;/);
   assert.match(app, /function updateOutlookConnectionStatus/);
   assert.match(app, /for \(const node of \[connectionStatus, configStatus\]\)/);
   assert.match(app, /phase === 'oauth-pending'/);

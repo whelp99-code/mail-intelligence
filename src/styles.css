@@ -1445,8 +1445,8 @@ textarea {
   .config-span-2 { grid-column: auto; }
   .feedback-summary, .feedback-buttons, .feedback-form { grid-template-columns: 1fr; }
   .search-field { min-width: 100%; }
-  .safety-notice { align-items: flex-start; flex-direction: column; }
-  .safety-notice span { white-space: normal; }
+  .safety-notice { align-items: flex-start; align-self: start; flex-direction: column; height: fit-content; }
+  .safety-notice span { flex: 0 1 auto; white-space: normal; }
   .metric { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
@@ -1460,17 +1460,19 @@ textarea {
 
 .safety-notice {
   align-items: baseline;
+  align-self: start;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
+  height: fit-content;
   line-height: 1.45;
   padding: 10px 12px;
 }
 .safety-notice strong { flex: 0 1 auto; }
-.safety-notice span { color: var(--muted); flex: 1 1 18rem; font-size: 13px; min-width: 0; }
+.safety-notice span { color: var(--muted); flex: 1 1 auto; font-size: 13px; min-width: 0; }
 
 @media (width <= 720px) {
   .topbar { align-items: stretch; }
@@ -1490,7 +1492,8 @@ textarea {
   .field-inline { justify-content: space-between; min-width: 0; }
   .field-inline select { flex: 1 1 auto; min-width: 0; }
   #loadOutlook { grid-column: 1 / -1; }
-  .safety-notice { align-items: flex-start; flex-direction: column; }
+  .safety-notice { align-items: flex-start; flex-direction: column; height: fit-content; }
+  .safety-notice span { flex: 0 1 auto; }
   .group-head span { line-height: 1.4; }
 }
 
