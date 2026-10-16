@@ -311,7 +311,8 @@ test('runtime source keeps the read-only boundary and authoritative SQLite contr
   assert.match(proxyUnit, /NoNewPrivileges=true/);
   assert.doesNotMatch(proxyUnit, /User=root/);
   assert.match(activateUserService, /tailnet-proxy\.env/);
-  assert.match(activateUserService, /MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS=\$ALLOWED_PROXY_HOSTS/);
+  assert.match(activateUserService, /write-runtime-access-env\.mjs" "\$DATA_DIR" "\$ALLOWED_PROXY_HOSTS"/);
+  assert.match(await read('src/security/runtime-access-env.js'), /MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS=\$\{allowedProxyHosts\}/);
   assert.match(activateUserService, /parseTailnetAllowedHosts/);
 });
 
