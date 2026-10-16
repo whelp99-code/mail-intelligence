@@ -57,6 +57,8 @@ test('settings are split, bounded, and secondary sections remain collapsed by de
 test('responsive layout hides desktop resizers and connection state has one renderer', () => {
   assert.match(css, /@media \(width <= 1180px\) \{[\s\S]*?\.mail-shell\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
   assert.match(css, /@media \(width <= 1180px\) \{[\s\S]*?\.col-resizer\s*\{\s*display:\s*none;/);
+  assert.match(css, /\.search-field span \{[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(css, /@media \(width <= 720px\) \{[\s\S]*?\.actions\s*\{[\s\S]*?display:\s*grid;/);
   assert.match(app, /function updateOutlookConnectionStatus/);
   assert.match(app, /for \(const node of \[connectionStatus, configStatus\]\)/);
   assert.match(app, /phase === 'oauth-pending'/);

@@ -32,6 +32,16 @@ export function operationalLaneLabel(value) {
   return DISPLAY_LABELS[value] || DISPLAY_LABELS.review;
 }
 
+/** Keep the total and only the counts that are actually present. */
+export function compactCountSummary(total, entries) {
+  const visible = [];
+  for (const entry of entries || []) {
+    const count = Number(entry?.count);
+    if (count > 0 && entry.label) visible.push(`${entry.label} ${count}`);
+  }
+  return [`${total}건`, ...visible].join(' · ');
+}
+
 export function priorityLabel(value) {
   return DISPLAY_LABELS[value] || DISPLAY_LABELS.normal;
 }
