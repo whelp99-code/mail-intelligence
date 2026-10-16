@@ -26,6 +26,58 @@ test('handled messages leave both action lanes and undo restores their classific
   assert.equal(runInContext('operationalLaneForMessage("handled-fixture")', context), 'do_now');
 });
 
+test('handled records retain actor, time and undo in the real card and detail controls', () => {
+  const node = () => ({
+    dataset: {}, children: [], fields: new Map(), events: new Map(), textContent: '',
+    classList: { add() {} },
+    setAttribute() {},
+    addEventListener(name, callback) { this.events.set(name, callback); },
+    append(...children) { this.children.push(...children); },
+    appendChild(child) { this.children.push(child); },
+    querySelector(selector) {
+      if (!this.fields.has(selector)) this.fields.set(selector, node());
+      return this.fields.get(selector);
+    },
+  });
+  const calls = [];
+  const context = createContext({
+    document: { createElement: node }, operationalLaneLabel,
+    insightFor: () => null,
+    precisionFor: () => ({ workState: 'completed', operational: { lane: 'archive' } }),
+    precisionSummaryLine: () => '',
+    selectedMessageId: null,
+    saveHandledElsewhere: (...args) => calls.push(args),
+  });
+  runInContext(app.match(/const HANDLED_CHANNELS = \[[\s\S]*?\n\];/)[0], context);
+  for (const name of ['handledChannelLabel', 'handledElsewhereControls', 'precisionStateLabel', 'messageCard']) {
+    const source = app.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
+    assert.ok(source, `real ${name} source is required`);
+    runInContext(source, context);
+  }
+  for (const channel of ['kakao', 'phone', 'in_person', 'other']) {
+    const marker = {
+      channel, note: 'Synthetic handling note', actor: 'session:fixture-operator',
+      markedAt: '2026-10-16T00:00:00Z',
+    };
+    context.message = { id: `handled-${channel}`, replyGap: false, handledElsewhere: marker };
+    const card = runInContext('messageCard(message)', context);
+    const compact = card.children.find(child => child.className === 'handled-elsewhere');
+    assert.ok(compact, 'a saved record stays accessible after leaving the reply gap');
+    const detail = runInContext('handledElsewhereControls(message)', context);
+    for (const controls of [compact, detail]) {
+      const note = controls.children.find(child => child.className === 'handled-note');
+      assert.ok(note.textContent.includes(marker.actor));
+      assert.ok(note.textContent.includes(new Date(marker.markedAt).toLocaleString('ko-KR')));
+      assert.ok(note.textContent.includes(marker.note));
+      const undo = controls.children.find(child => child.events.has('click'));
+      undo.events.get('click')();
+      assert.equal(calls.at(-1)[0], context.message.id);
+      assert.equal(calls.at(-1)[1].undo, true);
+    }
+    assert.equal(card.children.some(child => child.className === 'reply-gap'), false);
+  }
+});
+
 for (const channel of ['phone', 'kakao']) {
   test(`handled ${channel} state reaches actual card and detail despite cached classification`, () => {
     const message = {
