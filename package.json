@@ -69,7 +69,8 @@
     "qa:incident:capacity": "node scripts/inspect-incident-capacity.mjs",
     "backup:retention:inventory": "node scripts/inventory-backup-retention.mjs",
     "verify:notion-crm-p1a": "TMPDIR=/var/tmp node scripts/verify-notion-crm-p1a.mjs",
-    "collect:notion-readonly": "node scripts/collect-notion-readonly-snapshot.mjs"
+    "collect:notion-readonly": "node scripts/collect-notion-readonly-snapshot.mjs",
+    "verify:issue24": "node --test scripts/verify-sent-mailbox-issue24.mjs"
   },
   "devDependencies": {
     "eslint": "^8.57.0",
