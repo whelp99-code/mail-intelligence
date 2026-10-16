@@ -149,21 +149,31 @@ export async function ingestAfterCommittedSync({
         try {
           const snapshot = intake.source(scope.mailboxUser, messageId);
           const fingerprint = mailSourceDigest(snapshot.source);
-          const receipt = await candidateWriter.create({
-            workspaceId: scope.workspaceId, ...snapshot, expectedVersion: candidateVersion,
-            assertCurrent: () => {
-              if (assertBinding) assertBinding();
-              if (mailSourceDigest(intake.source(scope.mailboxUser, messageId).source) !== fingerprint) {
-                throw Object.assign(new Error('INTAKE_SOURCE_CHANGED'), { code: 'INTAKE_SOURCE_CHANGED' });
-              }
-            },
-          });
-          candidateVersion = receipt.runtimeVersion;
-          deliveredCandidates.push({ messageId, ...receipt });
-          store.audit('mail.crm_candidate.delivered', {
+          const priorDelivery = store.latestAuditEvent('mail.crm_candidate.delivered', {
             entityType: 'message', entityId: messageId,
-            payload: { candidateId: receipt.id, workspaceId: scope.workspaceId, runtimeVersion: receipt.runtimeVersion },
           });
+          const alreadyDelivered = priorDelivery?.payload?.sourceDigest === fingerprint
+            && priorDelivery.payload.workspaceId === scope.workspaceId;
+          if (!alreadyDelivered) {
+            const receipt = await candidateWriter.create({
+              workspaceId: scope.workspaceId, ...snapshot, expectedVersion: candidateVersion,
+              assertCurrent: () => {
+                if (assertBinding) assertBinding();
+                if (mailSourceDigest(intake.source(scope.mailboxUser, messageId).source) !== fingerprint) {
+                  throw Object.assign(new Error('INTAKE_SOURCE_CHANGED'), { code: 'INTAKE_SOURCE_CHANGED' });
+                }
+              },
+            });
+            candidateVersion = receipt.runtimeVersion;
+            deliveredCandidates.push({ messageId, ...receipt });
+            store.audit('mail.crm_candidate.delivered', {
+              entityType: 'message', entityId: messageId,
+              payload: {
+                candidateId: receipt.id, workspaceId: scope.workspaceId,
+                runtimeVersion: receipt.runtimeVersion, sourceDigest: fingerprint,
+              },
+            });
+          }
         } catch (error) {
           candidateFailure = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
           failures.push(candidateFailure);
