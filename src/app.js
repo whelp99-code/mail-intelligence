@@ -2,6 +2,7 @@ import { messageIdFromHash, messageMatchesHash } from './message-hash.js';
 import { initializeSendReview } from './send-review.js';
 import { renderReceivedAttachments } from './received-attachments.js';
 import {
+  compactCountSummary,
   displayLabel,
   operationalLaneLabel,
   priorityLabel,
@@ -1311,15 +1312,19 @@ function renderFilteredView() {
     groups.forEach((items, label) => {
       const group = document.createElement('section');
       group.className = 'message-group';
-      const laneSummary = Object.keys(counts)
-        .map((lane) => `${statusLabel(lane)} ${items.filter((item) => laneForMessage(item.id) === lane).length}`)
-        .join(' · ');
-      const operationalLaneSummary = Object.keys(operationalCounts)
-        .map((lane) => `${operationalLaneLabel(lane)} ${items.filter((item) => operationalLaneForMessage(item.id) === lane).length}`)
-        .join(' · ');
+      const summaryEntries = [
+        ...Object.keys(operationalCounts).map((lane) => ({
+          label: operationalLaneLabel(lane),
+          count: items.filter((item) => operationalLaneForMessage(item.id) === lane).length,
+        })),
+        ...Object.keys(counts).map((lane) => ({
+          label: statusLabel(lane),
+          count: items.filter((item) => laneForMessage(item.id) === lane).length,
+        })),
+      ];
       group.innerHTML = '<div class="group-head"><strong></strong><span></span></div>';
       group.querySelector('strong').textContent = label;
-      group.querySelector('span').textContent = `${items.length}건 · ${operationalLaneSummary} · ${laneSummary}`;
+      group.querySelector('span').textContent = compactCountSummary(items.length, summaryEntries);
       items.forEach((message) => group.appendChild(messageCard(message)));
       messageList.appendChild(group);
     });

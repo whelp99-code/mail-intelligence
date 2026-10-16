@@ -239,10 +239,9 @@ button:disabled { cursor: wait; opacity: 0.7; }
 .topbar p { color: var(--muted); font-size: 12px; margin-bottom: 0; }
 
 [id="fetchStatus"] {
-  max-width: min(100%, 520px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  overflow: visible;
+  white-space: normal;
 }
 
 .actions {
@@ -253,6 +252,7 @@ button:disabled { cursor: wait; opacity: 0.7; }
   justify-content: flex-end;
   min-width: 0;
 }
+.actions button { white-space: nowrap; }
 
 .search-field {
   align-items: center;
@@ -268,25 +268,33 @@ button:disabled { cursor: wait; opacity: 0.7; }
 
 .search-field span {
   color: var(--muted);
+  flex: 0 0 auto;
   font-size: 12px;
   font-weight: 850;
+  white-space: nowrap;
 }
 
 .search-field input {
   border: 0;
+  flex: 1 1 auto;
   min-height: 36px;
+  min-width: 0;
   outline: none;
   padding: 8px 0;
+  width: auto;
 }
 
 .field-inline {
   align-items: center;
   color: var(--muted);
   display: flex;
+  flex: 0 0 auto;
   font-size: 13px;
   font-weight: 800;
   gap: 8px;
+  white-space: nowrap;
 }
+.field-inline select { min-width: 5.5rem; width: auto; }
 
 select, input, textarea {
   border: 1px solid var(--line);
@@ -1437,8 +1445,8 @@ textarea {
   .config-span-2 { grid-column: auto; }
   .feedback-summary, .feedback-buttons, .feedback-form { grid-template-columns: 1fr; }
   .search-field { min-width: 100%; }
-  .safety-notice { align-items: flex-start; flex-direction: column; }
-  .safety-notice span { white-space: normal; }
+  .safety-notice { align-items: flex-start; align-self: start; flex-direction: column; height: fit-content; }
+  .safety-notice span { flex: 0 1 auto; white-space: normal; }
   .metric { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
@@ -1449,5 +1457,50 @@ textarea {
 .message-card, .detail-meta, .detail-body, .detail-summary, .detail-next, .memory-search-item { overflow-wrap: anywhere; }
 .message-card[role="button"] { cursor: pointer; }
 :focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+
+.safety-notice {
+  align-items: baseline;
+  align-self: start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  height: fit-content;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+.safety-notice strong { flex: 0 1 auto; }
+.safety-notice span { color: var(--muted); flex: 1 1 auto; font-size: 13px; min-width: 0; }
+
+@media (width <= 720px) {
+  .topbar { align-items: stretch; }
+
+  .actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .mailbox-switch {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* stylelint-disable-next-line selector-id-pattern */
+  .mailbox-switch button, #searchDatabase, #loadOutlook, .field-inline { width: 100%; }
+  .search-field { flex: none; grid-column: 1 / -1; min-width: 0; width: 100%; }
+  .field-inline { justify-content: space-between; min-width: 0; }
+  .field-inline select { flex: 1 1 auto; min-width: 0; }
+
+  /* stylelint-disable-next-line selector-id-pattern */
+  #loadOutlook { grid-column: 1 / -1; }
+  .safety-notice { align-items: flex-start; flex-direction: column; height: fit-content; }
+  .safety-notice span { flex: 0 1 auto; }
+  .group-head span { line-height: 1.4; }
+}
 
 @media (width <= 640px) { .main { min-width: 0; overflow-x: hidden; } .detail-panel, .mail-list-panel, .panel { max-height: 520px; min-height: 0; } }
