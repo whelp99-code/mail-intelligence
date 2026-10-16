@@ -166,6 +166,15 @@ export function undoHandledElsewhere({ db, mailboxId, messageId, actor, now = ne
   return { handledElsewhere: null, undone: true, message, restoredDrafts };
 }
 
+function isHandledElsewhereCancellation(db, draftId) {
+  const row = db.prepare(`
+    SELECT actor, reason FROM mail_send_draft_events
+    WHERE draft_id = ? AND status = 'cancelled'
+    ORDER BY id DESC LIMIT 1
+  `).get(draftId);
+  return row?.reason === HANDLED_ELSEWHERE_REASON;
+}
+
 function restoreSystemCancelledDrafts(db, mailboxId, messageId, actor) {
   if (!tableColumns(db, 'mail_send_drafts').has('draft_id')) return 0;
   const drafts = new MailSendDrafts(db);
@@ -175,6 +184,7 @@ function restoreSystemCancelledDrafts(db, mailboxId, messageId, actor) {
   `).all(mailboxId, messageId);
   let restored = 0;
   for (const row of rows) {
+    if (!isHandledElsewhereCancellation(db, row.draft_id)) continue;
     try {
       const updated = drafts.restore(mailboxId, row.draft_id, actor);
       if (updated?.status && updated.status !== 'cancelled') restored += 1;

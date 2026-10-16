@@ -368,6 +368,27 @@ test('later owner reply cancels an unresolved draft without deleting it or chang
   db.close();
 });
 
+test('human restore of an already-replied cancellation survives the next sync cancel pass', () => {
+  const db = fixtureDb();
+  insert(db, { id: 41, subject: '자료 요청', email: 'buyer@example.com', body: '자료 회신 부탁드립니다.', workState: 'action_required' });
+  db.prepare('UPDATE messages SET conversation_id=\'conv-restore\', received_at=\'2026-10-01T01:00:00.000Z\' WHERE id=41').run();
+  let now = '2026-10-01T02:00:00.000Z';
+  const drafts = new MailSendDrafts(db, { now: () => now });
+  const pending = drafts.create(1, 'jarvis', {
+    request_id: 'restore-sync', to: ['buyer@example.com'], subject: 'RE: 자료 요청', body_text: '확인하겠습니다.', message_id: 41,
+  }).draft;
+  insertSent(db, {
+    id: 42, folder: 8, subject: 'Re: 자료 요청', normalized: '자료 요청', sent: '2026-10-01T03:00:00.000Z', conversation: 'conv-restore', to: ['buyer@example.com'],
+  });
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 1);
+  now = '2026-10-01T04:00:00.000Z';
+  drafts.restore(1, pending.draft_id, 'session:owner');
+  assert.equal(drafts.get(1, pending.draft_id).status, 'needs_approval');
+  assert.equal(cancelAnsweredDrafts({ db, drafts, mailboxId: 1 }).cancelled, 0);
+  assert.equal(drafts.get(1, pending.draft_id).status, 'needs_approval');
+  db.close();
+});
+
 test('folder copies of one mail produce one reply draft; distinct mails stay separate', () => {
   const db = fixtureDb();
   const body = '견적 요청드립니다. 회신 부탁드립니다.';

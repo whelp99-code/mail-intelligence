@@ -346,13 +346,29 @@ function messageTime(message = {}, preferSent = false) {
   return String(message.received_at || message.receivedAt || message.sent_at || message.sentAt || '');
 }
 
-export function hasLaterSentReply(inbound = {}, sentMessages = []) {
+function getHumanDraftRestoreAt(db, draftId) {
+  if (!db || !draftId || !tableColumns(db, 'mail_send_draft_events').has('reason')) return '';
+  const row = db.prepare(`
+    SELECT created_at FROM mail_send_draft_events
+    WHERE draft_id = ? AND reason = 'restored' AND actor LIKE 'session:%'
+    ORDER BY id DESC LIMIT 1
+  `).get(draftId);
+  return row?.created_at || '';
+}
+
+export function hasLaterSentReply(inbound = {}, sentMessages = [], notBefore = '') {
   const inboundTime = messageTime(inbound, false);
   const conversation = String(inbound.conversation_id || inbound.conversationId || '').trim();
+  const cut = String(notBefore || '').trim();
+  const cutMs = cut ? Date.parse(cut) : NaN;
   if (!conversation) return false;
   return sentMessages.some((sent) => {
     if (!isSentFolderMessage(sent)) return false;
     const sentTime = messageTime(sent, true);
+    if (cut && sentTime && Number.isFinite(cutMs)) {
+      const sentMs = Date.parse(sentTime);
+      if (Number.isFinite(sentMs) && sentMs <= cutMs) return false;
+    }
     if (inboundTime && sentTime && sentTime <= inboundTime) return false;
     if (inboundTime && !sentTime) return false;
     const sentConversation = String(sent.conversation_id || sent.conversationId || '').trim();
@@ -482,7 +498,8 @@ export function cancelAnsweredDrafts({ db, drafts, mailboxId = null } = {}) {
   const handled = loadActiveHandledElsewhere(db, mailboxId);
   for (const item of linked) {
     const marked = handled.ids.has(item.message.id);
-    if (!marked && !hasLaterSentReply(item.message, sent)) {
+    const restoredAt = getHumanDraftRestoreAt(db, item.row.draft_id);
+    if (!marked && !hasLaterSentReply(item.message, sent, restoredAt)) {
       summary.skipped += 1;
       continue;
     }
