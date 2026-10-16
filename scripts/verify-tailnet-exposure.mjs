@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 function parseEnvironment(source) {
   return Object.fromEntries(String(source || '')
@@ -53,7 +54,7 @@ assert.match(unauthenticatedRoot.headers.get('www-authenticate') || '', /Mail In
 
 const accessKey = (await readFile(accessKeyPath, 'utf8')).trim();
 assert.match(accessKey, /^[A-Za-z0-9_-]{40,}$/);
-const authorization = `Basic ${Buffer.from(`mailintelligence:${accessKey}`, 'utf8').toString('base64')}`;
+const authorization = accessAuthorizationHeader(accessKey);
 const authenticatedRoot = await fetch(`${baseUrl}/`, {
   redirect: 'manual',
   headers: { Authorization: authorization },

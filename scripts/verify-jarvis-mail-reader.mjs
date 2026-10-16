@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 // Fixed, public fixture material only. Never issue or inspect an operational key.
@@ -217,7 +218,7 @@ export async function verifyJarvisMailReader({ capture = () => {} } = {}) {
         }
         for (const headers of [
           { ...readerHeaders, Cookie: 'mi_session=synthetic-invalid' },
-          { ...readerHeaders, Authorization: `Basic ${Buffer.from(`mailintelligence:${operatorKey}`).toString('base64')}` },
+          { ...readerHeaders, Authorization: accessAuthorizationHeader(operatorKey) },
           { ...readerHeaders, Authorization: `Bearer ${draftKey}` },
           { ...readerHeaders, 'x-workspace-id': 'unbound-workspace' },
         ]) await check('/api/storage/status', { headers }, 403, 'JARVIS_READER_AUTH_CONFLICT');
@@ -236,7 +237,7 @@ export async function verifyJarvisMailReader({ capture = () => {} } = {}) {
       // Adjacent human authority stays separate; no fixture session is reused by JARVIS.
       if (scenario.name === 'seeded') {
         const sessionResponse = await fetch(fixture.base + '/api/session', {
-          headers: { Authorization: `Basic ${Buffer.from(`mailintelligence:${operatorKey}`).toString('base64')}` },
+          headers: { Authorization: accessAuthorizationHeader(operatorKey) },
         });
         assert.equal(sessionResponse.status, 200);
         const session = await sessionResponse.json();

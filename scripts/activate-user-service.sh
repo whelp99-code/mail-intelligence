@@ -24,17 +24,6 @@ else
 mkdir -p "$DATA_DIR" "$BACKUP_DIR"
 chmod 0700 "$DATA_DIR" "$BACKUP_DIR"
 
-if [[ ! -s "$ACCESS_KEY_FILE" ]]; then
-  umask 077
-  node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))" > "$ACCESS_KEY_FILE"
-fi
-chmod 0600 "$ACCESS_KEY_FILE"
-ACCESS_KEY="$(cat "$ACCESS_KEY_FILE")"
-if [[ ! "$ACCESS_KEY" =~ ^[A-Za-z0-9_-]{40,}$ ]]; then
-  echo "Access key failed validation." >&2
-  exit 1
-fi
-
 ALLOWED_PROXY_HOSTS=""
 if [[ -s "$PROXY_ENV" ]]; then
   ALLOWED_PROXY_HOSTS="$(awk -F= '$1 == "MAIL_INTELLIGENCE_PROXY_BIND" { print $2; exit }' "$PROXY_ENV" | tr -d '[:space:]')"
@@ -53,24 +42,7 @@ NODE
 fi
 
 umask 077
-cat > "$RUNTIME_ENV.tmp" <<EOF
-NODE_ENV=production
-HOST=127.0.0.1
-PORT=3010
-MAIL_INTELLIGENCE_DATA_DIR=$DATA_DIR
-MAIL_INTELLIGENCE_ACCESS_KEY=$ACCESS_KEY
-MAIL_INTELLIGENCE_PERSIST_SECRETS=1
-MAIL_INTELLIGENCE_ACTIONS_APPROVED=0
-MAIL_INTELLIGENCE_ALLOW_SEND=0
-MAIL_INTELLIGENCE_ALLOW_MAIL_MUTATIONS=0
-MAIL_INTELLIGENCE_ALLOW_DATA_PLANE=0
-MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI=0
-MAIL_INTELLIGENCE_ALLOWED_PROXY_HOSTS=$ALLOWED_PROXY_HOSTS
-EOF
-chmod 0600 "$RUNTIME_ENV.tmp"
-mv "$RUNTIME_ENV.tmp" "$RUNTIME_ENV"
-chmod 0600 "$RUNTIME_ENV"
-unset ACCESS_KEY
+ACCESS_USERNAME="$(node "$ROOT/scripts/write-runtime-access-env.mjs" "$DATA_DIR" "$ALLOWED_PROXY_HOSTS")"
 fi
 
 systemd-analyze --user verify "$UNIT_SOURCE"
@@ -85,7 +57,7 @@ for _ in $(seq 1 60); do
     systemctl --user is-enabled "$SERVICE_NAME"
     systemctl --user is-active "$SERVICE_NAME"
     printf 'Health: %s\n' "$HEALTH_URL"
-    printf 'Access username: mailintelligence\n'
+    printf 'Access username: %s\n' "$ACCESS_USERNAME"
     printf 'Access key file: %s\n' "$ACCESS_KEY_FILE"
     exit 0
   fi

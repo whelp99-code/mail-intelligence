@@ -8,6 +8,7 @@ import { backup, DatabaseSync } from 'node:sqlite';
 import { GraphMailClient } from '../src/adapters/microsoft-graph-mail.js';
 import { normalizeGraphAttachment } from '../src/domain/mail-normalizer.js';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
+import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
 const MAX_MESSAGES = 100;
 
@@ -108,7 +109,7 @@ export async function recoverAttachmentMetadata({ store, client, mailboxUser = '
 
 async function health(baseUrl, accessKey) {
   const response = await fetch(`${baseUrl}/api/health`, {
-    headers: { Authorization: `Basic ${Buffer.from(`mailintelligence:${accessKey}`).toString('base64')}` },
+    headers: { Authorization: accessAuthorizationHeader(accessKey) },
     redirect: 'error',
     signal: AbortSignal.timeout(30_000),
   });
