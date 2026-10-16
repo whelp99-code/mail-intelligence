@@ -568,9 +568,11 @@ function handledElsewhereControls(message, { compact = false } = {}) {
   wrap.addEventListener('click', (event) => event.stopPropagation());
   wrap.addEventListener('keydown', (event) => event.stopPropagation());
   if (message.handledElsewhere) {
+    const handled = message.handledElsewhere;
     const note = document.createElement('p');
     note.className = 'handled-note';
-    note.textContent = `외부 회신 · ${handledChannelLabel(message.handledElsewhere.channel)}${message.handledElsewhere.note ? ` · ${message.handledElsewhere.note}` : ''}`;
+    note.textContent = `외부 회신 · ${handledChannelLabel(handled.channel)}${handled.note ? ` · ${handled.note}` : ''}`
+      + ` · 처리자 ${handled.actor} · 처리 시각 ${new Date(handled.markedAt).toLocaleString('ko-KR')}`;
     const undo = document.createElement('button');
     undo.type = 'button';
     undo.textContent = '실행 취소';
@@ -663,6 +665,8 @@ function messageCard(message) {
     gap.className = 'reply-gap';
     gap.textContent = '회신 필요 — 아직 회신 없음';
     article.appendChild(gap);
+  }
+  if (message.replyGap || message.handledElsewhere) {
     article.appendChild(handledElsewhereControls(message, { compact: true }));
   }
   if (insight?.aiEnhanced) article.classList.add('ai-enhanced');
