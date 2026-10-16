@@ -346,36 +346,17 @@ function messageTime(message = {}, preferSent = false) {
   return String(message.received_at || message.receivedAt || message.sent_at || message.sentAt || '');
 }
 
-function senderDomain(message = {}) {
-  const email = senderEmail(message);
-  const domain = email.split('@')[1] || '';
-  return domain.toLowerCase();
-}
-
-function recipientDomains(message = {}) {
-  const raw = [
-    ...(Array.isArray(message.to) ? message.to : []),
-    ...(Array.isArray(message.toEmails) ? message.toEmails : []),
-    ...(Array.isArray(message.toRecipients) ? message.toRecipients.map((item) => item?.emailAddress?.address || item) : []),
-  ];
-  return raw.map((item) => String(item || '').toLowerCase().split('@')[1] || '').filter(Boolean);
-}
-
 export function hasLaterSentReply(inbound = {}, sentMessages = []) {
   const inboundTime = messageTime(inbound, false);
   const conversation = String(inbound.conversation_id || inbound.conversationId || '').trim();
-  const subject = normalizeReplySubject(inbound.normalized_subject || inbound.normalizedSubject || inbound.subject || '');
-  const domain = senderDomain(inbound);
+  if (!conversation) return false;
   return sentMessages.some((sent) => {
     if (!isSentFolderMessage(sent)) return false;
     const sentTime = messageTime(sent, true);
     if (inboundTime && sentTime && sentTime <= inboundTime) return false;
     if (inboundTime && !sentTime) return false;
     const sentConversation = String(sent.conversation_id || sent.conversationId || '').trim();
-    if (conversation && sentConversation && conversation === sentConversation) return true;
-    if (conversation && sentConversation && conversation !== sentConversation) return false;
-    const sentSubject = normalizeReplySubject(sent.normalized_subject || sent.normalizedSubject || sent.subject || '');
-    return Boolean(subject && sentSubject === subject && domain && recipientDomains(sent).includes(domain));
+    return sentConversation === conversation;
   });
 }
 

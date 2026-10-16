@@ -171,9 +171,9 @@ test('owner voice evidence loads only Sent Items authored by the mailbox owner',
   db.close();
 });
 
-test('reply gap falls back to normalized Re subject and recipient domain', () => {
+test('same title on another thread, including an empty conversation id, stays unanswered', () => {
   const inbound = {
-    conversation_id: '',
+    conversation_id: 'thread-a',
     subject: '납기 확인',
     normalized_subject: '납기 확인',
     sender_email: 'lee@partner.example',
@@ -181,17 +181,47 @@ test('reply gap falls back to normalized Re subject and recipient domain', () =>
     classification: { workState: 'decision_required' },
     well_known_name: 'inbox',
   };
-  const sent = {
+  const otherThread = {
     folder_id: 8,
     display_name: '보낸 편지함',
-    conversation_id: 'other',
+    conversation_id: 'thread-b',
     subject: 'Re: 납기 확인',
     normalized_subject: '납기 확인',
     sent_at: '2026-10-01T04:00:00.000Z',
     to: ['lee@partner.example'],
   };
-  assert.equal(needsUnansweredReply(inbound, [sent]), false);
-  assert.equal(needsUnansweredReply(inbound, [{ ...sent, to: ['other@elsewhere.example'] }]), true);
+  const legacy = { ...inbound, conversation_id: '' };
+  const legacySent = { ...otherThread, conversation_id: '' };
+  assert.equal(needsUnansweredReply(inbound, [otherThread]), true);
+  assert.equal(needsUnansweredReply(legacy, [otherThread]), true);
+  assert.equal(needsUnansweredReply(legacy, [legacySent]), true);
+  assert.equal(hasLaterSentReply(inbound, [{ ...otherThread, conversation_id: 'thread-a' }]), true);
+});
+
+test('same subject on a different thread does not cancel drafts, including empty conversation ids', () => {
+  const db = fixtureDb();
+  insert(db, { id: 51, subject: '납기 확인', email: 'lee@partner.example', body: '납기 회신 부탁드립니다.', workState: 'action_required' });
+  insert(db, { id: 52, subject: '납기 확인', email: 'lee@partner.example', body: '납기 회신 부탁드립니다.', workState: 'action_required' });
+  db.prepare('UPDATE messages SET conversation_id=\'thread-a\', normalized_subject=\'납기 확인\', received_at=\'2026-10-01T01:00:00.000Z\' WHERE id=51').run();
+  db.prepare('UPDATE messages SET conversation_id=\'\', normalized_subject=\'납기 확인\', received_at=\'2026-10-01T01:00:00.000Z\' WHERE id=52').run();
+  insertSent(db, {
+    id: 53, folder: 8, subject: 'Re: 납기 확인', normalized: '납기 확인',
+    sent: '2026-10-01T04:00:00.000Z', conversation: 'thread-b', to: ['lee@partner.example'],
+  });
+  const drafts = new MailSendDrafts(db, { now: () => '2026-10-01T02:00:00.000Z' });
+  const edited = '사람이 고친 납기 회신입니다.';
+  const first = drafts.create(1, 'jarvis', {
+    request_id: 'thread-a', to: ['lee@partner.example'], subject: 'RE: 납기 확인', body_text: edited, message_id: 51,
+  }).draft;
+  const legacy = drafts.create(1, 'jarvis', {
+    request_id: 'legacy-empty', to: ['lee@partner.example'], subject: 'RE: 납기 확인', body_text: edited, message_id: 52,
+  }).draft;
+  const result = cancelAnsweredDrafts({ db, drafts, mailboxId: 1 });
+  assert.equal(result.cancelled, 0);
+  assert.equal(drafts.get(1, first.draft_id).status, 'needs_approval');
+  assert.equal(drafts.get(1, legacy.draft_id).status, 'needs_approval');
+  assert.equal(drafts.get(1, legacy.draft_id).body_text, edited);
+  db.close();
 });
 
 test('pipeline skips a draft when a later folder-8 reply exists and still drafts if the sent mail is earlier', () => {

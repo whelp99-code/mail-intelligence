@@ -64,7 +64,7 @@ export function createHandledElsewhereApi({
     const actor = sessionActor(session);
     if (body.undo === true) {
       if (body.channel != null || body.note != null) fail(400, 'INVALID_FIELDS', 'Undo does not take a channel.');
-      undoHandledElsewhere({
+      const undone = undoHandledElsewhere({
         db: store.db,
         mailboxId: mailbox.id,
         messageId: body.messageId,
@@ -73,7 +73,13 @@ export function createHandledElsewhereApi({
       const message = resolveHandledMessage(store.db, mailbox.id, body.messageId);
       return {
         status: 200,
-        body: { handledElsewhere: null, undone: true, replyGap: replyGapFor(store.db, mailbox.id, message), cancelledDrafts: 0 },
+        body: {
+          handledElsewhere: null,
+          undone: true,
+          replyGap: replyGapFor(store.db, mailbox.id, message),
+          cancelledDrafts: 0,
+          restoredDrafts: undone.restoredDrafts || 0,
+        },
       };
     }
     if (body.undo != null) fail(400, 'INVALID_FIELDS', 'undo must be true.');

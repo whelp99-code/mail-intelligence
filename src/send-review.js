@@ -281,12 +281,23 @@ export function initializeSendReview(apiFetch) {
       const cancel = node('button', '초안 취소'); cancel.type = 'button'; cancel.id = 'cancelSendDraft'; cancel.disabled = busy;
       cancel.addEventListener('click', () => act(draft, 'cancel', {})); controls.append(cancel);
     }
+    if (draft.system_cancelled) {
+      detail.append(node('p', '시스템이 취소한 초안입니다. 사람이 고친 본문은 그대로 복구됩니다.', 'send-draft-warning'));
+      const restore = node('button', '초안 복구');
+      restore.type = 'button'; restore.id = 'restoreSendDraft'; restore.disabled = busy;
+      restore.addEventListener('click', () => act(draft, 'restore', {}));
+      controls.append(restore);
+    }
     detail.append(controls);
   }
   async function act(draft, action, payload) {
     if (busy) return;
     busy = true; show(draft);
-    status.textContent = action === 'approve' ? '승인 요청 처리 중입니다. 중복 요청하지 마세요.' : '초안을 취소하는 중입니다.';
+    status.textContent = action === 'approve'
+      ? '승인 요청 처리 중입니다. 중복 요청하지 마세요.'
+      : action === 'restore'
+        ? '취소된 초안을 복구하는 중입니다.'
+        : '초안을 취소하는 중입니다.';
     try {
       const result = await request(`/${draft.draft_id}/${action}`, payload);
       selected = result.draft.draft_id;
