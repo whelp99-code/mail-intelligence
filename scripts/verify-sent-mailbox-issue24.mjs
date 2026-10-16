@@ -40,6 +40,12 @@ async function seedSentFixture(dataDir) {
     migrationsDir: resolve('migrations'),
   });
   const mailbox = store.ensureMailbox({ key: 'me', address: 'owner@example.com' });
+  const inbox = store.ensureFolder({
+    mailboxId: mailbox.id,
+    graphId: 'inbox-graph',
+    wellKnownName: 'inbox',
+    displayName: '받은 편지함',
+  });
   const sent = store.ensureFolder({
     mailboxId: mailbox.id,
     graphId: 'sent-graph',
@@ -52,20 +58,60 @@ async function seedSentFixture(dataDir) {
     syncRunId: store.startSyncRun({ mailboxId: mailbox.id, folderId: sent.id, runType: 'initial' }),
     pageIndex: 0,
     requestUrl: 'https://graph.example/sent/delta',
-    items: [normalizeGraphMessage({
-      id: 'graph-sent-ui',
-      conversationId: 'conv-ui',
-      subject: 'Re: 견적 회신',
-      from: { emailAddress: { address: 'owner@example.com', name: 'Owner' } },
-      toRecipients: [{ emailAddress: { address: 'buyer@example.com', name: 'Buyer' } }],
-      sentDateTime: '2026-10-10T09:00:00.000Z',
-      receivedDateTime: '2026-10-10T09:00:00.000Z',
-      bodyPreview: '견적서 보내드립니다.',
-      body: { contentType: 'text', content: '견적서 보내드립니다.' },
-      parentFolderId: 'sent-graph',
-    })],
+    items: [
+      normalizeGraphMessage({
+        id: 'graph-sent-ui-newer',
+        conversationId: 'conv-ui',
+        subject: 'Re: 견적 회신',
+        from: { emailAddress: { address: 'owner@example.com', name: 'Owner' } },
+        toRecipients: [{ emailAddress: { address: 'buyer@example.com', name: 'Buyer' } }],
+        sentDateTime: '2026-10-10T09:00:00.000Z',
+        receivedDateTime: '2026-10-10T09:00:00.000Z',
+        bodyPreview: '견적서 보내드립니다.',
+        body: { contentType: 'text', content: '견적서 보내드립니다.' },
+        parentFolderId: 'sent-graph',
+      }),
+      normalizeGraphMessage({
+        id: 'graph-sent-ui-older',
+        conversationId: 'conv-ui-older',
+        subject: '납기 안내',
+        from: { emailAddress: { address: 'owner@example.com', name: 'Owner' } },
+        toRecipients: [{ emailAddress: { address: 'partner@example.com', name: 'Partner' } }],
+        sentDateTime: '2026-10-09T08:30:00.000Z',
+        receivedDateTime: '2026-10-09T08:30:00.000Z',
+        bodyPreview: '납기는 10월 말입니다.',
+        body: { contentType: 'text', content: '납기는 10월 말입니다.' },
+        parentFolderId: 'sent-graph',
+      }),
+    ],
     deltaLink: 'https://graph.example/sent/delta',
   });
+  store.applyDeltaPage({
+    mailboxId: mailbox.id,
+    folderId: inbox.id,
+    syncRunId: store.startSyncRun({ mailboxId: mailbox.id, folderId: inbox.id, runType: 'initial' }),
+    pageIndex: 0,
+    requestUrl: 'https://graph.example/inbox/delta',
+    items: [normalizeGraphMessage({
+      id: 'graph-inbox-gap-ui',
+      conversationId: 'conv-inbox-gap-ui',
+      subject: '납기 확인 요청',
+      from: { emailAddress: { address: 'partner@example.com', name: 'Partner' } },
+      toRecipients: [{ emailAddress: { address: 'owner@example.com' } }],
+      receivedDateTime: '2026-10-09T08:00:00.000Z',
+      bodyPreview: '회신 부탁드립니다.',
+      body: { contentType: 'text', content: '회신 부탁드립니다.' },
+      parentFolderId: 'inbox-graph',
+    })],
+    deltaLink: 'https://graph.example/inbox/delta',
+  });
+  const inboxRow = store.db.prepare('SELECT id FROM messages WHERE graph_id = ?').get('graph-inbox-gap-ui');
+  const now = '2026-10-09T08:00:00.000Z';
+  store.db.prepare(`
+    INSERT INTO precision_classifications(
+      message_id, mailbox_id, work_state, next_actor, priority, fingerprint, analyzed_at, created_at, updated_at, source
+    ) VALUES (?, ?, 'action_required', 'me', 'normal', 'fp-gap-ui', ?, ?, ?, 'rules')
+  `).run(inboxRow.id, mailbox.id, now, now, now);
   store.close();
 }
 
@@ -165,24 +211,38 @@ test('issue #24 sent mailbox UI capture at 1440 and 390', { timeout: 90_000 }, a
   });
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await cdp('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
-  await waitFor(cdp, 'document.querySelector("#showSent")');
+  await waitFor(cdp, 'document.querySelector("#messageList .reply-gap")?.textContent?.includes("회신 필요")');
   const inboxShot = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   await mkdir(evidenceRoot, { recursive: true });
   await writeFile(join(evidenceRoot, 'before-1440.png'), Buffer.from(inboxShot.data, 'base64'));
   await cdp('Runtime.evaluate', { expression: 'document.querySelector("#showSent").click()' });
-  await waitFor(cdp, 'document.querySelector("#sentList .message-card")');
+  await waitFor(cdp, '!document.querySelector("#sentMail").hidden && document.querySelectorAll("#sentList .message-card").length === 2');
   const sent1440 = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   await writeFile(join(evidenceRoot, 'after-1440.png'), Buffer.from(sent1440.data, 'base64'));
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await cdp('Runtime.evaluate', { expression: 'document.querySelector("#showInbox").click()' });
-  await waitFor(cdp, '!document.querySelector("#sentMail").hidden === false || document.querySelector("#mailShell")');
+  await waitFor(cdp, 'document.querySelector("#sentMail").hidden');
   const before390 = await cdp('Page.captureScreenshot', { format: 'png' });
   await writeFile(join(evidenceRoot, 'before-390.png'), Buffer.from(before390.data, 'base64'));
   await cdp('Runtime.evaluate', { expression: 'document.querySelector("#showSent").click()' });
-  await waitFor(cdp, 'document.querySelector("#sentList .message-card")');
+  await waitFor(cdp, '!document.querySelector("#sentMail").hidden && document.querySelectorAll("#sentList .message-card").length === 2');
   const after390 = await cdp('Page.captureScreenshot', { format: 'png' });
   await writeFile(join(evidenceRoot, 'after-390.png'), Buffer.from(after390.data, 'base64'));
-  const title = await waitFor(cdp, 'document.querySelector("#sentList .message-subject")?.textContent?.includes("견적")');
-  assert.equal(title, true);
+  const sentUi = await waitFor(cdp, `(() => {
+    const cards = [...document.querySelectorAll('#sentList .message-card')];
+    const subjects = cards.map((card) => card.querySelector('.message-subject')?.textContent || '');
+    const detailBody = document.querySelector('#sentDetail .detail-body')?.textContent || '';
+    const detailMeta = document.querySelector('#sentDetail .detail-meta')?.textContent || '';
+    return {
+      count: cards.length,
+      newestFirst: subjects[0]?.includes('견적') && subjects[1]?.includes('납기'),
+      detailBody,
+      detailMeta,
+    };
+  })()`);
+  assert.equal(sentUi.count, 2);
+  assert.equal(sentUi.newestFirst, true);
+  assert.match(sentUi.detailBody, /견적서 보내드립니다/);
+  assert.match(sentUi.detailMeta, /2026/);
   ws.close();
 });

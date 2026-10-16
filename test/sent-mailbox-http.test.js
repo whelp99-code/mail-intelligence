@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -47,18 +48,32 @@ async function seedSentFixture(dataDir) {
     syncRunId: runId,
     pageIndex: 0,
     requestUrl: 'https://graph.example/sent/delta',
-    items: [normalizeGraphMessage({
-      id: 'graph-sent-fixture',
-      conversationId: 'conv-sent-24',
-      subject: 'Re: 견적 회신',
-      from: { emailAddress: { address: 'owner@example.com', name: 'Owner' } },
-      toRecipients: [{ emailAddress: { address: 'buyer@example.com', name: 'Buyer' } }],
-      sentDateTime: '2026-10-10T09:00:00.000Z',
-      receivedDateTime: '2026-10-10T09:00:00.000Z',
-      bodyPreview: '견적서 보내드립니다.',
-      body: { contentType: 'text', content: '견적서 보내드립니다.' },
-      parentFolderId: 'sent-graph',
-    })],
+    items: [
+      normalizeGraphMessage({
+        id: 'graph-sent-newer',
+        conversationId: 'conv-sent-24',
+        subject: 'Re: 견적 회신',
+        from: { emailAddress: { address: 'owner@example.com', name: 'Owner' } },
+        toRecipients: [{ emailAddress: { address: 'buyer@example.com', name: 'Buyer' } }],
+        sentDateTime: '2026-10-10T09:00:00.000Z',
+        receivedDateTime: '2026-10-10T09:00:00.000Z',
+        bodyPreview: '견적서 보내드립니다.',
+        body: { contentType: 'text', content: '견적서 보내드립니다.' },
+        parentFolderId: 'sent-graph',
+      }),
+      normalizeGraphMessage({
+        id: 'graph-sent-older',
+        conversationId: 'conv-sent-older',
+        subject: '납기 안내',
+        from: { emailAddress: { address: 'owner@example.com', name: 'Owner' } },
+        toRecipients: [{ emailAddress: { address: 'partner@example.com', name: 'Partner' } }],
+        sentDateTime: '2026-10-09T08:30:00.000Z',
+        receivedDateTime: '2026-10-09T08:30:00.000Z',
+        bodyPreview: '납기는 10월 말입니다.',
+        body: { contentType: 'text', content: '납기는 10월 말입니다.' },
+        parentFolderId: 'sent-graph',
+      }),
+    ],
     deltaLink: 'https://graph.example/sent/delta',
   });
   store.applyDeltaPage({
@@ -88,6 +103,16 @@ async function seedSentFixture(dataDir) {
     ) VALUES (?, ?, 'action_required', 'me', 'normal', 'fp-gap', ?, ?, ?, 'rules')
   `).run(inboxRow.id, mailbox.id, now, now, now);
   store.close();
+}
+
+async function openSession(base) {
+  const root = await fetch(base, {
+    headers: { Authorization: `Basic ${Buffer.from(`mailintelligence:${operatorKey}`).toString('base64')}` },
+  });
+  const cookie = root.headers.get('set-cookie').split(';')[0];
+  await root.arrayBuffer();
+  const session = await (await fetch(`${base}/api/session`, { headers: { Cookie: cookie } })).json();
+  return { cookie, session, base };
 }
 
 test('GET /api/mail/sent is read-only and returns newest sent messages with search', async (t) => {
@@ -128,18 +153,27 @@ test('GET /api/mail/sent is read-only and returns newest sent messages with sear
     await delay(50);
   }
   assert.equal(healthy, true);
-  const root = await fetch(base, {
-    headers: { Authorization: `Basic ${Buffer.from(`mailintelligence:${operatorKey}`).toString('base64')}` },
-  });
-  const cookie = root.headers.get('set-cookie').split(';')[0];
-  await root.arrayBuffer();
+  const { cookie } = await openSession(base);
   const list = await fetch(`${base}/api/mail/sent?limit=10`, { headers: { Cookie: cookie } });
   assert.equal(list.status, 200);
   const body = await list.json();
   assert.equal(body.readOnly, true);
-  assert.equal(body.messages.length, 1);
+  assert.equal(body.messages.length, 2);
   assert.equal(body.messages[0].subject, 'Re: 견적 회신');
+  assert.equal(body.messages[1].subject, '납기 안내');
+  assert.equal(body.messages[0].sentAt, '2026-10-10T09:00:00.000Z');
+  assert.equal(body.messages[0].bodyPreview, '견적서 보내드립니다.');
+  assert.equal(body.messages[0].body, '견적서 보내드립니다.');
   assert.deepEqual(body.messages[0].to, ['buyer@example.com']);
+  const db = new DatabaseSync(join(dataDir, 'mail-intelligence.sqlite'), { readOnly: true });
+  const numericId = db.prepare('SELECT id FROM messages WHERE graph_id = ?').get('graph-sent-newer').id;
+  db.close();
+  const detail = await fetch(`${base}/api/mail/message?id=${numericId}`, { headers: { Cookie: cookie } });
+  assert.equal(detail.status, 200);
+  const detailBody = await detail.json();
+  assert.equal(detailBody.readOnly, true);
+  assert.equal(detailBody.message.subject, 'Re: 견적 회신');
+  assert.match(detailBody.message.body || '', /견적서 보내드립니다/);
   const search = await fetch(`${base}/api/mail/sent?q=${encodeURIComponent('견적')}`, { headers: { Cookie: cookie } });
   assert.equal((await search.json()).messages.length, 1);
   const miss = await fetch(`${base}/api/mail/sent?q=${encodeURIComponent('없는제목')}`, { headers: { Cookie: cookie } });
