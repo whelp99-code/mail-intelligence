@@ -9,9 +9,12 @@ const contracts = await readFile(new URL('../docs/planning/notion-crm-collaborat
 test('UI shows Notion candidate WorkLinks and rates without chat', () => {
   assert.match(html, /workLinkLinkedCount/);
   assert.match(html, /workLinkUnassignedCount/);
-  assert.match(html, /후보 프로젝트 \(Notion\)|Notion 후보 링크/);
+  assert.match(html, /Notion 후보 링크/);
+  assert.doesNotMatch(html, /후보 프로젝트 \(Notion\)/);
   assert.match(app, /loadWorkLinks/);
-  assert.match(app, /후보 프로젝트 \(Notion\)/);
+  assert.match(app, /UNLINKED_PROJECT/);
+  assert.match(app, /Notion 후보 · 자동 확정 없음/);
+  assert.doesNotMatch(app, /후보 프로젝트 \(Notion\)/);
   assert.match(app, /자동 확정 없음/);
   assert.doesNotMatch(app, /\/api\/chat/);
 });
