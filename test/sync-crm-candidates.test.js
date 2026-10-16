@@ -365,6 +365,102 @@ test('a changed source revision delivers once more and a repeat of that revision
   assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE event_type=\'mail.crm_candidate.delivered\'').get().n, 2);
 });
 
+function conflictWriter(onGet) {
+  const calls = [];
+  const posted = [];
+  const writer = new CwosMailCandidateWriter({
+    baseUrl: 'http://127.0.0.1', apiKey: 'fixture-writer-key-0123456789abcdef',
+    workspaceId: '44444444-4444-4444-8444-444444444444', principalId: 'writer',
+    mailbox: 'delegate@example.invalid',
+    fetchImpl: async (url, options) => {
+      const request = { path: url.pathname, method: options.method, body: options.body ? JSON.parse(options.body) : null };
+      calls.push(request);
+      if (options.method === 'POST') {
+        posted.push(request.body);
+        return Response.json({ code: 'CWOS_CANDIDATE_CONFLICT' }, { status: 409 });
+      }
+      return onGet(posted.at(-1));
+    },
+  });
+  return { writer, calls, posted };
+}
+
+test('a 409 for an existing same-content candidate is recorded once and the next sync does not post', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run } = await fixture(t, { workspaceId });
+  const { writer, calls } = conflictWriter(posted => Response.json({
+    workspaceId,
+    runtimeVersion: 5,
+    count: 1,
+    candidates: [{
+      id: `mail-candidate-${posted.providerEventId.slice('mail-source:'.length)}`,
+      providerEventId: posted.providerEventId,
+      bodyDigest: posted.bodyDigest,
+      subject: posted.subject,
+      sourceLocator: posted.sourceLocator,
+      mailbox: posted.mailbox,
+      provider: posted.provider,
+      status: 'CANDIDATE',
+      confirmed: false,
+      freshness: 'producer_unverified',
+    }],
+  }));
+  binding.candidateWriter = writer;
+  const first = await run();
+  const postsAfterConflict = calls.filter(call => call.method === 'POST').length;
+  assert.equal(postsAfterConflict, 1);
+  assert.equal(first.failures.length, 0);
+  assert.equal(first.deliveredCandidates.length, 1);
+  const audit = store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' });
+  assert.equal(typeof audit.payload.sourceDigest, 'string');
+  assert.equal(audit.payload.workspaceId, workspaceId);
+  const second = await run();
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(second.deliveredCandidates.length, 0);
+  assert.deepEqual(second.failures, []);
+});
+
+test('a 409 with no candidate stays a dead letter and does not block a later create', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run } = await fixture(t, { workspaceId });
+  const { writer, calls } = conflictWriter(() => Response.json({
+    workspaceId, count: 0, candidates: [],
+  }));
+  binding.candidateWriter = writer;
+  const first = await run();
+  assert.equal(first.deliveredCandidates.length, 0);
+  assert.equal(first.failures[0].code, 'CWOS_CANDIDATE_CONFLICT');
+  assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
+  const second = await run();
+  assert.equal(calls.filter(call => call.method === 'POST').length, 2);
+  assert.equal(second.failures[0].code, 'CWOS_CANDIDATE_CONFLICT');
+  assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
+});
+
+test('a 409 for different candidate content stays a dead letter', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run } = await fixture(t, { workspaceId });
+  const { writer, calls } = conflictWriter(posted => Response.json({
+    workspaceId,
+    count: 1,
+    candidates: [{
+      id: `mail-candidate-${posted.providerEventId.slice('mail-source:'.length)}`,
+      providerEventId: posted.providerEventId,
+      bodyDigest: 'e'.repeat(64),
+      subject: posted.subject,
+      sourceLocator: posted.sourceLocator,
+      mailbox: posted.mailbox,
+      provider: posted.provider,
+    }],
+  }));
+  binding.candidateWriter = writer;
+  const result = await run();
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(result.deliveredCandidates.length, 0);
+  assert.equal(result.failures[0].code, 'CWOS_CANDIDATE_CONFLICT');
+  assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
+});
+
 test('ambiguous existing local projects without candidate links do not append CRM candidates', async (t) => {
   const { binding, store, run, posts } = await fixture(t, {
     subject: 'Alpha Project / Beta Project information',

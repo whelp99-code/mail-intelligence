@@ -88,14 +88,102 @@ test('writer refuses unsafe, foreign and promoted receipts', async () => {
 });
 
 test('denial, redirect and CAS conflict never fall back to commands or other ports', async () => {
-  for (const [status, code] of [[302, 'CWOS_CREDENTIAL_REDIRECT'], [403, 'CWOS_CANDIDATE_DENIED'], [409, 'CWOS_CANDIDATE_CONFLICT']]) {
-    const paths = [];
-    const client = new CwosMailCandidateWriter({ ...binding, fetchImpl: async url => {
-      paths.push(url.pathname);
+  for (const [status, code, lookups] of [
+    [302, 'CWOS_CREDENTIAL_REDIRECT', 0],
+    [403, 'CWOS_CANDIDATE_DENIED', 0],
+    [409, 'CWOS_CANDIDATE_CONFLICT', 1],
+  ]) {
+    const calls = [];
+    const client = new CwosMailCandidateWriter({ ...binding, fetchImpl: async (url, options) => {
+      calls.push({ path: url.pathname, method: options.method });
       return new Response('', { status });
     } });
     await assert.rejects(client.create(input), { code });
-    assert.deepEqual(paths, ['/api/cwos/v2/mail-candidates']);
+    assert.deepEqual(calls, [
+      { path: '/api/cwos/v2/mail-candidates', method: 'POST' },
+      ...Array.from({ length: lookups }, () => ({ path: '/api/cwos/v2/mail-candidates', method: 'GET' })),
+    ]);
+  }
+});
+
+test('a 409 is delivered only after lookup finds the same candidate', async () => {
+  let posted;
+  const calls = [];
+  const client = new CwosMailCandidateWriter({ ...binding, fetchImpl: async (url, options) => {
+    calls.push(options.method);
+    if (options.method === 'POST') {
+      posted = JSON.parse(options.body);
+      return Response.json({ code: 'CONCURRENT_MODIFICATION' }, { status: 409 });
+    }
+    const occurrence = posted.providerEventId.slice('mail-source:'.length);
+    return Response.json({
+      workspaceId: binding.workspaceId,
+      runtimeVersion: 6,
+      count: 1,
+      candidates: [{
+        id: `mail-candidate-${occurrence}`,
+        providerEventId: posted.providerEventId,
+        bodyDigest: posted.bodyDigest,
+        subject: posted.subject,
+        sourceLocator: posted.sourceLocator,
+        mailbox: posted.mailbox,
+        provider: posted.provider,
+        status: 'CANDIDATE',
+        confirmed: false,
+        freshness: 'producer_unverified',
+      }],
+    });
+  } });
+  const receipt = await client.create(input);
+  assert.equal(calls.join(','), 'POST,GET');
+  assert.match(receipt.id, /^mail-candidate-[a-f0-9]{64}$/);
+  assert.equal(receipt.runtimeVersion, 6);
+  assert.equal(receipt.idempotencyKey, `mail-candidate:${posted.providerEventId.slice('mail-source:'.length)}`);
+  let replay;
+  const byEvent = new CwosMailCandidateWriter({ ...binding, fetchImpl: async (url, options) => {
+    if (options.method === 'POST') {
+      replay = JSON.parse(options.body);
+      return Response.json({ code: 'IDEMPOTENCY_CONFLICT' }, { status: 409 });
+    }
+    return Response.json({
+      workspaceId: binding.workspaceId,
+      count: 1,
+      candidates: [{
+        id: `mail-candidate-${'a'.repeat(64)}`,
+        providerEventId: replay.providerEventId,
+        bodyDigest: replay.bodyDigest,
+        subject: replay.subject,
+        sourceLocator: replay.sourceLocator,
+        mailbox: replay.mailbox,
+        provider: replay.provider,
+      }],
+    });
+  } });
+  const found = await byEvent.create(input);
+  assert.equal(found.id, `mail-candidate-${'a'.repeat(64)}`);
+  assert.equal(found.runtimeVersion, input.expectedVersion);
+});
+
+test('a 409 without the candidate, or with different content, stays a conflict', async () => {
+  for (const shape of ['absent', 'different', 'digest-missing']) {
+    let posted;
+    const client = new CwosMailCandidateWriter({ ...binding, fetchImpl: async (url, options) => {
+      if (options.method === 'POST') {
+        posted = JSON.parse(options.body);
+        return Response.json({ code: 'CANDIDATE_CONFLICT' }, { status: 409 });
+      }
+      const occurrence = posted.providerEventId.slice('mail-source:'.length);
+      const candidates = shape === 'absent' ? [] : [{
+        id: `mail-candidate-${occurrence}`,
+        providerEventId: posted.providerEventId,
+        ...(shape === 'digest-missing' ? {} : { bodyDigest: 'e'.repeat(64), subject: 'Changed' }),
+        sourceLocator: posted.sourceLocator,
+        mailbox: posted.mailbox,
+        provider: posted.provider,
+      }];
+      return Response.json({ workspaceId: binding.workspaceId, count: candidates.length, candidates });
+    } });
+    await assert.rejects(client.create(input), { code: 'CWOS_CANDIDATE_CONFLICT' });
   }
 });
 
