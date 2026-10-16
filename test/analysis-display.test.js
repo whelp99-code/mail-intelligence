@@ -1,0 +1,106 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  ANALYSIS_FIELDS,
+  UNLINKED_PROJECT,
+  analysisLine,
+  analysisValues,
+  registeredProjectName,
+  threadKey,
+} from '../src/domain/analysis-display.js';
+
+const waiting = {
+  operational: { lane: 'waiting' },
+  nextActor: 'external_party',
+  priority: 'normal',
+  workState: 'waiting',
+  projectResolution: 'candidate',
+  projectCandidate: { label: '합성 후보' },
+};
+
+test('the analysis table has one slot for each visible value', () => {
+  assert.deepEqual(ANALYSIS_FIELDS.map((field) => field.name), [
+    '처리 상태',
+    '다음 행동',
+    '긴급도',
+    '분류',
+    '연결 프로젝트',
+  ]);
+});
+
+test('waiting classification is 회신 대기 beside the status 대기', () => {
+  const line = analysisLine(waiting);
+  assert.equal(line, `처리 상태 대기 · 다음 행동 고객·외부 차례 · 긴급도 보통 · 분류 회신 대기 · 프로젝트 ${UNLINKED_PROJECT}`);
+  assert.equal(analysisValues(waiting).status, '대기');
+  assert.equal(analysisValues(waiting).kind, '회신 대기');
+  assert.equal(line.includes('프로젝트 후보'), false);
+  const kind = ANALYSIS_FIELDS.find((field) => field.key === 'kind');
+  assert.equal(kind.values.includes('회신 대기'), true);
+  assert.equal(kind.values.includes('대기'), false);
+});
+
+test('a different classification stays beside the status', () => {
+  const line = analysisLine({
+    ...waiting,
+    operational: { lane: 'archive' },
+    workState: 'reference',
+    nextActor: 'none',
+    priority: 'low',
+  });
+  assert.equal(line, `처리 상태 보관 · 다음 행동 다음 행동 없음 · 긴급도 낮음 · 분류 참고 · 프로젝트 ${UNLINKED_PROJECT}`);
+});
+
+test('a registered CRM project name replaces the candidate label', () => {
+  const links = [{ objectType: 'engagement', status: 'linked', name: '합성 프로젝트' }];
+  assert.equal(registeredProjectName(waiting, links), '합성 프로젝트');
+  assert.equal(analysisLine(waiting, links).includes('합성 프로젝트'), true);
+  assert.equal(registeredProjectName({
+    projectResolution: 'confirmed',
+    projectName: '확정 이름',
+  }), '확정 이름');
+  assert.equal(registeredProjectName({
+    projectResolution: 'candidate',
+    projectCandidate: { label: '후보만' },
+  }, [{ objectType: 'engagement', status: 'candidate', name: '후보만' }]), UNLINKED_PROJECT);
+});
+
+test('the same project and conversation share a thread key', () => {
+  const first = threadKey({ conversationId: 'thread-1' }, waiting, [
+    { objectType: 'engagement', status: 'active', name: '합성 프로젝트' },
+  ]);
+  const second = threadKey({ conversationId: 'thread-1', subject: 'Re: 다른 제목' }, waiting, [
+    { objectType: 'engagement', status: 'active', name: '합성 프로젝트' },
+  ]);
+  const other = threadKey({ conversationId: 'thread-2' }, waiting, [
+    { objectType: 'engagement', status: 'active', name: '합성 프로젝트' },
+  ]);
+  assert.equal(first, second);
+  assert.notEqual(first, other);
+  assert.equal(threadKey({ subject: '대화 없음' }, waiting), `${UNLINKED_PROJECT}\nsubject:`);
+});
+
+test('the same sender and subject without a conversation form two groups when the projects differ', () => {
+  const message = { from: 'same@example.test', fromName: '합성 발신', subject: '합성 제목' };
+  const label = 'example.test · 합성 발신 · 합성 제목';
+  const groups = new Map();
+  for (const name of ['프로젝트 A', '프로젝트 B']) {
+    const key = threadKey(message, waiting, [
+      { objectType: 'engagement', status: 'linked', name },
+    ], label);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(message);
+  }
+  assert.equal(groups.size, 2);
+  const again = threadKey(message, waiting, [
+    { objectType: 'engagement', status: 'linked', name: '프로젝트 A' },
+  ], label);
+  assert.equal(again, [...groups.keys()][0]);
+  const unlinked = threadKey(message, waiting, [
+    { objectType: 'engagement', status: 'candidate', name: '후보만' },
+  ], label);
+  assert.equal(unlinked.startsWith(`${UNLINKED_PROJECT}\n`), true);
+  assert.equal([...groups.keys()].includes(unlinked), false);
+  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.match(app, /threadKey\(message, classification, linksForMessage\(message\.id\), groupLabelFor\(message\)\)/);
+});

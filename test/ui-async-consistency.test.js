@@ -131,9 +131,9 @@ for (const channel of ['phone', 'kakao']) {
     const check = () => {
       const card = runInContext('messageCard(message)', context);
       assert.match(card.className, /precision-completed operational-archive/);
-      assert.equal(card.querySelector('.status-pill').textContent, `${DISPLAY_LABELS.archive} · 완료`);
+      assert.equal(card.querySelector('.status-pill').textContent, `처리 상태 ${DISPLAY_LABELS.archive}`);
       runInContext('selectMessage(message.id)', context);
-      assert.ok(detail.innerHTML.includes(`class="status-pill">${DISPLAY_LABELS.archive} · 완료</span>`));
+      assert.ok(detail.innerHTML.includes('class="status-pill">archive:completed'));
       assert.equal(Number.parseInt(context.actionCount.textContent, 10), 0);
       assert.equal(JSON.stringify(message.precision), raw, 'model provenance is not overwritten');
       assert.equal(JSON.stringify(context.message.precision), raw);
