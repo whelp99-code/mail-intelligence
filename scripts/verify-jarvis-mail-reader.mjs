@@ -82,9 +82,6 @@ async function startFixture({ seeded, enabled }) {
   }
   try {
     const providerUrl = await listen(provider);
-    const portProbe = createServer();
-    const base = await listen(portProbe);
-    await closeServer(portProbe);
     const databasePath = join(directory, 'mail-intelligence.sqlite');
     const store = new SQLiteMailStore({ databasePath, migrationsDir: join(root, 'migrations') });
     try {
@@ -111,7 +108,7 @@ async function startFixture({ seeded, enabled }) {
       cwd: root,
       env: {
         PATH: process.env.PATH, HOME: directory,
-        PORT: new URL(base).port, HOST: '127.0.0.1',
+        PORT: '0', HOST: '127.0.0.1',
         MAIL_INTELLIGENCE_DATA_DIR: directory,
         MAIL_INTELLIGENCE_ACCESS_KEY: operatorKey,
         MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN: draftKey,
@@ -129,13 +126,24 @@ async function startFixture({ seeded, enabled }) {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    let base;
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error('Fixture readiness timed out')), 10000);
-      const onExit = () => finish(new Error('Fixture exited before readiness'));
-      const onError = () => finish(new Error('Fixture process failed to start'));
+      const timer = setTimeout(() => finish(new Error(
+        `Fixture readiness timed out (logs=${JSON.stringify(logs.slice(-4000))})`,
+      )), 10000);
+      const onExit = (code, signal) => finish(new Error(
+        `Fixture exited before readiness (code=${code ?? 'null'}, signal=${signal ?? 'null'}, logs=${JSON.stringify(logs.slice(-4000))})`,
+      ));
+      const onError = error => finish(new Error(
+        `Fixture process failed to start (${error instanceof Error ? error.message : String(error)}, logs=${JSON.stringify(logs.slice(-4000))})`,
+      ));
       const onData = chunk => {
         logs += chunk;
-        if (logs.includes(`app running at ${base}`) && logs.includes('ready.')) finish();
+        if (!base) {
+          const match = logs.match(/app running at (http:\/\/127\.0\.0\.1:\d+)/);
+          if (match) base = match[1];
+        }
+        if (base && logs.includes('ready.')) finish();
       };
       const finish = error => {
         clearTimeout(timer);
@@ -150,6 +158,7 @@ async function startFixture({ seeded, enabled }) {
       child.stdout.on('data', onData);
       child.stderr.on('data', chunk => { logs += chunk; });
     });
+    if (!base) throw new Error(`Fixture readiness missing base URL (logs=${JSON.stringify(logs.slice(-4000))})`);
     return { base, directory, databasePath, close,
       providerHits: () => providerHits,
       secretsLeaked: () => [readerKey, operatorKey, draftKey].some(key => logs.includes(key)),

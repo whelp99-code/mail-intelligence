@@ -46,8 +46,8 @@ export function normalizeLoopbackHost(value = '127.0.0.1') {
 
 export function normalizePort(value = 3010) {
   const port = Number.parseInt(String(value), 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    const error = new Error('PORT must be an integer between 1 and 65535.');
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    const error = new Error('PORT must be an integer between 0 and 65535.');
     error.code = 'PORT_INVALID';
     throw error;
   }

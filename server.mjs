@@ -3432,7 +3432,9 @@ process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(port, host, () => {
-  console.log(`Mail Intelligence ${APP_VERSION} app running at ${localBaseUrl}`);
+  const boundPort = server.address().port;
+  const runningUrl = host === '::1' ? `http://[::1]:${boundPort}` : `http://${host}:${boundPort}`;
+  console.log(`Mail Intelligence ${APP_VERSION} app running at ${runningUrl}`);
   console.log(`[storage] SQLite schema v${mailMemoryInitialization.storage.schemaVersion} ready.`);
 });
 

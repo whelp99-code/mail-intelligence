@@ -49,6 +49,6 @@ test('listen host and port fail closed outside the local boundary', () => {
     (error) => error instanceof UnsafeListenHostError && error.code === 'LISTEN_HOST_NOT_LOOPBACK'
   );
   assert.equal(normalizePort('3010'), 3010);
-  assert.throws(() => normalizePort('0'), (error) => error.code === 'PORT_INVALID');
+  assert.equal(normalizePort('0'), 0);
   assert.throws(() => normalizePort('70000'), (error) => error.code === 'PORT_INVALID');
 });
