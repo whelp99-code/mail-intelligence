@@ -1,3 +1,4 @@
+import { analysisLine, registeredProjectName, threadKey, UNLINKED_PROJECT } from './domain/analysis-display.js';
 import { messageIdFromHash, messageMatchesHash } from './message-hash.js';
 import { initializeSendReview } from './send-review.js';
 import { renderReceivedAttachments } from './received-attachments.js';
@@ -424,15 +425,6 @@ function nextActorLabel(value) {
 }
 
 
-function projectResolutionLabel(value) {
-  return {
-    confirmed: '확정 프로젝트',
-    candidate: '프로젝트 후보',
-    unassigned: '미분류',
-    review_required: '프로젝트 충돌 검토'
-  }[value] || value || '미분류';
-}
-
 function signalLabel(value) {
   return {
     deadline: '기한',
@@ -456,30 +448,16 @@ function notionCandidateFor(messageId) {
   return links.find((item) => item.status === 'candidate') || null;
 }
 
-function projectDisplay(classification, messageId) {
-  if (classification?.projectResolution === 'confirmed') return classification.projectName || classification.projectKey || '확정 프로젝트';
-  const notion = messageId ? notionCandidateFor(messageId) : null;
-  if (notion) return `후보 프로젝트 (Notion) · ${notion.name}`;
-  if (!classification) return '미분류';
-  if (classification.projectResolution === 'candidate') {
-    return classification.projectCandidate?.label
-      ? `프로젝트 후보 · ${classification.projectCandidate.label}`
-      : '프로젝트 후보';
-  }
-  if (classification.projectResolution === 'review_required') return '프로젝트 충돌 검토';
-  return '미분류';
+function linksForMessage(messageId) {
+  return workLinksByGraphId[String(messageId)] || [];
 }
 
-function precisionSummaryLine(classification) {
-  if (!classification) return '정밀 분류 전';
-  const parts = [
-    operationalLaneLabel(classification.operational?.lane),
-    nextActorLabel(classification.nextActor),
-    priorityLabel(classification.priority),
-    projectDisplay(classification, classification?.messageId)
-  ];
-  if (classification.dueText) parts.push(`기한 ${classification.dueText}`);
-  return parts.join(' · ');
+function projectDisplay(classification, messageId) {
+  return registeredProjectName(classification, messageId ? linksForMessage(messageId) : []);
+}
+
+function precisionSummaryLine(classification, messageId = classification?.messageId) {
+  return analysisLine(classification, messageId ? linksForMessage(messageId) : []);
 }
 
 function operationalLaneForMessage(messageId) {
@@ -655,11 +633,11 @@ function messageCard(message) {
     <div class="message-next"></div>
   `;
   article.querySelector('.message-subject').textContent = message.subject || '(제목 없음)';
-  article.querySelector('.status-pill').textContent = `${operationalLaneLabel(operationalLane)} · ${precisionStateLabel(lane)}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : ''}`;
+  article.querySelector('.status-pill').textContent = `처리 상태 ${operationalLaneLabel(operationalLane)}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : ''}`;
   article.querySelector('.message-meta').textContent = `${message.isRead ? '읽음' : '읽지않음'} · ${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}${insight?.isSpamCandidate ? ' · 광고성 후보' : ''}${insight?.isOnHold ? ' · 보류' : ''}`;
   article.querySelector('.message-summary').textContent = insight?.summary?.[0] || message.bodyPreview || '';
   article.querySelector('.message-next').textContent = precision
-    ? precisionSummaryLine(precision)
+    ? precisionSummaryLine(precision, message.id)
     : insight?.nextActions?.[0]?.recommendedAction || '정밀 분류 필요';
   if (message.replyGap) {
     const gap = document.createElement('p');
@@ -796,7 +774,7 @@ function precisionCorrectionPanel(message, classification) {
         <div><dt>다음 행동</dt><dd>${escapeHtml(nextActorLabel(classification.nextActor))}</dd></div>
         <div><dt>우선순위</dt><dd>${escapeHtml(priorityLabel(classification.priority))}</dd></div>
         <div><dt>분류 출처</dt><dd>${escapeHtml(classification.provider || classification.source || 'rules')}${classification.model ? ` · ${escapeHtml(classification.model)}` : ''}</dd></div>
-        <div><dt>프로젝트</dt><dd>${escapeHtml(projectDisplay(classification, message.id))}<small>${escapeHtml(classification.projectResolution !== 'confirmed' && notionCandidateFor(message.id) ? 'Notion 후보 · 자동 확정 없음' : projectResolutionLabel(classification.projectResolution))}</small></dd></div>
+        <div><dt>프로젝트</dt><dd>${escapeHtml(projectDisplay(classification, message.id))}<small>${escapeHtml(projectDisplay(classification, message.id) === UNLINKED_PROJECT ? (notionCandidateFor(message.id) ? 'Notion 후보 · 자동 확정 없음' : '등록 없음') : 'CRM 등록')}</small></dd></div>
         <div><dt>기한</dt><dd>${escapeHtml(classification.dueText || '없음')}<small>${classification.dueAt ? escapeHtml(new Date(classification.dueAt).toLocaleString('ko-KR')) : ''}</small></dd></div>
       </dl>
       <div class="signal-row">${(classification.signals || []).map((signal) => `<span>${escapeHtml(signalLabel(signal))}</span>`).join('') || '<span>보조 신호 없음</span>'}</div>
@@ -1095,7 +1073,7 @@ function selectMessage(messageId) {
 
   messageDetail.innerHTML = `
     <div class="detail-head">
-      <span class="status-pill">${escapeHtml(precision ? `${operationalLaneLabel(precision.operational?.lane)} · ${precisionStateLabel(precision.workState)}` : statusLabel(effectiveStatus(insight)))}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : insight?.aiEnhanced ? ' · AI' : ''}</span>
+      <span class="status-pill">${escapeHtml(precision ? precisionSummaryLine(precision, messageId) : statusLabel(effectiveStatus(insight)))}${precision?.reviewStatus === 'corrected' || insight?.userFeedback ? ' · 내 보정' : insight?.aiEnhanced ? ' · AI' : ''}</span>
       ${outlookLink ? `<a href="${escapeHtml(outlookLink)}" target="_blank" rel="noreferrer noopener">Outlook에서 열기</a>` : ''}
     </div>
     <div class="detail-content">
@@ -1305,27 +1283,43 @@ function renderFilteredView() {
   } else {
     const groups = new Map();
     visibleMessages.forEach((message) => {
-      const label = groupLabelFor(message);
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(message);
+      const classification = precisionFor(message.id, message);
+      const key = threadKey(message, classification, linksForMessage(message.id)) || `subject:${groupLabelFor(message)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(message);
     });
-    groups.forEach((items, label) => {
+    groups.forEach((items) => {
       const group = document.createElement('section');
       group.className = 'message-group';
-      const summaryEntries = [
-        ...Object.keys(operationalCounts).map((lane) => ({
-          label: operationalLaneLabel(lane),
-          count: items.filter((item) => operationalLaneForMessage(item.id) === lane).length,
-        })),
-        ...Object.keys(counts).map((lane) => ({
-          label: statusLabel(lane),
-          count: items.filter((item) => laneForMessage(item.id) === lane).length,
-        })),
-      ];
-      group.innerHTML = '<div class="group-head"><strong></strong><span></span></div>';
+      const headMessage = items[0];
+      const headClassification = precisionFor(headMessage.id, headMessage);
+      const project = registeredProjectName(headClassification, linksForMessage(headMessage.id));
+      const subject = normalizedSubject(headMessage.subject) || '(제목 없음)';
+      const label = project === UNLINKED_PROJECT ? groupLabelFor(headMessage) : `${project} · ${subject}`;
+      const summaryEntries = Object.keys(operationalCounts).map((lane) => ({
+        label: operationalLaneLabel(lane),
+        count: items.filter((item) => operationalLaneForMessage(item.id) === lane).length,
+      }));
+      group.innerHTML = '<button type="button" class="group-head" aria-expanded="true"><strong></strong><span></span></button>';
       group.querySelector('strong').textContent = label;
       group.querySelector('span').textContent = compactCountSummary(items.length, summaryEntries);
-      items.forEach((message) => group.appendChild(messageCard(message)));
+      const rest = document.createElement('div');
+      rest.className = 'thread-rest';
+      items.forEach((message, index) => {
+        const card = messageCard(message);
+        if (index === 0) group.appendChild(card);
+        else rest.appendChild(card);
+      });
+      if (rest.childElementCount) {
+        rest.hidden = true;
+        const head = group.querySelector('.group-head');
+        head.setAttribute('aria-expanded', 'false');
+        head.addEventListener('click', () => {
+          rest.hidden = !rest.hidden;
+          head.setAttribute('aria-expanded', String(!rest.hidden));
+        });
+        group.appendChild(rest);
+      }
       messageList.appendChild(group);
     });
     const preferred = visibleMessages.find((message) => message.id === selectedMessageId) || visibleMessages[0];
@@ -1676,7 +1670,7 @@ function renderDatabaseSearchResults(results, query, parsedQuery = null) {
     const metadata = document.createElement('span');
     subject.textContent = message.subject || '(제목 없음)';
     metadata.textContent = classification
-      ? `${precisionStateLabel(classification.workState)} · ${nextActorLabel(classification.nextActor)} · ${priorityLabel(classification.priority)} · ${projectDisplay(classification, classification.messageId)}${classification.dueText ? ` · ${classification.dueText}` : ''}`
+      ? precisionSummaryLine(classification, classification.messageId || message.id)
       : `${message.fromName || message.from || 'unknown'} · ${message.receivedAt ? new Date(message.receivedAt).toLocaleString('ko-KR') : '날짜 없음'}`;
     content.append(subject, metadata);
     if (result.matchedBecause?.length) {
