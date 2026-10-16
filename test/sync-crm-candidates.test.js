@@ -329,6 +329,42 @@ test('unknown native version refuses delivery rather than fabricating CAS state'
   assert.equal(posts.length, 0);
 });
 
+test('unchanged mail is ingested once across repeated sync', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run, posts } = await fixture(t, { workspaceId });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  const first = await run();
+  const second = await run();
+  assert.equal(first.accepted, 1);
+  assert.equal(first.deliveredCandidates.length, 1);
+  assert.equal(second.accepted, 1);
+  assert.equal(second.deliveredCandidates.length, 0);
+  assert.deepEqual(second.failures, []);
+  assert.equal(posts.length, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_work_links').get().n, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages').get().n, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE event_type=\'mail.crm_candidate.delivered\'').get().n, 1);
+});
+
+test('a changed source revision delivers once more and a repeat of that revision does not', async (t) => {
+  const workspaceId = '44444444-4444-4444-8444-444444444444';
+  const { store, binding, run, posts } = await fixture(t, { workspaceId });
+  binding.companyMemory = { workspaceId, provider: 'outlook' };
+  await run();
+  store.db.prepare('UPDATE messages SET change_key=\'v2\' WHERE graph_id=\'mail\'').run();
+  const revised = await run();
+  assert.equal(revised.deliveredCandidates.length, 1);
+  assert.equal(posts.length, 2);
+  const replay = await run();
+  assert.equal(replay.deliveredCandidates.length, 0);
+  assert.deepEqual(replay.failures, []);
+  assert.equal(posts.length, 2);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_work_links').get().n, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE event_type=\'mail.crm_candidate.delivered\'').get().n, 2);
+});
+
 test('ambiguous existing local projects without candidate links do not append CRM candidates', async (t) => {
   const { binding, store, run, posts } = await fixture(t, {
     subject: 'Alpha Project / Beta Project information',
