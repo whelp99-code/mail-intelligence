@@ -129,3 +129,36 @@ remediation. Only actual leaf versions and their local binding moved;
 all direct tool versions, lint configuration, CI policy, product code and
 operational settings remain unchanged. No ulw-plan was produced, so the
 bare-ultrawork gate is this recorded self-review, not an additional reviewer.
+
+## Current-lockfile gate verification - 2026-10-16
+
+The original dependency repair was merged in PR #57. Current main
+`4d70a3d51e1ecc814840352163ff1c50373ea5df` already contains it; the historical
+nine entries above are not current unresolved findings.
+
+With Node 22.23.2 / npm 10.9.8, a new
+`npm ci --ignore-scripts --no-audit --no-fund` installs 208 packages, and
+`npm audit --audit-level=high` exits 0. The accompanying `npm audit --json`
+reports zero vulnerabilities at every severity, including development
+dependencies. No further dependency changes, parser edits, audit omissions
+or threshold reductions are needed.
+
+CI now runs that same blocking audit immediately after `npm ci`, before
+syntax, tests, lint and health checks. Previously a failure in any of those
+unrelated checks could prevent the final audit step from running. The
+`Required verification` job name and its normal failure propagation remain
+unchanged.
+
+The existing CI policy regression rejects an audit after the syntax check
+and rejects `continue-on-error: true`. It failed against the previous order
+before the workflow was changed. The negative registry control also ran the
+exact audit command against pre-repair `cbc1ef78`: exit 1, eight high and one
+moderate package entries. The repaired lockfile exits 0 with the same command.
+
+The final local CI-equivalent run passed: syntax, safety and repository
+hygiene, all 754 tests (zero failures/skips), precision diagnostics, ESLint,
+HTML/CSS validation, and an isolated real server `/api/health` probe.
+No production service was restarted or deployed; no send configuration
+was changed. Language-server diagnostics remain unavailable because this
+environment lacks TypeScript and yaml-language-server; Node syntax, ESLint,
+the CI policy test and actual workflow execution provide the checked evidence.

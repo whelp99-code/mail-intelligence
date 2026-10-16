@@ -186,6 +186,7 @@ test('CI is blocking and CD only creates a manually verified package', async () 
   const combined = `${ci}\n${cd}`;
 
   assert.doesNotMatch(combined, /\|\|\s*true/);
+  assert.doesNotMatch(ci, /continue-on-error:\s*true/);
   for (const command of [
     'npm ci',
     'npm run check',
@@ -198,6 +199,12 @@ test('CI is blocking and CD only creates a manually verified package', async () 
   ]) {
     assert.match(ci, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+
+  const installStep = ci.indexOf('run: npm ci');
+  const auditStep = ci.indexOf('run: npm audit --audit-level=high');
+  const syntaxStep = ci.indexOf('run: npm run check');
+  assert.ok(installStep < auditStep && auditStep < syntaxStep,
+    'the blocking audit must run after the locked install and before unrelated verification');
 
   assert.match(cd, /^\s{2}workflow_dispatch:/m);
   assert.doesNotMatch(cd, /^\s{2}push:/m);
