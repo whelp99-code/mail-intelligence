@@ -192,7 +192,7 @@ test('marking drops the reply gap, cancels the pending draft, and undo restores 
   assert.equal(store.getHandledElsewhere(mailbox.id, message.id), null);
 });
 
-test('phone handling also cancels an unresolved draft and preserves its cancellation record on undo', async (t) => {
+test('undo of handled elsewhere restores the system-cancelled draft and keeps its cancellation event', async (t) => {
   const { store, mailbox, message } = await withStore(t);
   const drafts = new MailSendDrafts(store.db, { now: () => '2026-10-01T02:30:00.000Z' });
   const pending = drafts.create(mailbox.id, 'jarvis', {
@@ -206,7 +206,31 @@ test('phone handling also cancels an unresolved draft and preserves its cancella
   assert.equal(marked.body.handledElsewhere.note, '통화로 일정 확인 완료');
   assert.ok(marked.body.handledElsewhere.markedAt);
   assert.equal(drafts.get(mailbox.id, pending.draft_id).status, 'cancelled');
-  await api(request({ headers: human, body: { messageId: message.id, undo: true } }), url);
-  assert.equal(drafts.get(mailbox.id, pending.draft_id).status, 'cancelled');
+  const undone = await api(request({ headers: human, body: { messageId: message.id, undo: true } }), url);
+  assert.equal(undone.body.restoredDrafts, 1);
+  const restored = drafts.get(mailbox.id, pending.draft_id);
+  assert.equal(restored.status, 'needs_clarification');
+  assert.equal(restored.body_text, '일정은 {확인 필요}입니다.');
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM mail_send_draft_events WHERE draft_id=? AND status=\'cancelled\'').get(pending.draft_id).n, 1);
+});
+
+test('undo restores only handled-elsewhere cancellations when both cancel reasons exist', async (t) => {
+  const { store, mailbox, message } = await withStore(t);
+  const drafts = new MailSendDrafts(store.db, { now: () => '2026-10-01T02:00:00.000Z' });
+  const handledDraft = drafts.create(mailbox.id, 'jarvis', {
+    request_id: 'mix-handled', to: ['lotte@example.com'], subject: 'RE: A', body_text: 'handled body', message_id: message.id,
+  }).draft;
+  const repliedDraft = drafts.create(mailbox.id, 'jarvis', {
+    request_id: 'mix-replied', to: ['lotte@example.com'], subject: 'RE: B', body_text: 'replied body', message_id: message.id,
+  }).draft;
+  drafts.cancel(mailbox.id, repliedDraft.draft_id, 'system:already-replied', '이미 회신함');
+  const api = apiFor(store, mailbox);
+  const marked = await api(request({ headers: human, body: { messageId: message.id, channel: 'phone', note: 'call' } }), url);
+  assert.equal(marked.body.cancelledDrafts, 1);
+  assert.equal(drafts.get(mailbox.id, handledDraft.draft_id).status, 'cancelled');
+  assert.equal(drafts.get(mailbox.id, repliedDraft.draft_id).status, 'cancelled');
+  const undone = await api(request({ headers: human, body: { messageId: message.id, undo: true } }), url);
+  assert.equal(undone.body.restoredDrafts, 1);
+  assert.equal(drafts.get(mailbox.id, handledDraft.draft_id).status, 'needs_approval');
+  assert.equal(drafts.get(mailbox.id, repliedDraft.draft_id).status, 'cancelled');
 });

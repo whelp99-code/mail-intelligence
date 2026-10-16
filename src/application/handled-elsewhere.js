@@ -162,5 +162,35 @@ export function undoHandledElsewhere({ db, mailboxId, messageId, actor, now = ne
     UPDATE message_handled_elsewhere SET undone_at = ? WHERE message_id = ? AND mailbox_id = ? AND undone_at IS NULL
   `).run(now, message.id, mailboxId);
   if (changed.changes !== 1) fail(404, 'MARKER_NOT_FOUND', 'This message is not marked handled elsewhere.');
-  return { handledElsewhere: null, undone: true, message };
+  const restoredDrafts = restoreSystemCancelledDrafts(db, mailboxId, message.id, actor);
+  return { handledElsewhere: null, undone: true, message, restoredDrafts };
+}
+
+function isHandledElsewhereCancellation(db, draftId) {
+  const row = db.prepare(`
+    SELECT actor, reason FROM mail_send_draft_events
+    WHERE draft_id = ? AND status = 'cancelled'
+    ORDER BY id DESC LIMIT 1
+  `).get(draftId);
+  return row?.reason === HANDLED_ELSEWHERE_REASON;
+}
+
+function restoreSystemCancelledDrafts(db, mailboxId, messageId, actor) {
+  if (!tableColumns(db, 'mail_send_drafts').has('draft_id')) return 0;
+  const drafts = new MailSendDrafts(db);
+  const rows = db.prepare(`
+    SELECT draft_id FROM mail_send_drafts
+    WHERE mailbox_id = ? AND message_id = ? AND status = 'cancelled'
+  `).all(mailboxId, messageId);
+  let restored = 0;
+  for (const row of rows) {
+    if (!isHandledElsewhereCancellation(db, row.draft_id)) continue;
+    try {
+      const updated = drafts.restore(mailboxId, row.draft_id, actor);
+      if (updated?.status && updated.status !== 'cancelled') restored += 1;
+    } catch (error) {
+      if (error?.code !== 'DRAFT_NOT_RESTORABLE') throw error;
+    }
+  }
+  return restored;
 }

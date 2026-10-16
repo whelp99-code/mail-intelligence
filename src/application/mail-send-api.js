@@ -29,7 +29,7 @@ export function createMailSendApi({
   if (serviceToken) tokens['grok-bot'] = tokens['grok-bot'] || serviceToken;
   const reconciliation = new Map();
   return async (req, url) => {
-    const match = /^\/api\/mail\/send-drafts(?:\/([0-9a-f-]{36})(?:\/(approve|cancel))?)?$/.exec(url.pathname);
+    const match = /^\/api\/mail\/send-drafts(?:\/([0-9a-f-]{36})(?:\/(approve|cancel|restore))?)?$/.exec(url.pathname);
     if (!match) fail(404, 'MAIL_DRAFT_ROUTE_NOT_FOUND');
     const [, id, action] = match;
     const authorization = String(req.headers.authorization || '');
@@ -123,6 +123,11 @@ export function createMailSendApi({
     if (action === 'cancel') {
       if (Object.keys(body).length) fail(400, 'INVALID_CANCEL_FIELDS');
       return { status: 200, body: { draft: decorate(drafts.cancel(mailbox.id, id, actor)) } };
+    }
+    if (action === 'restore') {
+      if (bot) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+      if (Object.keys(body).length) fail(400, 'INVALID_RESTORE_FIELDS');
+      return { status: 200, body: { draft: decorate(drafts.restore(mailbox.id, id, actor)) } };
     }
     if (!allowSend) fail(403, 'MAIL_SEND_DISABLED');
     if (!accessKeyRequired) fail(403, 'AUTHENTICATED_OPERATOR_REQUIRED');

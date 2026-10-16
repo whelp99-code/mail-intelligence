@@ -184,7 +184,29 @@ export class MailSendDrafts {
       links: JSON.parse(linksJson || '[]'),
       digest_version: Number(row.digest_version || 1),
       attachments: this.publicAttachments(id),
+      system_cancelled: result.status === 'cancelled' && this.isSystemCancelled(id),
     };
+  }
+
+  isSystemCancelled(id) {
+    const row = this.db.prepare(`
+      SELECT actor, reason FROM mail_send_draft_events
+      WHERE draft_id=? AND status='cancelled'
+      ORDER BY id DESC LIMIT 1
+    `).get(id);
+    if (!row) return false;
+    return String(row.actor || '').startsWith('system:')
+      || row.reason === '이미 회신함'
+      || row.reason === '외부에서 회신함';
+  }
+
+  priorReviewStatus(id) {
+    const row = this.db.prepare(`
+      SELECT status FROM mail_send_draft_events
+      WHERE draft_id=? AND status IN ('needs_approval', 'needs_clarification')
+      ORDER BY id DESC LIMIT 1
+    `).get(id);
+    return row?.status || 'needs_approval';
   }
 
   list(mailboxId) {
@@ -381,6 +403,21 @@ export class MailSendDrafts {
       this.db.prepare('UPDATE mail_send_drafts SET status=? WHERE draft_id=?').run('cancelled', id);
       this.event(id, 'cancelled', actor, reason);
       return this.get(mailboxId, id);
+    });
+  }
+
+  restore(mailboxId, id, actor) {
+    if (typeof actor !== 'string' || !actor.startsWith('session:') || actor.length > 160) fail(403, 'HUMAN_APPROVAL_REQUIRED');
+    return this.transaction(() => {
+      const draft = this.get(mailboxId, id);
+      if (draft.status !== 'cancelled' || !draft.system_cancelled) fail(409, 'DRAFT_NOT_RESTORABLE');
+      const body = draft.body_text;
+      const status = this.priorReviewStatus(id);
+      this.db.prepare('UPDATE mail_send_drafts SET status=? WHERE draft_id=? AND status=?').run(status, id, 'cancelled');
+      this.event(id, status, actor, 'restored');
+      const restored = this.get(mailboxId, id);
+      if (restored.body_text !== body) fail(409, 'DRAFT_BODY_CHANGED');
+      return restored;
     });
   }
 

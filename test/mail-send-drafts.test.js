@@ -96,6 +96,22 @@ test('uncertain timeout remains sending and never becomes retryable', (t) => {
   assert.throws(() => service.cancel(1, draft.draft_id, 'session:owner'), { code: 'DRAFT_NOT_CANCELLABLE' });
 });
 
+test('system cancellation restores the edited body and a human cancel stays cancelled', (t) => {
+  const service = fixture(t);
+  const edited = '사람이 고친 본문입니다.';
+  const { draft } = service.create(1, 'ui', { ...input, body_text: edited });
+  service.cancel(1, draft.draft_id, 'system:already-replied', '이미 회신함');
+  assert.equal(service.get(1, draft.draft_id).system_cancelled, true);
+  const restored = service.restore(1, draft.draft_id, 'session:owner');
+  assert.equal(restored.status, 'needs_approval');
+  assert.equal(restored.body_text, edited);
+  assert.equal(restored.system_cancelled, false);
+  const human = service.create(1, 'ui', { ...input, request_id: 'human-cancel', body_text: edited }).draft;
+  service.cancel(1, human.draft_id, 'session:owner');
+  assert.equal(service.get(1, human.draft_id).system_cancelled, false);
+  assert.throws(() => service.restore(1, human.draft_id, 'session:owner'), { code: 'DRAFT_NOT_RESTORABLE' });
+});
+
 test('cancelled and failed drafts cannot be reapproved', (t) => {
   const service = fixture(t);
   const { draft } = service.create(1, 'ui', input);
