@@ -86,6 +86,12 @@ export function safetyBannerCopy(health = {}) {
       body: '초안은 자동 작성, 발송은 대표 승인 후에만. ' + BLOCKED_WRITES + '.',
     };
   }
+  if (safety.mode !== 'read-only' && capabilities.mailSend !== false && capabilities.send !== false) {
+    return {
+      title: version + ' 안전 모드 확인 불가',
+      body: '서버의 안전 모드를 확인하지 못했습니다. 발송 가능 여부는 서버 연결을 확인한 뒤 판단하세요.',
+    };
+  }
   return {
     title: version + ' 읽기 전용 운영 안정화',
     body: '초안은 복사만 가능하며 메일 발송·원본 변경·캘린더·CRM 자동 쓰기는 차단됩니다.',

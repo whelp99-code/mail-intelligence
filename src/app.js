@@ -2166,7 +2166,7 @@ async function refreshSafetyBanner() {
     title.textContent = copy.title;
     body.textContent = copy.body;
   } catch {
-    const copy = safetyBannerCopy({ version: '1.2.2', safety: { mode: 'read-only', capabilities: { mailSend: false } }, capabilities: { send: false } });
+    const copy = safetyBannerCopy();
     title.textContent = copy.title;
     body.textContent = copy.body;
   }

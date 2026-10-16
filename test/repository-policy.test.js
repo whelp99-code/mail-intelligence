@@ -208,6 +208,19 @@ test('CI is blocking and CD only creates a manually verified package', async () 
   assert.match(cd, /No SSH, server restart, deployment, mail mutation, or external publication was performed/);
 });
 
+test('unverified health is distinct from a confirmed safety mode', () => {
+  const readonly = safetyBannerCopy({ safety: { mode: 'read-only' } });
+  const approved = safetyBannerCopy({ safety: { mode: 'human-approved-mail-send' } });
+  const unknown = safetyBannerCopy();
+  for (const health of [null, {}, { safety: {} }, { capabilities: {} }]) {
+    assert.deepEqual(safetyBannerCopy(health), unknown);
+  }
+  for (const confirmed of [readonly, approved]) {
+    assert.notEqual(unknown.title, confirmed.title);
+    assert.notEqual(unknown.body, confirmed.body);
+  }
+});
+
 test('runtime source keeps the read-only boundary and authoritative SQLite contract', async () => {
   const server = await read('server.mjs');
   const app = await read('src/app.js');
