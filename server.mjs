@@ -4,6 +4,8 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { basicAccessGranted } from './src/security/access-user.js';
+import { expectedRequestOrigin } from './src/security/request-origin.js';
+import { openBrowserSessionStore } from './src/security/browser-session-store.js';
 import { resolveStaticFile } from './src/security/static-path.js';
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
 import { mailSendRecipientAllowlistFromEnvironment } from './src/security/mail-send-recipient-policy.js';
@@ -669,42 +671,50 @@ function sessionStoreBinding() {
   return createHash('sha256').update(`mail-intelligence-session-store:${configuredAccessKey}`).digest('hex');
 }
 
+let browserSessions = null;
+
 async function loadPersistedSessions() {
   if (!accessKeyRequired) return;
-  let stored;
-  try {
-    stored = JSON.parse(await readFile(sessionStorePath, 'utf8'));
-  } catch (error) {
-    if (error?.code === 'ENOENT') return;
-    console.warn(`[session] Ignoring unreadable session store: ${error.message}`);
-    return;
-  }
-  if (stored?.binding !== sessionStoreBinding() || !Array.isArray(stored.sessions)) return;
-  for (const item of stored.sessions) {
-    if (typeof item?.tokenHash !== 'string' || typeof item.csrfToken !== 'string' || !Number.isFinite(item.createdAt)) continue;
-    localSessions.set(item.tokenHash, { csrfToken: item.csrfToken, createdAt: item.createdAt });
+  browserSessions = openBrowserSessionStore(databasePath);
+  const imported = await browserSessions.importLegacyJson(sessionStorePath, sessionStoreBinding());
+  if (imported?.warning) console.warn(`[session] Ignoring unreadable legacy session store: ${imported.warning}`);
+  const rows = browserSessions.loadActive(sessionStoreBinding(), Date.now(), SESSION_TTL_MS);
+  for (const row of rows) {
+    localSessions.set(row.token_hash, { csrfToken: row.csrf_token, createdAt: row.created_at });
   }
   pruneLocalSessions();
   trimOldestEntry(localSessions, MAX_LOCAL_SESSIONS + 1);
+  if (localSessions.size !== rows.length) persistLocalSessions();
 }
 
-let sessionStoreWrite = Promise.resolve();
 function persistLocalSessions() {
-  if (!accessKeyRequired) return;
-  const snapshot = {
-    binding: sessionStoreBinding(),
-    sessions: [...localSessions].map(([tokenHash, session]) => ({
-      tokenHash,
-      csrfToken: session.csrfToken,
-      createdAt: session.createdAt
-    }))
-  };
-  sessionStoreWrite = sessionStoreWrite
-    .then(() => atomicWriteJson(sessionStorePath, snapshot))
-    .catch((error) => console.warn(`[session] Failed to persist sessions: ${error.message}`));
+  if (!accessKeyRequired || !browserSessions) return;
+  browserSessions.replaceAll(sessionStoreBinding(), [...localSessions].map(([tokenHash, session]) => ({
+    tokenHash,
+    csrfToken: session.csrfToken,
+    createdAt: session.createdAt,
+  })));
 }
 
-function createLocalSession(res) {
+function sessionCookieSecure(req) {
+  // Tailscale Serve terminates TLS and sets X-Forwarded-Proto. Plain HTTP omits Secure so the browser still stores the cookie.
+  if (req?.socket?.encrypted) return true;
+  return String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase() === 'https';
+}
+
+function sessionCookieHeader(req, token, maxAgeSeconds) {
+  const parts = [
+    `mi_session=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+  ];
+  if (sessionCookieSecure(req)) parts.push('Secure');
+  parts.push(`Max-Age=${maxAgeSeconds}`);
+  return parts.join('; ');
+}
+
+function createLocalSession(req, res) {
   pruneLocalSessions();
   trimOldestEntry(localSessions, MAX_LOCAL_SESSIONS);
   const token = base64Url(randomBytes(32));
@@ -713,13 +723,25 @@ function createLocalSession(res) {
     csrfToken: base64Url(randomBytes(24)),
     createdAt: Date.now()
   };
-  localSessions.set(sessionTokenHash(token), session);
-  persistLocalSessions();
-  res.setHeader(
-    'Set-Cookie',
-    `mi_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
-  );
+  const tokenHash = sessionTokenHash(token);
+  localSessions.set(tokenHash, session);
+  try {
+    persistLocalSessions();
+  } catch (error) {
+    localSessions.delete(tokenHash);
+    throw error;
+  }
+  res.setHeader('Set-Cookie', sessionCookieHeader(req, token, Math.floor(SESSION_TTL_MS / 1000)));
   return session;
+}
+
+function revokeLocalSession(req, res) {
+  requireStateChange(req);
+  const token = parseCookies(req.headers.cookie || '').mi_session || '';
+  if (token) localSessions.delete(sessionTokenHash(token));
+  persistLocalSessions();
+  res.setHeader('Set-Cookie', sessionCookieHeader(req, '', 0));
+  json(res, 200, { revoked: true });
 }
 
 function sessionForRequest(req) {
@@ -766,7 +788,7 @@ function requirePageAccess(req, res) {
     writeBasicChallenge(res);
     return false;
   }
-  createLocalSession(res);
+  createLocalSession(req, res);
   return true;
 }
 
@@ -803,7 +825,7 @@ function issueLocalSession(req, res) {
     if (accessKeyRequired && !validBasicAccess(req)) {
       throw new HttpError(401, 'ACCESS_REQUIRED', 'Mail Intelligence access is required.');
     }
-    session = createLocalSession(res);
+    session = createLocalSession(req, res);
   }
   json(res, 200, {
     csrfToken: session.csrfToken,
@@ -813,11 +835,7 @@ function issueLocalSession(req, res) {
 }
 
 function expectedOrigin(req) {
-  try {
-    return new URL(`http://${req.headers.host || `127.0.0.1:${port}`}`).origin;
-  } catch {
-    return localBaseUrl;
-  }
+  return expectedRequestOrigin(req, { host: req.headers.host || `127.0.0.1:${port}` }) || localBaseUrl;
 }
 
 function assertAllowedHost(req) {
@@ -2188,7 +2206,7 @@ async function classifyLatestWithLlm({ limit = 8, force = false, messageIds = []
 }
 
 async function handleApi(req, res) {
-  const url = new URL(req.url || '/', `http://${req.headers.host || `127.0.0.1:${port}`}`);
+  const url = new URL(req.url || '/', expectedOrigin(req));
   try {
     assertAllowedHost(req);
 
@@ -2252,6 +2270,10 @@ async function handleApi(req, res) {
     }
 
     if (url.pathname === '/api/session') {
+      if (req.method === 'DELETE') {
+        revokeLocalSession(req, res);
+        return;
+      }
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       issueLocalSession(req, res);
       return;
@@ -3088,6 +3110,8 @@ server.on('error', async (error) => {
       const response = await fetchWithTimeout(`${localBaseUrl}/api/health`);
       if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
         console.log(`Mail Intelligence is already running at ${localBaseUrl}`);
+        browserSessions?.close();
+        browserSessions = null;
         mailMemory?.close();
         mailMemory = null;
         process.exit(0);
@@ -3103,7 +3127,6 @@ server.on('error', async (error) => {
 
 await ensurePrivateDirectory(dataRoot);
 await loadPersistedConfig();
-await loadPersistedSessions();
 mailMemory = new PersistentMailMemoryRuntime({
   databasePath,
   migrationsDir: join(appRoot, 'migrations'),
@@ -3119,6 +3142,7 @@ mailMemory = new PersistentMailMemoryRuntime({
   ),
 });
 const mailMemoryInitialization = await mailMemory.initialize();
+await loadPersistedSessions();
 async function readPrivateToken(envValue, fileEnv, label) {
   const filePath = String(process.env[fileEnv] || '');
   let token = String(process.env[envValue] || '');
@@ -3432,7 +3456,9 @@ process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(port, host, () => {
-  console.log(`Mail Intelligence ${APP_VERSION} app running at ${localBaseUrl}`);
+  const boundPort = server.address().port;
+  const runningUrl = host === '::1' ? `http://[::1]:${boundPort}` : `http://${host}:${boundPort}`;
+  console.log(`Mail Intelligence ${APP_VERSION} app running at ${runningUrl}`);
   console.log(`[storage] SQLite schema v${mailMemoryInitialization.storage.schemaVersion} ready.`);
 });
 

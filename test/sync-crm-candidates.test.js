@@ -396,6 +396,7 @@ test('a 409 for an existing same-content candidate is recorded once and the next
       subject: posted.subject, sourceLocator: posted.sourceLocator, mailbox: posted.mailbox,
       provider: posted.provider, createdByPrincipalId: 'writer',
       status: 'CANDIDATE', confirmed: false, freshness: 'producer_unverified',
+      version: 1,
     },
   }));
   binding.candidateWriter = writer;
@@ -438,6 +439,7 @@ test('a 409 for different candidate content stays a dead letter', async (t) => {
       id, providerEventId: posted.providerEventId, bodyDigest: 'e'.repeat(64),
       subject: posted.subject, sourceLocator: posted.sourceLocator, mailbox: posted.mailbox,
       provider: posted.provider, createdByPrincipalId: 'writer',
+      status: 'CANDIDATE', confirmed: false, freshness: 'producer_unverified', version: 1,
     },
   }));
   binding.candidateWriter = writer;
@@ -447,6 +449,26 @@ test('a 409 for different candidate content stays a dead letter', async (t) => {
   assert.equal(result.failures[0].code, 'CWOS_CANDIDATE_CONFLICT');
   assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
 });
+
+for (const field of ['provider', 'mailbox', 'sourceLocator', 'subject', 'status', 'confirmed']) {
+  test(`a 409 missing ${field} is never audited as delivered`, async (t) => {
+    const workspaceId = '44444444-4444-4444-8444-444444444444';
+    const { store, binding, run } = await fixture(t, { workspaceId });
+    const { writer } = conflictWriter((posted, id) => {
+      const candidate = {
+        ...posted, id, createdByPrincipalId: 'writer', status: 'CANDIDATE',
+        confirmed: false, freshness: 'producer_unverified', version: 1,
+      };
+      delete candidate[field];
+      return Response.json({ workspaceId, runtimeVersion: 5, candidate });
+    });
+    binding.candidateWriter = writer;
+    const result = await run();
+    assert.equal(result.deliveredCandidates.length, 0);
+    assert.equal(result.failures[0].code, 'CWOS_CANDIDATE_CONFLICT');
+    assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
+  });
+}
 
 test('ambiguous existing local projects without candidate links do not append CRM candidates', async (t) => {
   const { binding, store, run, posts } = await fixture(t, {

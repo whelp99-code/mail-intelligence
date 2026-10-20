@@ -46,8 +46,8 @@ export function normalizeLoopbackHost(value = '127.0.0.1') {
 
 export function normalizePort(value = 3010) {
   const port = Number.parseInt(String(value), 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    const error = new Error('PORT must be an integer between 1 and 65535.');
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    const error = new Error('PORT must be an integer between 0 and 65535.');
     error.code = 'PORT_INVALID';
     throw error;
   }
@@ -71,10 +71,11 @@ export function getSafetyPolicy(env = process.env) {
   });
 }
 
-export function delegatedScopesForSafety(policy = getSafetyPolicy()) {
+export function delegatedScopesForSafety(policy = getSafetyPolicy(), env = process.env) {
   const scopes = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.Read'];
   if (policy.capabilities.mailSend) scopes.push('Mail.Send');
   if (policy.capabilities.mailReadState) scopes.push('Mail.ReadWrite');
+  if (String(env?.MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED || '') === '1') scopes.push('Calendars.ReadBasic');
   return scopes.join(' ');
 }
 

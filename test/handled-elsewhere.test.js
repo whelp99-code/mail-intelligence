@@ -67,11 +67,12 @@ function apiFor(store, mailbox) {
   });
 }
 
-function request({ method = 'POST', headers = {}, body = {} } = {}) {
+function request({ method = 'POST', headers = {}, body = {}, socket } = {}) {
   return {
     method,
     headers,
     body,
+    socket,
   };
 }
 
@@ -82,6 +83,35 @@ const human = {
   'x-csrf-token': 'fixture-csrf',
   'x-mail-intelligence-request': '1',
 };
+
+test('loopback https origin marks handled elsewhere and other peers stay rejected', async (t) => {
+  const { store, mailbox, message } = await withStore(t);
+  const api = apiFor(store, mailbox);
+  const httpsHeaders = {
+    ...human,
+    host: '127.0.0.1:3010',
+    origin: 'https://127.0.0.1:3010',
+    'x-forwarded-proto': 'https',
+  };
+  const marked = await api(request({
+    headers: httpsHeaders,
+    body: { messageId: message.id, channel: 'kakao', note: '카톡으로 처리' },
+    socket: { remoteAddress: '127.0.0.1' },
+  }), url);
+  assert.equal(marked.status, 200);
+  assert.equal(marked.body.handledElsewhere.channel, 'kakao');
+  await assert.rejects(api(request({
+    headers: { ...httpsHeaders, 'x-real-ip': '127.0.0.1', forwarded: 'proto=https' },
+    body: { messageId: message.id, channel: 'phone' },
+    socket: { remoteAddress: '172.30.0.2' },
+  }), url), { code: 'ORIGIN_REJECTED' });
+  await assert.rejects(api(request({
+    headers: { ...httpsHeaders, origin: 'https://attacker.invalid' },
+    body: { messageId: message.id, channel: 'phone' },
+    socket: { remoteAddress: '127.0.0.1' },
+  }), url), { code: 'ORIGIN_REJECTED' });
+  assert.equal(store.getHandledElsewhere(mailbox.id, message.id).channel, 'kakao');
+});
 
 test('store persists handled_elsewhere and undo clears the active marker', async (t) => {
   const { store, mailbox, message } = await withStore(t);

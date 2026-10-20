@@ -122,6 +122,7 @@ function confirmedCandidate(posted, id, patch = {}) {
       status: 'CANDIDATE',
       confirmed: false,
       freshness: 'producer_unverified',
+      version: 1,
       ...patch,
     },
   };
@@ -136,6 +137,13 @@ test('a 409 is delivered only after the writer id returns the same candidate', a
       return Response.json({ code: 'CONCURRENT_MODIFICATION' }, { status: 409 });
     }
     lookedUp = url.pathname;
+    assert.equal(options.redirect, 'manual');
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.equal(options.headers['x-api-key'], binding.apiKey);
+    assert.equal(options.headers['x-workspace-id'], binding.workspaceId);
+    assert.equal(options.headers['x-principal-id'], binding.principalId);
+    assert.equal(options.headers['x-principal-kind'], 'service');
+    assert.equal(options.headers['x-step-up'], undefined);
     const id = url.pathname.split('/').at(-1);
     return Response.json(confirmedCandidate(posted, id));
   } });
@@ -169,6 +177,69 @@ test('a 409 without the candidate, or with different content, stays a conflict',
     await assert.rejects(client.create(input), { code: 'CWOS_CANDIDATE_CONFLICT' });
   }
 });
+
+test('lookup denials, malformed envelopes, redirects and source changes fail closed', async () => {
+  for (const shape of ['denied', 'network', 'json', 'workspace', 'stale', 'version-type', 'id', 'event', 'redirect', 'foreign-url', 'source']) {
+    let posted;
+    let guards = 0;
+    const client = new CwosMailCandidateWriter({ ...binding, fetchImpl: async (url, options) => {
+      if (options.method === 'POST') {
+        posted = JSON.parse(options.body);
+        return new Response('', { status: 409 });
+      }
+      if (shape === 'denied') return new Response('', { status: 403 });
+      if (shape === 'network') throw new Error('fixture transport');
+      if (shape === 'json') return new Response('{', { status: 200 });
+      if (shape === 'redirect') return new Response('', { status: 302 });
+      const body = confirmedCandidate(posted, url.pathname.split('/').at(-1));
+      if (shape === 'workspace') body.workspaceId = 'foreign';
+      if (shape === 'stale') body.runtimeVersion = 3;
+      if (shape === 'version-type') body.runtimeVersion = '6';
+      if (shape === 'id') body.candidate.id = `mail-candidate-${'0'.repeat(64)}`;
+      if (shape === 'event') body.candidate.providerEventId = 'other-event';
+      const response = Response.json(body);
+      if (shape === 'foreign-url') Object.defineProperty(response, 'url', { value: 'https://foreign.invalid/' });
+      return response;
+    } });
+    const code = ['redirect', 'foreign-url'].includes(shape) ? 'CWOS_CREDENTIAL_REDIRECT'
+      : shape === 'source' ? 'INTAKE_SOURCE_CHANGED' : 'CWOS_CANDIDATE_CONFLICT';
+    await assert.rejects(client.create({ ...input, assertCurrent() {
+      guards += 1;
+      if (guards === 2) throw Object.assign(new Error('changed'), { code: 'INTAKE_SOURCE_CHANGED' });
+    } }), { code });
+    assert.equal(guards, shape === 'source' ? 2 : 1);
+  }
+});
+
+for (const [field, mismatch, wrongType] of [
+  ['provider', 'GMAIL', 1],
+  ['mailbox', 'other@example.invalid', []],
+  ['sourceLocator', 'other-mail', {}],
+  ['subject', 'other subject', false],
+  ['status', 'APPROVED', 1],
+  ['confirmed', true, 'false'],
+  ['freshness', 'verified', false],
+  ['version', 2, '1'],
+]) {
+  for (const [shape, value] of [['missing', undefined], ['null', null], ['mismatch', mismatch], ['type', wrongType]]) {
+    test(`409 lookup rejects ${shape} ${field}`, async () => {
+      let posted;
+      const methods = [];
+      let guards = 0;
+      const client = new CwosMailCandidateWriter({ ...binding, fetchImpl: async (url, options) => {
+        methods.push(options.method);
+        if (options.method === 'POST') {
+          posted = JSON.parse(options.body);
+          return new Response('', { status: 409 });
+        }
+        return Response.json(confirmedCandidate(posted, url.pathname.split('/').at(-1), { [field]: value }));
+      } });
+      await assert.rejects(client.create({ ...input, assertCurrent() { guards += 1; } }), { code: 'CWOS_CANDIDATE_CONFLICT' });
+      assert.deepEqual(methods, ['POST', 'GET']);
+      assert.equal(guards, 1);
+    });
+  }
+}
 
 test('writer loader is opt-in, private-file-only and distinct from reader authority', async () => {
   assert.equal(await loadCwosMailCandidateWriter({}), null);

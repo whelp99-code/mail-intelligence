@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 
 let port;
@@ -161,10 +163,22 @@ test('올바른 접근키로만 HttpOnly SameSite 세션을 발급한다', async
   assert.match(cookie, /Max-Age=2592000/);
 });
 
-test('접근키 세션은 재시작 후에도 유지되고 접근키를 바꾸면 무효화된다', async () => {
+function sessionRows() {
+  const db = new DatabaseSync(join(dataDir, 'mail-intelligence.sqlite'), { readOnly: true });
+  try {
+    return db.prepare('SELECT token_hash, csrf_token, created_at, access_key_binding FROM browser_sessions').all();
+  } finally {
+    db.close();
+  }
+}
+
+test('접근키 세션은 SQLite에 해시만 저장되고 재시작 후에도 유지되며 접근키를 바꾸면 무효화된다', async () => {
   const cookie = await authenticatedCookie();
-  const stored = await readFile(join(dataDir, '.mail-intelligence-sessions.json'), 'utf8');
-  assert.equal(stored.includes(decodeURIComponent(cookie.slice('mi_session='.length))), false);
+  const token = decodeURIComponent(cookie.slice('mi_session='.length));
+  await assert.rejects(access(join(dataDir, '.mail-intelligence-sessions.json')), { code: 'ENOENT' });
+  const stored = JSON.stringify(sessionRows());
+  assert.equal(stored.includes(token), false);
+  assert.match(stored, /token_hash/);
 
   await stopServer();
   await startServer();
@@ -178,6 +192,157 @@ test('접근키 세션은 재시작 후에도 유지되고 접근키를 바꾸�
 
   await stopServer();
   await startServer();
+});
+
+test('HTTPS 프록시 요청의 세션 쿠키만 Secure를 가진다', async () => {
+  const plain = await fetch(`${baseUrl}/`, { headers: { Authorization: basicAuthorization() } });
+  assert.doesNotMatch(plain.headers.get('set-cookie') || '', /Secure/i);
+
+  const secure = await fetch(`${baseUrl}/`, {
+    headers: { Authorization: basicAuthorization(), 'X-Forwarded-Proto': 'https' },
+  });
+  const cookie = secure.headers.get('set-cookie') || '';
+  assert.match(cookie, /Secure/i);
+  assert.match(cookie, /HttpOnly/i);
+  assert.match(cookie, /SameSite=Strict/i);
+  assert.match(cookie, /Max-Age=2592000/);
+});
+
+test('루프백 HTTPS 프록시의 https Origin만 변경을 통과한다', async () => {
+  const cookie = await authenticatedCookie();
+  const host = new URL(baseUrl).host;
+  const common = {
+    Cookie: cookie,
+    'X-Mail-Intelligence-Request': '1',
+    'Content-Type': 'application/json',
+  };
+  const allowed = await fetch(`${baseUrl}/api/outlook/config`, {
+    method: 'POST',
+    headers: { ...common, Origin: `https://${host}`, 'X-Forwarded-Proto': 'https' },
+    body: '{}',
+  });
+  const allowedBody = await allowed.json();
+  assert.notEqual(allowedBody.code, 'ORIGIN_REJECTED');
+
+  const missingProto = await fetch(`${baseUrl}/api/outlook/config`, {
+    method: 'POST',
+    headers: { ...common, Origin: `https://${host}` },
+    body: '{}',
+  });
+  const missingBody = await missingProto.json();
+  assert.equal(missingProto.status, 403);
+  assert.equal(missingBody.code, 'ORIGIN_REJECTED');
+
+  const otherHost = await fetch(`${baseUrl}/api/outlook/config`, {
+    method: 'POST',
+    headers: { ...common, Origin: 'https://attacker.invalid', 'X-Forwarded-Proto': 'https' },
+    body: '{}',
+  });
+  const otherBody = await otherHost.json();
+  assert.equal(otherHost.status, 403);
+  assert.equal(otherBody.code, 'ORIGIN_REJECTED');
+
+  const session = await json(await fetch(`${baseUrl}/api/session`, { headers: { Cookie: cookie } }));
+  const mutation = {
+    ...common,
+    Origin: `https://${host}`,
+    'X-Forwarded-Proto': 'https',
+    'X-CSRF-Token': session.csrfToken,
+  };
+  const handled = await fetch(`${baseUrl}/api/messages/handled-elsewhere`, {
+    method: 'POST',
+    headers: mutation,
+    body: JSON.stringify({ messageId: 'missing-message', channel: 'phone' }),
+  });
+  const handledBody = await json(handled);
+  assert.notEqual(handledBody.code, 'ORIGIN_REJECTED');
+
+  const created = await fetch(`${baseUrl}/api/mail/send-drafts`, {
+    method: 'POST',
+    headers: mutation,
+    body: JSON.stringify({
+      request_id: 'https-origin-draft',
+      to: ['self@example.invalid'],
+      subject: 'HTTPS origin fixture',
+      body_text: 'Synthetic draft. This test must not send it.',
+    }),
+  });
+  const createdBody = await json(created);
+  assert.equal(created.status, 201);
+  const approved = await fetch(`${baseUrl}/api/mail/send-drafts/${createdBody.draft.draft_id}/approve`, {
+    method: 'POST',
+    headers: mutation,
+    body: JSON.stringify({ confirm: true, payload_digest: createdBody.draft.payload_digest }),
+  });
+  const approvedBody = await json(approved);
+  assert.notEqual(approvedBody.code, 'ORIGIN_REJECTED');
+  assert.notEqual(approvedBody.draft?.status, 'sent');
+
+  const foreignHandled = await fetch(`${baseUrl}/api/messages/handled-elsewhere`, {
+    method: 'POST',
+    headers: { ...mutation, Origin: 'https://attacker.invalid' },
+    body: JSON.stringify({ messageId: 'missing-message', channel: 'phone' }),
+  });
+  assert.equal((await json(foreignHandled)).code, 'ORIGIN_REJECTED');
+  const foreignDraft = await fetch(`${baseUrl}/api/mail/send-drafts/${createdBody.draft.draft_id}/approve`, {
+    method: 'POST',
+    headers: { ...mutation, Origin: 'https://attacker.invalid' },
+    body: JSON.stringify({ confirm: true, payload_digest: createdBody.draft.payload_digest }),
+  });
+  assert.equal((await json(foreignDraft)).code, 'ORIGIN_REJECTED');
+});
+
+test('로그아웃하면 그 세션은 바로 무효가 된다', async () => {
+  const cookie = await authenticatedCookie();
+  const response = await fetch(`${baseUrl}/api/session`, {
+    method: 'DELETE',
+    headers: {
+      Cookie: cookie,
+      Origin: baseUrl,
+      'X-Mail-Intelligence-Request': '1',
+    },
+  });
+  assert.equal(response.status, 200);
+  const cleared = response.headers.get('set-cookie') || '';
+  assert.match(cleared, /Max-Age=0/);
+  assert.match(cleared, /HttpOnly/i);
+  assert.match(cleared, /SameSite=Strict/i);
+  const again = await fetch(`${baseUrl}/api/outlook/config`, { headers: { Cookie: cookie } });
+  assert.equal(again.status, 401);
+});
+
+test('30일이 지난 세션은 재시작 후 거절한다', async () => {
+  const cookie = await authenticatedCookie();
+  const token = decodeURIComponent(cookie.slice('mi_session='.length));
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  await stopServer();
+  const db = new DatabaseSync(join(dataDir, 'mail-intelligence.sqlite'));
+  try {
+    const updated = db.prepare('UPDATE browser_sessions SET created_at = ? WHERE token_hash = ?')
+      .run(Date.now() - (31 * 24 * 60 * 60 * 1000), tokenHash);
+    assert.equal(updated.changes, 1);
+  } finally {
+    db.close();
+  }
+  await startServer();
+  const expired = await fetch(`${baseUrl}/api/outlook/config`, { headers: { Cookie: cookie } });
+  assert.equal(expired.status, 401);
+});
+
+test('기존 JSON 세션은 SQLite로 옮긴 뒤 파일을 지운다', async () => {
+  const token = 'legacy-session-token-0123456789abcdef';
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const binding = createHash('sha256').update(`mail-intelligence-session-store:${accessKey}`).digest('hex');
+  await writeFile(join(dataDir, '.mail-intelligence-sessions.json'), `${JSON.stringify({
+    binding,
+    sessions: [{ tokenHash, csrfToken: 'legacy-csrf-token', createdAt: Date.now() }],
+  })}\n`, { mode: 0o600 });
+  await stopServer();
+  await startServer();
+  const restored = await fetch(`${baseUrl}/api/outlook/config`, { headers: { Cookie: `mi_session=${token}` } });
+  assert.equal(restored.status, 200);
+  await assert.rejects(access(join(dataDir, '.mail-intelligence-sessions.json')), { code: 'ENOENT' });
+  assert.equal(sessionRows().some((row) => row.token_hash === tokenHash), true);
 });
 
 test('세션과 mutation header가 있어도 외부 행동 Kill Switch가 우선 차단한다', async () => {

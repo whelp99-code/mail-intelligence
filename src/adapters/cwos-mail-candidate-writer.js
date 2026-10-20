@@ -61,7 +61,7 @@ export async function loadCwosMailCandidateWriter(env = {}, {
   });
 }
 
-/** Separate, opt-in create-only key: never uses the generic CRM command port. */
+/** Separate, opt-in candidate key: create and verify one own record, never generic commands. */
 export class CwosMailCandidateWriter {
   constructor({ baseUrl, apiKey, workspaceId, principalId, mailbox, fetchImpl = globalThis.fetch }) {
     let url;
@@ -160,11 +160,10 @@ export class CwosMailCandidateWriter {
       || item.bodyDigest !== payload.bodyDigest || item.createdByPrincipalId !== this.principalId) return null;
     if (item.workspaceId != null && item.workspaceId !== payload.workspaceId) return null;
     for (const key of ['provider', 'mailbox', 'sourceLocator', 'subject']) {
-      if (item[key] != null && item[key] !== payload[key]) return null;
+      if (item[key] !== payload[key]) return null;
     }
-    if (item.status != null && item.status !== 'CANDIDATE') return null;
-    if (item.confirmed != null && item.confirmed !== false) return null;
-    if (item.freshness != null && item.freshness !== 'producer_unverified') return null;
+    if (item.status !== 'CANDIDATE' || item.confirmed !== false
+      || item.freshness !== 'producer_unverified' || item.version !== 1) return null;
     return { id, runtimeVersion: body.runtimeVersion, idempotencyKey: `mail-candidate:${occurrence}` };
   }
 }
