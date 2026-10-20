@@ -71,10 +71,11 @@ export function getSafetyPolicy(env = process.env) {
   });
 }
 
-export function delegatedScopesForSafety(policy = getSafetyPolicy()) {
+export function delegatedScopesForSafety(policy = getSafetyPolicy(), env = process.env) {
   const scopes = ['openid', 'profile', 'offline_access', 'User.Read', 'Mail.Read'];
   if (policy.capabilities.mailSend) scopes.push('Mail.Send');
   if (policy.capabilities.mailReadState) scopes.push('Mail.ReadWrite');
+  if (String(env?.MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED || '') === '1') scopes.push('Calendars.ReadBasic');
   return scopes.join(' ');
 }
 
