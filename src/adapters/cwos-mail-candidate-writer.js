@@ -11,6 +11,23 @@ function bounded(value, max) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableJson(value[key])]));
+  }
+  return value;
+}
+
+function crmCandidateId(payload) {
+  return `mail-candidate-${createHash('sha256').update(JSON.stringify(stableJson({
+    mailbox: payload.mailbox,
+    provider: payload.provider,
+    providerEventId: payload.providerEventId,
+    workspaceId: payload.workspaceId,
+  }))).digest('hex')}`;
+}
+
 export async function loadCwosMailCandidateWriter(env = {}, {
   fetchImpl = globalThis.fetch, statImpl = lstat, readFileImpl = readFile, realpathImpl = realpath,
 } = {}) {
@@ -44,7 +61,7 @@ export async function loadCwosMailCandidateWriter(env = {}, {
   });
 }
 
-/** Separate, opt-in create-only key: never uses the generic CRM command port. */
+/** Separate, opt-in candidate key: create and verify one own record, never generic commands. */
 export class CwosMailCandidateWriter {
   constructor({ baseUrl, apiKey, workspaceId, principalId, mailbox, fetchImpl = globalThis.fetch }) {
     let url;
@@ -95,8 +112,13 @@ export class CwosMailCandidateWriter {
     } catch { fail('CWOS_CANDIDATE_UNAVAILABLE'); }
     if (response.status >= 300 && response.status < 400) fail('CWOS_CREDENTIAL_REDIRECT');
     if (response.url && new URL(response.url).origin !== this.origin) fail('CWOS_CREDENTIAL_REDIRECT');
-    if (response.status !== 201) fail(response.status === 409
-      ? 'CWOS_CANDIDATE_CONFLICT' : 'CWOS_CANDIDATE_DENIED');
+    if (response.status === 409) {
+      const confirmed = await this.lookupConfirmedCandidate(payload, expectedVersion);
+      if (!confirmed) fail('CWOS_CANDIDATE_CONFLICT');
+      assertCurrent();
+      return confirmed;
+    }
+    if (response.status !== 201) fail('CWOS_CANDIDATE_DENIED');
     let result;
     try { result = await response.json(); } catch { fail('CWOS_CANDIDATE_RESPONSE_INVALID'); }
     const item = result?.candidate;
@@ -109,5 +131,39 @@ export class CwosMailCandidateWriter {
         .some(key => item[key] !== payload[key])) fail('CWOS_CANDIDATE_RECEIPT_MISMATCH');
     assertCurrent();
     return { id: item.id, runtimeVersion: result.runtimeVersion, idempotencyKey };
+  }
+
+  async lookupConfirmedCandidate(payload, expectedVersion) {
+    const occurrence = String(payload.providerEventId || '').slice('mail-source:'.length);
+    if (!/^[a-f0-9]{64}$/.test(occurrence)) return null;
+    const id = crmCandidateId(payload);
+    let response;
+    try {
+      response = await this.fetchImpl(new URL(`/api/cwos/v2/mail-candidates/${id}`, this.origin), {
+        method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10000),
+        headers: {
+          accept: 'application/json',
+          'x-api-key': this.apiKey, 'x-workspace-id': this.workspaceId,
+          'x-principal-id': this.principalId, 'x-principal-kind': 'service',
+        },
+      });
+    } catch { return null; }
+    if (response.status >= 300 && response.status < 400) fail('CWOS_CREDENTIAL_REDIRECT');
+    if (response.url && new URL(response.url).origin !== this.origin) fail('CWOS_CREDENTIAL_REDIRECT');
+    if (response.status !== 200) return null;
+    let body;
+    try { body = await response.json(); } catch { return null; }
+    const item = body?.candidate;
+    if (body?.workspaceId !== this.workspaceId || !item || Array.isArray(body?.candidates)) return null;
+    if (!Number.isSafeInteger(body.runtimeVersion) || body.runtimeVersion < expectedVersion) return null;
+    if (item.id !== id || item.providerEventId !== payload.providerEventId
+      || item.bodyDigest !== payload.bodyDigest || item.createdByPrincipalId !== this.principalId) return null;
+    if (item.workspaceId != null && item.workspaceId !== payload.workspaceId) return null;
+    for (const key of ['provider', 'mailbox', 'sourceLocator', 'subject']) {
+      if (item[key] !== payload[key]) return null;
+    }
+    if (item.status !== 'CANDIDATE' || item.confirmed !== false
+      || item.freshness !== 'producer_unverified' || item.version !== 1) return null;
+    return { id, runtimeVersion: body.runtimeVersion, idempotencyKey: `mail-candidate:${occurrence}` };
   }
 }

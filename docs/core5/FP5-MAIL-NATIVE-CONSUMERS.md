@@ -60,8 +60,11 @@ admission. A changed producer pin refuses before owned fixture creation.
 
 `MAIL_INTELLIGENCE_CWOS_CANDIDATES_ENABLED=1` explicitly enables the separate
 candidate writer. Its `MAIL_INTELLIGENCE_CWOS_CANDIDATE_WRITER_BASE_URL`,
-`_KEY_FILE` and `_PRINCIPAL_ID` come from the existing create-only CRM service
-profile, never the reader key. The existing verified intake workspace and
+`_KEY_FILE` and `_PRINCIPAL_ID` come from the existing candidate-only CRM service
+profile (`mailCandidateCreateOnly`), never the reader key. Despite its name,
+CRM PR68 permits that same profile to GET one own candidate by deterministic ID
+for conflict verification; no separate query credential or broader read grant
+is required. The existing verified intake workspace and
 expected mailbox email bind it; disabled/default mode performs no candidate
 POST. No operational profile, key or service is created by this implementation.
 
@@ -80,8 +83,27 @@ letters and stop further delivery in that batch; committed mail remains local.
 replay; it does not falsely claim a net increase in CRM records. No bodies,
 addresses or keys are printed.
 
-No generic command, GET, PATCH, DELETE, confirmation or other writer route is
-exposed. No schema migration is included. Adoption/rollback enables/disables
+On POST 409 only, the writer uses GET
+`/api/cwos/v2/mail-candidates/mail-candidate-<sha256>` with the same service key
+and workspace/principal headers, manual redirects and a 10-second timeout.
+CRM restricts lookup to the authenticated workspace and creating principal;
+list/count/state/account reads remain unavailable to this profile. Mail requires
+the matching workspace envelope, non-stale integer runtime version, deterministic
+ID, event ID, body digest, creator, provider, mailbox, source locator and subject,
+plus `status=CANDIDATE`, `confirmed=false`, `freshness=producer_unverified` and
+`version=1`. The by-ID DTO omits row workspace; any explicit row workspace must
+still match. Missing or malformed required fields, denied/absent records and
+content mismatches remain visible conflicts, never accepted deliveries. Source
+and grant guards run again before accepting a verified replay.
+
+This contract is pinned to CRM merge
+`a9122f11fe43b15587a244fb7105bce8ee6e8481` (PR68), specifically
+`apps/api/src/app.ts`'s profile allowlist and
+`apps/api/src/customer-work-os-v2-routes.ts`'s writer by-ID route/DTO.
+Source inspection is not evidence of production deployment or live authority.
+
+No generic command, list GET, PATCH, DELETE, confirmation or other writer route
+is exposed. No schema migration is included. Adoption/rollback enables/disables
 only this explicit binding and does not remove append-only CRM audit records.
 
 `CwosMailCommandClient` uses the maintained state/command HTTP routes and
