@@ -1,6 +1,37 @@
 import assert from 'node:assert/strict';
+import { isAbsolute, resolve } from 'node:path';
 
 export const releaseDropInName = 'zz-mail-intelligence-release.conf';
+const productionDataDir = '/home/jm/orca/projects/mail-intelligence/data';
+
+/** Exact ordered contract; synthetic deployments never resolve operational paths. */
+export function releaseEnvironmentFilePaths(dataDir) {
+  assert(typeof dataDir === 'string' && isAbsolute(dataDir) && resolve(dataDir) === dataDir,
+    'Canonical absolute data directory is required');
+  return dataDir === productionDataDir
+    ? [`${dataDir}/runtime.env`, '/home/jm/.config/mail-intelligence/mail-send.env',
+      '/home/jm/.local/state/mail-intelligence/rollback-20261009/hold.env']
+    : [`${dataDir}/runtime.env`, `${dataDir}/mail-send.env`, `${dataDir}/hold.env`];
+}
+
+export function assertEnvironmentFileInputs(environmentFiles, dataDir) {
+  const paths = releaseEnvironmentFilePaths(dataDir);
+  assert(Array.isArray(environmentFiles) && environmentFiles.length === paths.length
+    && environmentFiles.every((file, index) => file?.path === paths[index] && typeof file.text === 'string'),
+  'EnvironmentFile inputs must match the exact ordered contract');
+}
+
+export function applyEnvironmentFiles(environment, environmentFiles, dataDir) {
+  assertEnvironmentFileInputs(environmentFiles, dataDir);
+  for (const file of environmentFiles) {
+    for (const record of environmentFileRecords(file.text)) {
+      assert(!record.donor, 'EnvironmentFile donor assignment must be absent');
+      if (record.key) environment[record.key] = record.value;
+    }
+  }
+  return environment;
+}
+
 export const donorNames = [
   'COMPANY_MEMORY_SB_COMPANY',
   'COMPANY_MEMORY_SB_COMPANY_CONFIG',
@@ -36,10 +67,10 @@ export function environmentFileRecords(text) {
       records.push({ raw: text.slice(start, position) });
       continue;
     }
-    const name = line.slice(0, equal).trim();
+    const name = line.slice(0, equal).replace(/^[ \t\r]+|[ \t\r]+$/g, '');
     // export and quoted names are not native systemd names. Strip donor aliases
     // defensively, rather than silently accepting shell syntax as an assignment.
-    const alias = name.replace(/^export[ \t]+/, '').replace(/["']/g, '').trim();
+    const alias = name.replace(/^export[ \t]+/, '').replace(/["']/g, '').replace(/^[ \t\r]+|[ \t\r]+$/g, '');
     const key = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : undefined;
     const donor = alias.startsWith('COMPANY_MEMORY_');
     position = start + equal + 1;
@@ -141,13 +172,14 @@ export function managerDonorNames(text) {
 
 export function assertReleaseEnvironment(environment, { dataDir, commit }) {
   assert(Object.keys(environment).every(key => !key.startsWith('COMPANY_MEMORY_')), 'Donor environment must be absent');
+  assert(environment.MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED !== '1', 'Calendar reader must remain disabled');
   for (const [key, value] of Object.entries(releaseEnvironment(dataDir, commit))) {
     assert(environment[key] === value, `Release environment mismatch: ${key}`);
   }
 }
 
 /** Read all repeated EnvironmentFiles fields; a base unit is not the effective unit. */
-export function assertEffectiveRelease({ properties, runtimeText, managerEnvironment = '', codeRoot, dataDir, commit, ownedDropInPath }) {
+export function assertEffectiveRelease({ properties, environmentFiles, managerEnvironment = '', codeRoot, dataDir, commit, ownedDropInPath }) {
   const merged = mergedProperties(properties);
   const one = name => {
     assert(merged.get(name)?.length === 1, `Missing/ambiguous effective ${name}`);
@@ -159,8 +191,18 @@ export function assertEffectiveRelease({ properties, runtimeText, managerEnviron
   assert(command && command[1] === '/usr/bin/node' && command[2] === `/usr/bin/node ${codeRoot}/server.mjs`,
     'Effective ExecStart mismatch');
   const files = merged.get('EnvironmentFiles');
-  assert(files?.length === 1 && files[0] === `${dataDir}/runtime.env (ignore_errors=no)`,
-    'Effective EnvironmentFile chain mismatch');
+  const tuples = [];
+  for (const field of files || []) {
+    const words = propertyWords(field);
+    assert(words.length > 0 && words.length % 2 === 0, 'Effective EnvironmentFile chain mismatch');
+    for (let index = 0; index < words.length; index += 2) {
+      tuples.push({ path: words[index], flags: words[index + 1] });
+    }
+  }
+  const paths = releaseEnvironmentFilePaths(dataDir);
+  assert(tuples.length === paths.length && tuples.every((tuple, index) =>
+    tuple.path === paths[index] && tuple.flags === '(ignore_errors=no)'),
+  'Effective EnvironmentFile chain mismatch');
   assert(propertyWords(one('DropInPaths')).includes(ownedDropInPath), 'Owned release drop-in is not loaded');
   const environment = Object.fromEntries(managerEnvironment.split('\n').filter(line => line.includes('='))
     .map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
@@ -169,10 +211,7 @@ export function assertEffectiveRelease({ properties, runtimeText, managerEnviron
     assert(equal > 0 && !assignment.startsWith('COMPANY_MEMORY_'), 'Effective Environment donor/conflict');
     environment[assignment.slice(0, equal)] = assignment.slice(equal + 1);
   }
-  for (const record of environmentFileRecords(runtimeText)) {
-    assert(!record.donor, 'Runtime donor assignment must be absent');
-    if (record.key) environment[record.key] = record.value;
-  }
+  applyEnvironmentFiles(environment, environmentFiles, dataDir);
   const unset = propertyWords(one('UnsetEnvironment'));
   for (const name of [...donorNames, ...managerDonorNames(managerEnvironment)]) {
     assert(unset.includes(name), 'Inherited donor is not explicitly neutralised');
