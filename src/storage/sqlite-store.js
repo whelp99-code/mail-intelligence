@@ -18,6 +18,7 @@ import {
 } from '../application/handled-elsewhere.js';
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
+import { PROJECT_REVIEW_REASONS } from '../domain/precision-classifier.js';
 import { planProjectRegistration, planProjectBatch, normalizeProjectKey, normalizeProjectName } from '../domain/project-registration.js';
 import {
   WORKLINK_PROJECTION_PROVIDER,
@@ -1459,6 +1460,58 @@ export class SQLiteMailStore {
       ORDER BY pc.updated_at DESC
     `).all(mailboxId);
     return Object.fromEntries(rows.map((row) => [row.graph_id, precisionRow(row)]));
+  }
+
+  updatePrecisionProjectResolution(mailboxId, graphId, project) {
+    const message = this.getMessageRecord(mailboxId, graphId);
+    if (!message) throw new Error(`Cannot update project resolution for unknown message: ${graphId}.`);
+    if (!PRECISION_PROJECT_RESOLUTIONS.has(project.projectResolution)) throw new Error('Invalid project resolution.');
+    if (!['auto', 'review_required', 'confirmed', 'corrected'].includes(project.reviewStatus)) throw new Error('Invalid review status.');
+    return this.transaction(() => {
+      const before = this.db.prepare(`
+        SELECT primary_project_id, project_resolution, project_candidate_json, review_status,
+          evidence_json, confidence_json, review_reasons_json
+        FROM precision_classifications WHERE mailbox_id = ? AND message_id = ?
+      `).get(mailboxId, message.id);
+      // Project maintenance must not initialize or rerun work/AI classification.
+      if (!before) return false;
+      const after = { primary_project_id: project.primaryProjectId ?? null,
+        project_resolution: project.projectResolution, project_candidate_json: jsonText(project.projectCandidate, {}),
+        review_status: project.reviewStatus, evidence_json: before.evidence_json,
+        confidence_json: before.confidence_json, review_reasons_json: before.review_reasons_json };
+      const mergeProject = (raw, value) => {
+        const parsed = parseJson(raw, {});
+        return jsonText(parsed.project, null) === jsonText(value, null) ? raw
+          : this.db.prepare('SELECT json_set(?, \'$.project\', json(?)) AS value').get(raw, jsonText(value, null)).value;
+      };
+      if (Object.hasOwn(project, 'projectEvidence')) after.evidence_json = mergeProject(before.evidence_json, project.projectEvidence);
+      if (Object.hasOwn(project, 'projectConfidence')) after.confidence_json = mergeProject(before.confidence_json, project.projectConfidence);
+      if (Object.hasOwn(project, 'projectReviewReasons')) {
+        if (!project.projectReviewReasons.every((reason) => PROJECT_REVIEW_REASONS.includes(reason))) throw new Error('Invalid project review reason.');
+        const previousReasons = parseJson(before.review_reasons_json, []);
+        const current = previousReasons.filter((reason) => PROJECT_REVIEW_REASONS.includes(reason)).sort();
+        const next = [...new Set(project.projectReviewReasons)];
+        if (jsonText(current, []) !== jsonText([...next].sort(), [])) {
+          after.review_reasons_json = jsonText([
+            ...previousReasons.filter((reason) => !PROJECT_REVIEW_REASONS.includes(reason)), ...next,
+          ], []);
+        }
+      }
+      const changedFields = Object.keys(after).filter((field) => before[field] !== after[field]);
+      if (!changedFields.length) return false;
+      if (project.primaryProjectId != null) {
+        const primary = this.getProject(mailboxId, project.primaryProjectId);
+        if (!primary || primary.status !== 'active') throw new Error('Primary project must reference an active project in the same mailbox.');
+      }
+      this.db.prepare(`
+        UPDATE precision_classifications SET ${changedFields.map((field) => `${field} = ?`).join(', ')}
+        WHERE mailbox_id = ? AND message_id = ?
+      `).run(...changedFields.map((field) => after[field]), mailboxId, message.id);
+      this.audit('precision.project_reclassified', {
+        entityType: 'message', entityId: graphId, payload: { mailboxId, before, after },
+      });
+      return true;
+    });
   }
 
   savePrecisionClassification(mailboxId, graphId, classification) {
