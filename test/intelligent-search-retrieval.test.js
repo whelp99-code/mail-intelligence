@@ -280,6 +280,10 @@ test('long empty, over-budget and injection queries abstain; original hard guard
   const longDue = service.search('me@example.test', 'Please can you show me alpha beta details by 2026-09-10 please');
   assert.deepEqual(longDue.results.map((item) => item.message.id), ['due-action']);
   assert.ok(longDue.parsedQuery.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'));
+  const longKoreanDue = service.search('me@example.test', 'Please can you show me alpha beta details by 2026년 9월 10일까지 please');
+  assert.deepEqual(longKoreanDue.results.map((item) => item.message.id), ['due-action']);
+  assert.ok(longKoreanDue.parsedQuery.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'));
+  assert.equal(longKoreanDue.parsedQuery.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false);
   const deadlineSignal = service.search('me@example.test', 'Please can you show me alpha beta details due by 2026-09-10 please');
   assert.ok(deadlineSignal.parsedQuery.filters.signals.includes('deadline'));
   assert.equal(deadlineSignal.reason, 'no_safe_result');

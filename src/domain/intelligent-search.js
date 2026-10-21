@@ -88,6 +88,7 @@ function decomposeQuestionTokens(tokens) {
       && !QUESTION_SCAFFOLD_TOKENS.has(token.toLowerCase())
       && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())));
 }
+
 const CONTROL_PARTICLE_SUFFIXES = ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로'];
 const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되어', '될'];
 const CONTROL_AUXILIARY_BASES = new Set(['확인', '생성', '처리']);
@@ -251,8 +252,9 @@ function absoluteDueFor(query, nowValue) {
 }
 
 function isTemporalToken(token) {
+  const calendarToken = token.replace(/까지$/u, '');
   return KOREAN_TEMPORAL_TOKEN_PATTERN.test(token)
-    || token.match(ABSOLUTE_DATE_PATTERN)?.[0] === token;
+    || calendarToken.match(ABSOLUTE_DATE_PATTERN)?.[0] === calendarToken;
 }
 
 function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
