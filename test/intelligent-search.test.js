@@ -334,3 +334,51 @@ test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태�
   assert.equal(sangforIag.filters.semanticIntent, 'sangfor_iag');
   assert.equal(sangforIag.residualText, 'Sangfor IAG');
 });
+
+test('review 4342846497 removes message-query scaffolding without removing business terms', () => {
+  const parsed = parseIntelligentQuery('Could you please find the most recent message from ZX-2048 in my mailbox?');
+  assert.deepEqual(parsed.searchPlan.softTokens, ['ZX-2048']);
+  const mixed = parseIntelligentQuery('Could you please find messages from ZX-2048 받은편지함 메일함에서 내용을 찾아주세요 alpha renewal');
+  assert.ok(mixed.searchPlan.softTokens.includes('renewal'));
+  assert.equal(mixed.searchPlan.softTokens.includes('메일함에서'), false);
+});
+
+test('review 4342846504 computes anchored coverage after identifier admission', () => {
+  const parsed = parseIntelligentQuery('Please can you show me the latest details about ZX-2048 alpha beta gamma');
+  assert.equal(parsed.searchPlan.softTokens.length, 4);
+  assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'));
+  assert.equal(parsed.searchPlan.fallbackPolicy.minimumCoverage, 2);
+  const ordinary = parseIntelligentQuery('Please can you show me the latest details about alpha beta gamma delta');
+  assert.equal(ordinary.searchPlan.fallbackPolicy.minimumCoverage, 3);
+});
+
+test('review 4342846508 distinguishes reference numbers from amounts and dates', () => {
+  const identifiers = (query) => parseIntelligentQuery(query).searchPlan.hardAnchors
+    .filter((item) => item.kind === 'identifier').map((item) => item.value);
+  for (const label of ['invoice', 'order', 'ticket', 'case', 'quote', 'quotation', '인보이스', '주문', '티켓', '견적', '참조번호']) {
+    assert.ok(identifiers(`Please can you find the latest details about ${label} 42 Acme renewal`).includes('42'), label);
+  }
+  assert.ok(identifiers('ticket 7 Acme renewal project').includes('7'));
+  for (const token of ['123456', '49725', 'EPO2609-164', 'ZX-2048']) {
+    assert.ok(identifiers(`Please can you find the latest details about ${token} Acme renewal`).includes(token), token);
+  }
+  assert.equal(identifiers('Please can you find the latest details about 2026 Acme renewal').includes('2026'), false);
+  for (const amount of ['$123456', '₩49725', 'USD 123456', 'USD123456', '49725 KRW', '49725KRW', '123456원', '금액 123456', 'amount 123456', '123456.78']) {
+    assert.deepEqual(identifiers(`Please can you find the latest details about ${amount} Acme renewal`), [], amount);
+  }
+  assert.ok(identifiers('Please find the latest invoice 123456 with amount USD 123456 in my mail').includes('123456'));
+});
+
+test('review 4342846527 applies the same Unicode word budget across punctuation', () => {
+  const ten = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'];
+  for (const separator of [',', ';', '/', '·', '，', '：']) {
+    const atLimit = parseIntelligentQuery(ten.join(separator));
+    assert.deepEqual(atLimit.searchPlan.softTokens, ten, separator);
+    const above = parseIntelligentQuery([...ten, 'lambda'].join(separator));
+    assert.equal(above.searchPlan.softTokens.length, 11, separator);
+    assert.equal(above.searchPlan.fallbackPolicy.failClosed, true, separator);
+    assert.equal(above.searchPlan.fallbackPolicy.allowed, false, separator);
+  }
+  const code = parseIntelligentQuery('Could,you,please,find,the,most,recent,message,from,ZX-2048,in,my,mailbox?');
+  assert.deepEqual(code.searchPlan.softTokens, ['ZX-2048']);
+});

@@ -19,6 +19,7 @@ import {
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
 import { PROJECT_REVIEW_REASONS } from '../domain/precision-classifier.js';
+import { tokenizeIntelligentSearchText } from '../domain/intelligent-search.js';
 import { planProjectRegistration, planProjectBatch, normalizeProjectKey, normalizeProjectName } from '../domain/project-registration.js';
 import {
   WORKLINK_PROJECTION_PROVIDER,
@@ -306,6 +307,10 @@ export class SQLiteMailStore {
     if (initialize) ensurePrivateDirectorySync(databaseDirectory);
     else if (!existsSync(this.databasePath)) throw new Error('Existing database required.');
     this.db = new DatabaseSync(this.databasePath);
+    this.db.function('intelligent_identifier_matches', { deterministic: true }, (text, identifier) => {
+      const expected = String(identifier || '').normalize('NFKC').toLowerCase();
+      return tokenizeIntelligentSearchText(text).some((token) => token.toLowerCase() === expected) ? 1 : 0;
+    });
     if (initialize) {
       this.configure();
       this.migrate();
@@ -1677,9 +1682,7 @@ export class SQLiteMailStore {
 
   intelligentSearch(mailboxId, parsedQuery, { limit = 25 } = {}) {
     const filters = parsedQuery?.filters || {};
-    const residualTokens = String(parsedQuery?.residualText || '')
-      .normalize('NFKC')
-      .match(/[\p{L}\p{N}_-]+/gu) || [];
+    const residualTokens = tokenizeIntelligentSearchText(parsedQuery?.residualText);
     const searchPlan = parsedQuery?.searchPlan || {};
     const softTokens = Array.isArray(searchPlan.softTokens) && searchPlan.softTokens.length
       ? searchPlan.softTokens
@@ -1736,8 +1739,8 @@ export class SQLiteMailStore {
       if (anchor.kind === 'external_actor') hardAnchorKinds.push(anchor.kind);
       if (anchor.kind === 'project') hardAnchorKinds.push(anchor.kind);
       if (anchor.kind === 'identifier') {
-        clauses.push(`${searchableCurrentText} LIKE ? ESCAPE '\\'`);
-        params.push(`%${String(anchor.value).toLowerCase().replace(/[\\%_]/g, '\\$&')}%`);
+        clauses.push(`intelligent_identifier_matches(${searchableCurrentText}, ?) = 1`);
+        params.push(String(anchor.value));
         hardAnchorKinds.push(anchor.kind);
       }
       if (anchor.kind === 'security_remote_session') {

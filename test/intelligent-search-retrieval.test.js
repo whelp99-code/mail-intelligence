@@ -356,3 +356,59 @@ test('long dated order questions require both order and numeric identifiers insi
   assert.equal(overBudget.parsedQuery.searchPlan.softTokens.length, 11);
   assert.equal(overBudget.reason, 'no_safe_result');
 });
+
+test('review 4342846517 exact Unicode identifier matching rejects prefix and substring collisions', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const other = store.ensureMailbox({ key: 'other@example.test', address: 'other@example.test' });
+  const records = [
+    ['exact', 'ZX-2048 alpha', mailbox, 'inbox'],
+    ['case', 'zx-2048 alpha', mailbox, 'inbox'],
+    ['punctuation', '(ZX-2048), alpha', mailbox, 'inbox'],
+    ['longer', 'ZX-20480 alpha', mailbox, 'inbox'],
+    ['prefix', 'PREZX-2048 alpha', mailbox, 'inbox'],
+    ['hyphen-prefix', 'PRE-ZX-2048 alpha', mailbox, 'inbox'],
+    ['hangul-prefix', '한글ZX-2048 alpha', mailbox, 'inbox'],
+    ['hangul-suffix', 'ZX-2048한글 alpha', mailbox, 'inbox'],
+    ['mark-suffix', 'ZX-2048́ alpha', mailbox, 'inbox'],
+    ['underscore-suffix', 'ZX-2048_extra alpha', mailbox, 'inbox'],
+    ['underscore', 'X_Y123 alpha', mailbox, 'inbox'],
+    ['wildcard-collision', 'XAY123 alpha', mailbox, 'inbox'],
+    ['greek-upper', 'ΔΟΚ-2048 alpha', mailbox, 'inbox'],
+    ['greek-lower', 'δοκ-2048 alpha', mailbox, 'inbox'],
+    ['greek-longer', 'ΔΟΚ-20480 alpha', mailbox, 'inbox'],
+    ['numeric', 'invoice 123456 Acme renewal project', mailbox, 'inbox'],
+    ['no-number', 'invoice Acme renewal project', mailbox, 'inbox'],
+    ['numeric-prefix', 'invoice 1234560 Acme renewal project', mailbox, 'inbox'],
+    ['short-number', 'ticket 7 Acme renewal project', mailbox, 'inbox'],
+    ['no-short-number', 'ticket Acme renewal project', mailbox, 'inbox'],
+    ['other-mailbox', 'ZX-2048 alpha', other, 'inbox'],
+    ['junk', 'ZX-2048 alpha', mailbox, 'junkemail'],
+    ['deleted', 'ZX-2048 alpha', mailbox, 'deleteditems'],
+  ];
+  for (const [id, body, target, folderName] of records) {
+    const folder = store.ensureFolder({ mailboxId: target.id, graphId: folderName, wellKnownName: folderName, displayName: folderName });
+    store.upsertNormalizedMessage({ mailboxId: target.id, folderId: folder.id, message: message(id, 'Synthetic evidence', body, folderName) });
+    store.savePrecisionClassification(target.id, id, classification({ signals: ['quotation_contract'] }));
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  const ids = (query) => service.search('me@example.test', query).results.map((item) => item.message.id).sort();
+  assert.deepEqual(ids('Please can you show me the latest information about ZX-2048 alpha'), ['case', 'exact', 'punctuation']);
+  assert.deepEqual(ids('Could you please find the most recent message from ZX-2048 in my mailbox?'), ['case', 'exact', 'punctuation']);
+  assert.deepEqual(ids('Please can you show me the latest details about ZX-2048 alpha beta gamma'), ['case', 'exact', 'punctuation']);
+  assert.deepEqual(ids('Please show me the latest update about invoice 123456 for Acme renewal project'), ['numeric']);
+  assert.deepEqual(ids('ticket 7 Acme renewal project'), ['short-number']);
+  assert.deepEqual(ids('Please can you show me the latest details about X_Y123 alpha'), ['underscore']);
+  assert.deepEqual(ids('Please can you show me the latest details about ΔΟΚ-2048 alpha'), ['greek-lower', 'greek-upper']);
+  assert.deepEqual(ids('Please can you show me the latest details about ＺＸ－２０４８ alpha'), ['case', 'exact', 'punctuation']);
+  assert.deepEqual(ids('Please can you show me the latest details about ZX-2048 OR 1=1 DROP TABLE messages'), []);
+  const bound = parseIntelligentQuery('Please can you show me the latest details about ZX-2048 alpha');
+  bound.searchPlan.softTokens = ['alpha'];
+  bound.residualText = 'alpha';
+  assert.deepEqual(store.intelligentSearch(mailbox.id, bound).map((item) => item.message.id).sort(), ['case', 'exact', 'punctuation']);
+  bound.searchPlan.hardAnchors = [{ kind: 'identifier', value: 'ZX%2048' }];
+  assert.deepEqual(store.intelligentSearch(mailbox.id, bound), []);
+  bound.searchPlan.hardAnchors = [{ kind: 'identifier', value: 'ZX-2048\' OR 1=1 --' }];
+  assert.deepEqual(store.intelligentSearch(mailbox.id, bound), []);
+});

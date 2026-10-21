@@ -70,7 +70,7 @@ const QUESTION_SCAFFOLD_TOKENS = new Set([
   'please', 'can', 'could', 'would', 'you', 'me', 'tell', 'show', 'find', 'give',
   'what', 'which', 'where', 'when', 'how', 'is', 'are', 'was', 'were', 'has', 'have',
   'been', 'the', 'a', 'an', 'of', 'for', 'to', 'in', 'on', 'about', 'with', 'and', 'by',
-  'mail', 'email',
+  'mail', 'email', 'message', 'messages', 'from', 'mailbox',
   'it', 'its', 'this', 'that', 'my', 'our', 'any', 'all', 'most', 'recent', 'latest',
   'information', 'details', 'update', 'updates', 'status', 'question', 'regarding',
   '지금', '현재', '최근', '최신', '어떤', '어떻게', '무엇을', '무슨', '있는', '있나요',
@@ -79,12 +79,18 @@ const QUESTION_SCAFFOLD_TOKENS = new Set([
   '보여', '보여줘', '보여주세요', '부탁해', '부탁합니다', '좀', '요청', '질문',
   '가장', '최근에', '관련해서', '메일에서', '무엇인가요', '무엇인지', '알고', '싶어요',
   '정보가', '있는지', '내용이', '보여줄', '수',
+  '메시지', '메시지를', '메일함', '메일함에서',
 ]);
 
+export function tokenizeIntelligentSearchText(value) {
+  return (String(value || '').normalize('NFKC').match(/[\p{L}\p{M}\p{N}_-]+/gu) || [])
+    .filter((token) => /[\p{L}\p{N}]/u.test(token));
+}
+
 function decomposeQuestionTokens(tokens) {
-  return unique(tokens.flatMap((token) => token.match(/[\p{L}\p{N}_-]+/gu) || [])
+  return unique(tokens.flatMap(tokenizeIntelligentSearchText)
     .map((token) => normalizeControlToken(token).replace(/^(.*\d)(?:에게|에서|으로|은|는|을|를|이|가|에|와|과|의)$/u, '$1'))
-    .filter((token) => token.length >= 2
+    .filter((token) => (token.length >= 2 || /^\d+$/u.test(token))
       && !QUESTION_SCAFFOLD_TOKENS.has(token.toLowerCase())
       && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())));
 }
@@ -257,9 +263,23 @@ function isTemporalToken(token) {
     || calendarToken.match(ABSOLUTE_DATE_PATTERN)?.[0] === calendarToken;
 }
 
-function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
+function identifierTokensFor(query, lexicalTokens) {
+  // Five digits retains the existing 49725 fixture. Shorter numbers require an
+  // explicit adjacent reference label, not merely an invoice somewhere nearby.
+  const references = new Set([...query.matchAll(/(?:^|[^\p{L}\p{N}_-])(?:invoice|order|ticket|case|quote|quotation|reference|인보이스|주문|발주|티켓|견적|참조)(?:\s*(?:number|no\.?|번호|#|:|=))?\s*(\d+)(?=$|[^\p{L}\p{N}_-])/giu)]
+    .map((match) => match[1]));
+  const amounts = new Set([...query.matchAll(/(?:[$€¥₩£]\s*|(?:\b(?:usd|krw|eur|jpy|cny)|금액|가격|비용|amount|price|cost)\s*[:=]?\s*)\d[\d,.]*|\d[\d,.]*\s*(?:만원|억원|원|달러|(?:usd|krw|eur|jpy|cny)\b)|\d+\.\d+/giu)]
+    .flatMap((match) => tokenizeIntelligentSearchText(match[0])));
+  return lexicalTokens.filter((token) => {
+    if (isTemporalToken(token) || (amounts.has(token) && !references.has(token))) return false;
+    if (/^\d+$/u.test(token)) return token.length >= 5 || references.has(token);
+    return /[\p{L}]/u.test(token) && /\d/u.test(token);
+  });
+}
+
+function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange, identifiers }) {
   const softTokens = unique(lexicalTokens).filter((token) => !WEAK_SEARCH_TOKENS.has(normalizeControlToken(token).toLowerCase()));
-  const hardAnchors = [];
+  const hardAnchors = identifiers.map((value) => ({ kind: 'identifier', value }));
   if (absoluteDueRange.from) hardAnchors.push({ kind: 'due_date', range: absoluteDueRange });
   if (filters.nextActors.includes('external_party')) hardAnchors.push({ kind: 'external_actor' });
   if (filters.project) hardAnchors.push({ kind: 'project', value: filters.project });
@@ -418,7 +438,7 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const absoluteDue = absoluteDueFor(query, now);
   const absoluteDueRange = absoluteDue.range;
   const effectiveDueRange = absoluteDueRange.from ? absoluteDueRange : dueRange;
-  const questionDecomposed = query.split(/\s+/).length > MAX_DECOMPOSED_SEARCH_TOKENS;
+  const questionDecomposed = tokenizeIntelligentSearchText(query).length > MAX_DECOMPOSED_SEARCH_TOKENS;
   // Only consume the selected, validated date. Unparsed periods remain lexical
   // evidence rather than silently losing their temporal meaning.
   if (questionDecomposed && absoluteDue.expression) residual = residual.replace(absoluteDue.expression, ' ');
@@ -426,15 +446,14 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     '메일', '찾아', '보여', '알려', '목록', '관련', '것', '건', '중',
     '에서', '대한', '할', '해야', '처리할', 'the', 'mail', 'email', 'show', 'find',
   ]);
-  const originalTokens = query.match(/[\p{L}\p{N}_-]+/gu) || [];
+  const originalTokens = tokenizeIntelligentSearchText(query);
   const preservedDomainTokens = unique(originalTokens
     .filter((token) => token.length >= 2 && PRESERVED_DOMAIN_TOKEN_PATTERN.test(token))
     .map(normalizeControlToken));
-  const residualTokens = normalizeSpace(residual)
-    .split(/\s+/)
+  const residualTokens = tokenizeIntelligentSearchText(residual)
     .map(normalizeControlToken)
     .filter((token) => token
-      && token.length >= 2
+      && (token.length >= 2 || /^\d+$/u.test(token))
       && !residualStopWords.has(token.toLowerCase())
       && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())
       && !preservedDomainTokens.some((domainToken) => domainToken !== token && domainToken.includes(token)));
@@ -462,7 +481,8 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     lexicalIncidentKind: lexicalIncidentOnly ? query.toLowerCase() : '',
     semanticIntent,
   };
-  const searchPlan = searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange });
+  const identifiers = identifierTokensFor(query, lexicalTokens);
+  const searchPlan = searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange, identifiers });
   if (questionDecomposed) {
     // Never truncate meaningful terms to fit the budget, or turn an empty question
     // into a mailbox-wide query. Structured and security filters use the original.
@@ -475,11 +495,6 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     // An unparsed period remains required lexical evidence, not an optional
     // coverage term and not an invented metadata range.
     if (lexicalTokens.some(isTemporalToken)) searchPlan.fallbackPolicy.allowed = false;
-    for (const token of lexicalTokens) {
-      if (/\d/.test(token) && !isTemporalToken(token)) {
-        searchPlan.hardAnchors.push({ kind: 'identifier', value: token });
-      }
-    }
     recognized.push({ type: 'queryDecomposition', value: refused ? 'refused' : 'keywords' });
   }
   if (searchPlan.hardAnchors.some((anchor) => anchor.kind === 'security_remote_session')) {
