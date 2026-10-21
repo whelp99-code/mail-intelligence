@@ -1465,11 +1465,7 @@ export class SQLiteMailStore {
     const message = this.getMessageRecord(mailboxId, graphId);
     if (!message) throw new Error(`Cannot update project resolution for unknown message: ${graphId}.`);
     if (!PRECISION_PROJECT_RESOLUTIONS.has(project.projectResolution)) throw new Error('Invalid project resolution.');
-    if (!['auto', 'review_required', 'corrected'].includes(project.reviewStatus)) throw new Error('Invalid review status.');
-    if (project.primaryProjectId != null) {
-      const primary = this.getProject(mailboxId, project.primaryProjectId);
-      if (!primary || primary.status !== 'active') throw new Error('Primary project must reference an active project in the same mailbox.');
-    }
+    if (!['auto', 'review_required', 'confirmed', 'corrected'].includes(project.reviewStatus)) throw new Error('Invalid review status.');
     return this.transaction(() => {
       const before = this.db.prepare(`
         SELECT primary_project_id, project_resolution, project_candidate_json, review_status
@@ -1481,6 +1477,10 @@ export class SQLiteMailStore {
         project_resolution: project.projectResolution, project_candidate_json: jsonText(project.projectCandidate, {}),
         review_status: project.reviewStatus };
       if (Object.keys(after).every((field) => before[field] === after[field])) return false;
+      if (project.primaryProjectId != null) {
+        const primary = this.getProject(mailboxId, project.primaryProjectId);
+        if (!primary || primary.status !== 'active') throw new Error('Primary project must reference an active project in the same mailbox.');
+      }
       const reviewChanged = before.review_status !== after.review_status;
       const values = [after.primary_project_id, after.project_resolution, after.project_candidate_json];
       if (reviewChanged) values.push(after.review_status);

@@ -55,6 +55,101 @@ function protectedTables(db) {
 const projectColumns = new Set(['primary_project_id', 'project_resolution', 'project_candidate_json']);
 const nonProjectColumns = (row) => Object.fromEntries(Object.entries(row).filter(([key]) => !projectColumns.has(key)));
 
+for (const conflict of [false, true]) test(`review followup: confirmed status survives import with conflict=${conflict}`, async (t) => {
+  const rows = [project(), ...(conflict ? [project({ projectKey: otherKey, name: 'Other project', aliases: ['material request'] })] : [])];
+  const f = fixture(t, rows); f.add('confirmed'); f.add('normal', 'Alpha unique only');
+  const service = new PrecisionIntelligenceService({ store: f.store });
+  const initial = service.classifyOne(f.mailbox.mailbox_key, 'confirmed').classification;
+  f.store.savePrecisionClassification(f.mailbox.id, 'confirmed', { ...initial, reviewStatus: 'confirmed',
+    provider: 'notion-worklink', priority: 'critical' });
+  service.classifyOne(f.mailbox.mailbox_key, 'normal');
+  const before = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  f.store.close();
+  const result = await applyProjectImport(f.options(2));
+  assert.equal(result.reclassification.changed, 2);
+  const check = new SQLiteMailStore({ databasePath: f.database, initialize: false });
+  t.after(() => check.close());
+  const after = check.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  assert.deepEqual(after.map(nonProjectColumns), before.map(nonProjectColumns));
+  assert.equal(after[0].review_status, 'confirmed');
+  assert.equal(after[0].project_resolution, conflict ? 'review_required' : 'confirmed');
+  assert.equal(after[1].project_resolution, 'confirmed');
+  const changes = check.db.prepare('SELECT total_changes() AS n').get().n;
+  assert.equal(reclassifyProjectAnalysis(check, f.mailbox, 2).changed, 0);
+  assert.equal(check.db.prepare('SELECT total_changes() AS n').get().n, changes);
+});
+
+for (const source of ['user-corrected', 'hybrid']) test(`review followup: archived orphan ${source} does not roll back other imports`, async (t) => {
+  const retired = project({ projectKey: otherKey, name: 'Retired project', aliases: ['Legacy unique'] });
+  const f = fixture(t, [project(), { ...retired, status: 'archived' }]);
+  f.add('normal'); f.add('orphan', 'Legacy unique');
+  importProjects(f.store, f.mailbox.id, [retired]);
+  const service = new PrecisionIntelligenceService({ store: f.store });
+  service.classifyOne(f.mailbox.mailbox_key, 'normal');
+  const initial = service.classifyOne(f.mailbox.mailbox_key, 'orphan').classification;
+  f.store.savePrecisionClassification(f.mailbox.id, 'orphan', { ...initial, source,
+    reviewStatus: source === 'user-corrected' ? 'corrected' : 'auto',
+    correctedAt: source === 'user-corrected' ? '2026-10-01T00:00:00Z' : null, priority: 'critical' });
+  const before = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  f.store.close();
+  const result = await applyProjectImport(f.options(2));
+  assert.equal(result.reclassification.changed, 1);
+  assert.equal(result.reclassification.unchanged, 1);
+  const check = new SQLiteMailStore({ databasePath: f.database, initialize: false });
+  t.after(() => check.close());
+  const after = check.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  assert.equal(after[0].project_resolution, 'confirmed');
+  assert.deepEqual(after[1], before[1]);
+  assert.deepEqual(after.map(nonProjectColumns), before.map(nonProjectColumns));
+  assert.equal(check.getProject(f.mailbox.id, after[1].primary_project_id).status, 'archived');
+  const audits = check.db.prepare('SELECT * FROM audit_events ORDER BY id').all();
+  const again = await applyProjectImport(f.options(2, { backupPath: join(f.root, 'orphan-rerun.sqlite') }));
+  assert.equal(again.reclassification.changed, 0);
+  assert.deepEqual(check.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all(), after);
+  assert.deepEqual(check.db.prepare('SELECT * FROM audit_events ORDER BY id').all(), audits);
+});
+
+for (const source of ['user-corrected', 'hybrid']) test(`review followup: unchanged missing project pointer ${source} is preserved`, (t) => {
+  const f = fixture(t); f.add('normal'); f.add('orphan');
+  const service = new PrecisionIntelligenceService({ store: f.store });
+  service.classifyOne(f.mailbox.mailbox_key, 'normal');
+  const initial = service.classifyOne(f.mailbox.mailbox_key, 'orphan').classification;
+  f.store.savePrecisionClassification(f.mailbox.id, 'orphan', { ...initial, source });
+  // Simulate a legacy dangling reference only in this synthetic database. Import's backup FK gate is not bypassed.
+  f.store.db.exec('PRAGMA foreign_keys=OFF');
+  f.store.db.prepare('UPDATE precision_classifications SET primary_project_id=999 WHERE message_id=(SELECT id FROM messages WHERE graph_id=?)').run('orphan');
+  f.store.db.exec('PRAGMA foreign_keys=ON');
+  importProjects(f.store, f.mailbox.id, [project()]);
+  const before = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  assert.equal(reclassifyProjectAnalysis(f.store, f.mailbox, 2).changed, 1);
+  const after = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  assert.equal(after[0].project_resolution, 'confirmed');
+  assert.deepEqual(after[1], before[1]);
+  assert.deepEqual(after.map(nonProjectColumns), before.map(nonProjectColumns));
+  const changes = f.store.db.prepare('SELECT total_changes() AS n').get().n;
+  assert.equal(reclassifyProjectAnalysis(f.store, f.mailbox, 2).changed, 0);
+  assert.equal(f.store.db.prepare('SELECT total_changes() AS n').get().n, changes);
+});
+
+for (const invalid of ['archived', 'missing', 'other-mailbox']) test(`review followup: changed ${invalid} project reference remains rejected`, (t) => {
+  const f = fixture(t); f.add('changed');
+  importProjects(f.store, f.mailbox.id, [project()]);
+  const initial = new PrecisionIntelligenceService({ store: f.store }).classifyOne(f.mailbox.mailbox_key, 'changed').classification;
+  let projectId = initial.primaryProjectId;
+  if (invalid === 'archived') importProjects(f.store, f.mailbox.id, [project({ status: 'archived' })]);
+  else if (invalid === 'missing') projectId = 999;
+  else {
+    const other = f.store.ensureMailbox({ key: 'other@example.invalid' });
+    projectId = f.store.createProject(other.id, project()).id;
+  }
+  const before = f.store.db.prepare('SELECT * FROM precision_classifications').all();
+  const audits = f.store.db.prepare('SELECT * FROM audit_events ORDER BY id').all();
+  assert.throws(() => f.store.updatePrecisionProjectResolution(f.mailbox.id, 'changed', { ...initial,
+    primaryProjectId: projectId, projectCandidate: { ...initial.projectCandidate, changed: true } }), /Primary project must reference an active project/);
+  assert.deepEqual(f.store.db.prepare('SELECT * FROM precision_classifications').all(), before);
+  assert.deepEqual(f.store.db.prepare('SELECT * FROM audit_events ORDER BY id').all(), audits);
+});
+
 test('apply changes only project columns for rules, AI, corrected, hybrid and work-link provenance rows', (t) => {
   const f = fixture(t);
   const service = new PrecisionIntelligenceService({ store: f.store });

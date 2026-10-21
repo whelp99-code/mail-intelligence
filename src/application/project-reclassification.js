@@ -13,7 +13,7 @@ function evaluateProject(message, projects, previous, correction, policy) {
     for (const field of projectFields) project[field] = previous[field];
   }
   let reviewStatus = previous?.reviewStatus || 'auto';
-  if (reviewStatus !== 'corrected' && project.projectResolution === 'review_required') reviewStatus = 'review_required';
+  if (!['confirmed', 'corrected'].includes(reviewStatus) && project.projectResolution === 'review_required') reviewStatus = 'review_required';
   return { ...project, reviewStatus };
 }
 
