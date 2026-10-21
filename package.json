@@ -19,6 +19,7 @@
     "audit": "env -u npm_config_allow_scripts -u NPM_CONFIG_ALLOW_SCRIPTS npm audit --audit-level=high",
     "audit:fix": "npm audit fix --ignore-scripts --no-fund",
     "projects:preview": "node scripts/import-projects.mjs --dry-run",
+    "projects:import": "node scripts/import-projects.mjs --apply",
     "memory:status": "node scripts/mail-memory-admin.mjs status",
     "memory:integrity": "node scripts/mail-memory-admin.mjs integrity",
     "memory:backup": "node scripts/mail-memory-admin.mjs backup",
@@ -84,6 +85,6 @@
   },
   "description": "Read-only Outlook intelligence with SQLite memory, precision classification, and official OpenAI/xAI OAuth CLI providers",
   "engines": {
-    "node": ">=22"
+    "node": "^22.16.0 || >=24.0.0"
   }
 }

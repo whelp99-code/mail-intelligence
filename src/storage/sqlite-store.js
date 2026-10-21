@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   chmodSync,
@@ -18,7 +18,7 @@ import {
 } from '../application/handled-elsewhere.js';
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
-import { planProjectRegistration, normalizeProjectKey, normalizeProjectName } from '../domain/project-registration.js';
+import { planProjectRegistration, planProjectBatch, normalizeProjectKey, normalizeProjectName } from '../domain/project-registration.js';
 import {
   WORKLINK_PROJECTION_PROVIDER,
   WORKLINK_PROJECTION_VERSION,
@@ -290,6 +290,7 @@ export class SQLiteMailStore {
     databasePath,
     migrationsDir = resolve('migrations'),
     now = isoNow,
+    initialize = true,
   }) {
     if (!databasePath || !isAbsolute(databasePath)) {
       throw new Error('databasePath must be an absolute path.');
@@ -299,15 +300,22 @@ export class SQLiteMailStore {
     this.now = now;
     this.closed = false;
     this.txDepth = 0;
+    this.initialize = initialize;
     const databaseDirectory = dirname(this.databasePath);
-    ensurePrivateDirectorySync(databaseDirectory);
+    if (initialize) ensurePrivateDirectorySync(databaseDirectory);
+    else if (!existsSync(this.databasePath)) throw new Error('Existing database required.');
     this.db = new DatabaseSync(this.databasePath);
-    this.configure();
-    this.migrate();
-    this.protectDatabaseFiles();
+    if (initialize) {
+      this.configure();
+      this.migrate();
+      this.protectDatabaseFiles();
+    } else {
+      this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA temp_store = MEMORY;');
+    }
   }
 
   protectDatabaseFiles() {
+    if (!this.initialize) return;
     for (const candidate of [this.databasePath, `${this.databasePath}-wal`, `${this.databasePath}-shm`]) {
       if (!existsSync(candidate)) continue;
       chmodSync(candidate, 0o600);
@@ -1305,9 +1313,27 @@ export class SQLiteMailStore {
     status = 'active',
     createdBy = 'user',
   } = {}) {
-    const plan = planProjectRegistration({ name, projectKey, aliases, status, createdBy },
-      this.listProjects(mailboxId, { includeArchived: true }));
+    return this.transaction(() => this.saveProjectRegistration(mailboxId,
+      planProjectRegistration({ name, projectKey, aliases, status, createdBy },
+        this.listProjects(mailboxId, { includeArchived: true }))));
+  }
+
+  importProjects(mailboxId, rows) {
+    return this.transaction(() => {
+      const { plans } = planProjectBatch(rows, this.listProjects(mailboxId, { includeArchived: true }));
+      // Vacate changed names only within this transaction: SQLite UNIQUE is immediate.
+      const token = randomUUID();
+      for (const plan of plans.filter((item) => item.action === 'update')) {
+        this.db.prepare('UPDATE projects SET normalized_name = ? WHERE mailbox_id = ? AND id = ?')
+          .run(`__import_${token}_${plan.existing.id}`, mailboxId, plan.existing.id);
+      }
+      return plans.map((plan) => this.saveProjectRegistration(mailboxId, plan));
+    });
+  }
+
+  saveProjectRegistration(mailboxId, plan) {
     const { name: cleanName, normalizedName, aliases: cleanAliases, projectKey: key } = plan.project;
+    const { status, createdBy } = plan.project;
     if (plan.action === 'unchanged') return plan.existing;
     const now = this.now();
     if (plan.action === 'update') {
@@ -1317,7 +1343,8 @@ export class SQLiteMailStore {
       `).run(cleanName, normalizedName, jsonText(cleanAliases, []), status, now, mailboxId, plan.existing.id);
       this.audit('project.updated', {
         entityType: 'project', entityId: plan.existing.id,
-        payload: { projectKey: key, name: cleanName, aliases: cleanAliases },
+        payload: { projectKey: key, name: cleanName, aliases: cleanAliases,
+          previousStatus: plan.existing.status, status },
       });
       return this.getProject(mailboxId, plan.existing.id);
     }
@@ -1340,7 +1367,7 @@ export class SQLiteMailStore {
     this.audit('project.created', {
       entityType: 'project',
       entityId: result.lastInsertRowid,
-      payload: { projectKey: key, name: cleanName, aliases: cleanAliases },
+      payload: { projectKey: key, name: cleanName, aliases: cleanAliases, status },
     });
     return this.getProject(mailboxId, result.lastInsertRowid);
   }
@@ -2748,7 +2775,7 @@ export class SQLiteMailStore {
 
   close() {
     if (this.closed) return;
-    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+    if (this.initialize) this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
     this.db.close();
     this.closed = true;
   }

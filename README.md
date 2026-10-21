@@ -14,18 +14,33 @@ Mail Intelligence는 **Outlook 전체 메일을 지속적으로 분석해 프로
 → 승인된 행동만 실행
 ```
 
-## 승인된 프로젝트 CSV 가져오기 미리보기
+## 승인된 프로젝트 CSV 가져오기와 안전한 재평가
 
 ```sh
 npm run projects:preview -- --csv /approved/projects.csv --snapshot /approved/readonly-backup.sqlite --expected-sha256 SHA256 --mailbox-id 1
 ```
 
-- CLI는 `--dry-run`만 지원한다. 운영 DB 대신 승인된 닫힌 SQLite backup 사본(0600, SHA-256 고정)을 제공한다. `mode=ro&immutable=1`, `query_only`로 읽고 DB·CSV·기존 sidecar의 전후 해시를 비교한다. 내용 있는 WAL/journal은 거부한다. 운영 DB를 이 명령에 지정하지 않는다.
+- 미리보기는 `--dry-run`이다. 운영 DB 대신 승인된 닫힌 SQLite backup 사본(0600, SHA-256 고정)을 제공한다. `mode=ro&immutable=1`, `query_only`로 읽고 DB·CSV·기존 sidecar의 전후 해시를 비교한다. 내용 있는 WAL/journal은 거부한다. 운영 DB를 미리보기에 지정하지 않는다. 메일이 0건이어도 active/excluded/classificationTarget은 NULL이 아닌 0이다.
 - CSV 필수 열은 `project_key`(Notion page id), `name`, `status`, `aliases`(JSON 배열)이다. `진행`은 active, `종료`는 archived다. `customer`는 저장 필드가 아니며 공란·거래처·고객명으로 별칭을 추정하지 않는다. 원본/제외 목록이 아니라 승인된 가져오기 후보 CSV만 지정한다.
 - 미리보기는 전체 가져올 프로젝트 목록과 active 메일의 **프로젝트 해석만** 순수 평가한다. 분모는 선택 mailbox의 `deleted_at IS NULL`인 `messages.id` 고유 행이다. 과거 요청 수와 현재 분모가 다르면 그대로 표시한다. 변화없음을 먼저 집계한 뒤 변경된 confirmed/review_required/other_changed를 나누므로 중복이 없다. 별도 resolutions는 미리보기 후 상태 총계이며 변경 집계에 더하지 않는다.
 - 저장된 AI·사용자 보정·학습 정책을 재실행한 전체 분류 결과가 아니다. 본문·제목·주소·메일별 평가를 출력하지 않으며 초안·메일 상태·외부 작업을 변경하지 않는다.
-- 승인 후 로컬 registry 적용 경로는 `importProjects(store, mailboxId, rows)`다. 기존 `store.createProject`를 transaction 안에서 호출하고 `createdBy='import'`와 같은 `projectKey`에만 멱등 upsert한다. user 생성 프로젝트·다른 프로젝트의 이름/별칭 충돌은 거부한다. 동일 입력은 audit/updated_at도 바꾸지 않는다. 수정 시 ID/created_at을 유지하고 변경 audit을 남긴다. 이 함수는 재분류하지 않는다.
+- 로컬 registry 적용 경로는 `importProjects(store, mailboxId, rows)`다. createProject와 동일한 검증/저장 경로를 공유하고 `createdBy='import'`와 같은 `projectKey`에만 멱등 upsert한다. 배치 최종 registry를 먼저 검증하므로 이름·별칭 swap은 행순서와 무관하며 배치 밖 충돌은 계속 거부한다. UNIQUE 이름 교환용 중간값은 transaction 밖에 노출되지 않는다. 동일 입력은 audit/updated_at도 바꾸지 않는다. 수정 시 ID/created_at을 유지하고 status만 바뀌어도 이전/새 status를 감사에 남긴다. 이 함수 자체는 재분류하지 않는다.
 - 기존 application `createProject`는 기본으로 강제 재분류하고 분류/이력 저장 및 WAL checkpoint를 수행하므로 dry-run에서 호출하지 않는다. UI 조회 역시 분류를 호출할 수 있으므로 순수 평가를 대체하지 않는다. 실제 운영 등록·재분류는 별도 승인 대상이다.
+
+명시적 적용 모드는 `npm run projects:import -- --csv CSV --database DB --backup NEW_BACKUP --mailbox-id ID --confirm APPLY_CONFIRM --reclassify-confirm REPLAY_CONFIRM`이다. Node.js **22.16 이상 22.x 또는 24 이상**이 필요하다(SQLite backup API). 운영 apply/reclass 승인을 대신하는 명령이 아니며 승인 전에는 합성 DB로만 검증한다.
+
+오모냥의 두 확인 문자열을 각각 실제 계산값과 **문자열 전체 완전일치**로 검증한다.
+
+```text
+APPLY-PROJECTS mailbox=<id> csv=<실제 CSV SHA256 앞16> db=<대상 DB 절대경로 그대로> rows=<실제 가져올행수>
+RECLASSIFY-PROJECTS mailbox=<id> count=<현재 실제 대상메일수>
+```
+
+- 두 확인이 모두 필요하다. 임의 yes/환경변수 우회는 없다. DB는 0600인 canonical 절대경로의 실제 파일이어야 하며 symlink·상대경로·정규화가 필요한 경로는 거부한다. 실제 CSV 바이트 SHA-256, 실제 행수, 선택 mailbox와 DB 경로를 결합한다. 불일치 출력에는 값 없이 차이 필드 이름만 표시한다.
+- 대상수는 현재 mailbox의 `deleted_at IS NULL` 고유 행수로 계산한다. 과거 857 같은 수를 강제하지 않는다. 백업 중 대상수 또는 DB/CSV가 바뀌면 적용 전에 거부한다.
+- 적용 전 **SQLite backup API**로 새 백업을 생성하고 `integrity_check`와 `foreign_key_check`를 통과해야 한다. 백업 디렉터리는 0700이며 파일은 0600, 기존 파일 덮어쓰기는 금지다. 백업 실패/무결성 실패 시 중단한다. 적용 직전 백업 경로·해시만 먼저 출력하고, 성공 후 프로젝트 생성/수정/변화없음 및 현재 재평가 건수를 출력한다.
+- maintenance store는 기존 스키마만 열며 WAL 설정·마이그레이션·mailbox upsert를 하지 않는다. 현재 migration 이름/체크섬이 소스와 다르면 거부한다. 프로젝트 등록과 재평가는 하나의 write transaction으로 묶여 실패 시 함께 rollback된다.
+- 안전 재평가는 기존 평가 로직의 AI 유지 → 명시적 보정 우선 → 학습 정책 순서를 유지한다. 보존된 AI의 업무 필드·provider/model을 덮지 않고 registry 기반 프로젝트 해석/근거만 갱신한 뒤 기존 보정·학습 정책을 적용한다. precision 분류/이력만 저장하며 초안·원본 메일 읽음/상태·analysis 원문·외부 작업을 변경하지 않는다. 본문·제목·주소·메일별 결과를 출력하지 않는다.
 
 ## 현재 버전
 

@@ -1,4 +1,4 @@
-import { planProjectRegistration } from '../domain/project-registration.js';
+import { planProjectBatch } from '../domain/project-registration.js';
 import { resolveProject } from '../domain/precision-classifier.js';
 
 // RFC 4180 records, including quoted commas, escaped quotes and embedded newlines.
@@ -53,28 +53,14 @@ export function parseProjectCsv(text) {
 }
 
 export function previewProjectImport(rows, existing = []) {
-  const projects = existing.map((item) => ({ ...item }));
-  const plans = [];
-  let nextId = Math.max(0, ...projects.map((item) => item.id)) + 1;
-  const keys = new Set();
-  for (const row of rows) {
-    if (keys.has(row.projectKey)) throw new Error('Duplicate import key.');
-    keys.add(row.projectKey);
-    const plan = planProjectRegistration(row, projects);
-    const project = { ...plan.project, id: plan.existing?.id ?? nextId++ };
-    if (plan.existing) projects.splice(projects.findIndex((item) => item.id === project.id), 1, project);
-    else projects.push(project);
-    plans.push({ action: plan.action, projectKey: project.projectKey, name: project.name,
-      aliases: project.aliases, status: project.status });
-  }
-  return { plans, projects };
+  const batch = planProjectBatch(rows, existing);
+  return { projects: batch.projects, plans: batch.plans.map(({ action, project }) => ({
+    action, projectKey: project.projectKey, name: project.name, aliases: project.aliases, status: project.status,
+  })) };
 }
 
 export function importProjects(store, mailboxId, rows) {
-  return store.transaction(() => {
-    previewProjectImport(rows, store.listProjects(mailboxId, { includeArchived: true }));
-    return rows.map((row) => store.createProject(mailboxId, row));
-  });
+  return store.importProjects(mailboxId, rows);
 }
 
 export function evaluateProjectImpact(messages, before, after) {

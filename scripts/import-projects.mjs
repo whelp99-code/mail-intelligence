@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseProjectCsv, previewProjectImport, evaluateProjectImpact } from '../src/application/project-import.js';
+import { applyProjectImport } from '../src/application/project-import-command.js';
 
 function digest(path) {
   const hash = createHash('sha256');
@@ -51,7 +52,7 @@ export function dryRunProjectImport({ csv, snapshot, expectedSha256, mailboxId }
         status: row.status, createdBy: row.created_by }));
     const preview = previewProjectImport(rows, existing);
     const totals = db.prepare(`SELECT count(*) AS total,
-      sum(deleted_at IS NULL) AS active, sum(deleted_at IS NOT NULL) AS excluded
+      COALESCE(sum(deleted_at IS NULL), 0) AS active, COALESCE(sum(deleted_at IS NOT NULL), 0) AS excluded
       FROM messages WHERE mailbox_id = ?`).get(mailboxId);
     const needingPrecision = db.prepare(`SELECT count(*) AS count FROM messages m
       LEFT JOIN precision_classifications pc ON pc.message_id = m.id
@@ -87,14 +88,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const { values } = parseArgs({ options: {
       'dry-run': { type: 'boolean' }, csv: { type: 'string' }, snapshot: { type: 'string' },
-      'expected-sha256': { type: 'string' }, 'mailbox-id': { type: 'string' }
+      'expected-sha256': { type: 'string' }, 'mailbox-id': { type: 'string' },
+      apply: { type: 'boolean' }, database: { type: 'string' }, backup: { type: 'string' },
+      confirm: { type: 'string' }, 'reclassify-confirm': { type: 'string' }
     } });
-    if (!values['dry-run'] || !values.csv || !values.snapshot) throw new Error('Dry-run arguments required.');
-    console.log(JSON.stringify(dryRunProjectImport({ csv: values.csv, snapshot: values.snapshot,
-      expectedSha256: values['expected-sha256'], mailboxId: Number(values['mailbox-id']) }), null, 2));
-  } catch {
+    if (Boolean(values['dry-run']) === Boolean(values.apply) || !values.csv) throw new Error('Exactly one mode required.');
+    if (values.apply) {
+      if (!values.database || !values.backup || values.snapshot || values['expected-sha256']) throw new Error('Apply arguments required.');
+      console.log(JSON.stringify(await applyProjectImport({ csv: values.csv, database: values.database,
+        mailboxId: Number(values['mailbox-id']), confirm: values.confirm,
+        reclassifyConfirm: values['reclassify-confirm'], backupPath: values.backup }), null, 2));
+    } else {
+      if (!values.snapshot || values.database || values.backup || values.confirm || values['reclassify-confirm']) throw new Error('Dry-run arguments required.');
+      console.log(JSON.stringify(dryRunProjectImport({ csv: values.csv, snapshot: values.snapshot,
+        expectedSha256: values['expected-sha256'], mailboxId: Number(values['mailbox-id']) }), null, 2));
+    }
+  } catch (error) {
     // Never print database errors or mail-bearing values to logs.
-    console.error('Project import preview failed; check approved inputs, digest, permissions and CSV validation.');
+    console.error(error?.code === 'PROJECT_IMPORT_CONFIRMATION_REJECTED'
+      ? `Project import confirmation rejected: ${error.fields.join(',')}` : 'Project import failed.');
     process.exitCode = 1;
   }
 }

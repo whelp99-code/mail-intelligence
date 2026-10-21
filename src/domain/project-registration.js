@@ -41,3 +41,26 @@ export function planProjectRegistration(input, projects) {
     && JSON.stringify(project.aliases) === JSON.stringify(existing.aliases);
   return { project, existing, action: unchanged ? 'unchanged' : updating ? 'update' : 'create' };
 }
+
+export function planProjectBatch(rows, existing = []) {
+  const inputs = rows.map(prepareProject);
+  const keys = new Set();
+  for (const project of inputs) {
+    if (project.createdBy !== 'import') throw new Error('Batch projects require import ownership.');
+    if (keys.has(project.projectKey)) throw new Error('Duplicate import key.');
+    keys.add(project.projectKey);
+  }
+  const byKey = new Map(existing.map((project) => [project.projectKey, project]));
+  let nextId = Math.max(0, ...existing.map((project) => project.id)) + 1;
+  const newIds = new Map(inputs.filter((project) => !byKey.has(project.projectKey))
+    .map((project) => project.projectKey).sort().map((key) => [key, nextId++]));
+  const projects = [
+    ...existing.filter((project) => !keys.has(project.projectKey)),
+    ...inputs.map((project) => ({ ...project, id: byKey.get(project.projectKey)?.id ?? newIds.get(project.projectKey) })),
+  ];
+  const plans = inputs.map((project) => planProjectRegistration(project, [
+    ...(byKey.has(project.projectKey) ? [byKey.get(project.projectKey)] : []),
+    ...projects.filter((other) => other.projectKey !== project.projectKey),
+  ]));
+  return { plans, projects };
+}
