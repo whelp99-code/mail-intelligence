@@ -55,24 +55,26 @@ function protectedTables(db) {
 const projectColumns = new Set(['primary_project_id', 'project_resolution', 'project_candidate_json']);
 const nonProjectColumns = (row) => Object.fromEntries(Object.entries(row).filter(([key]) => !projectColumns.has(key)));
 
-for (const conflict of [false, true]) test(`review followup: confirmed status survives import with conflict=${conflict}`, async (t) => {
-  const rows = [project(), ...(conflict ? [project({ projectKey: otherKey, name: 'Other project', aliases: ['material request'] })] : [])];
-  const f = fixture(t, rows); f.add('confirmed'); f.add('normal', 'Alpha unique only');
+for (const reviewStatus of ['confirmed', 'corrected']) for (const match of ['unique', 'multiple', 'none']) test(`review followup: protected ${reviewStatus} status survives ${match} project matches`, async (t) => {
+  const rows = [project(), project({ projectKey: otherKey, name: 'Other project', aliases: ['material request'] })];
+  const subjects = { unique: 'Alpha unique only', multiple: 'Alpha unique material request', none: 'Hello' };
+  const f = fixture(t, rows); f.add('protected', subjects[match]); f.add('normal', 'Alpha unique only');
   const service = new PrecisionIntelligenceService({ store: f.store });
-  const initial = service.classifyOne(f.mailbox.mailbox_key, 'confirmed').classification;
-  f.store.savePrecisionClassification(f.mailbox.id, 'confirmed', { ...initial, reviewStatus: 'confirmed',
+  const initial = service.classifyOne(f.mailbox.mailbox_key, 'protected').classification;
+  f.store.savePrecisionClassification(f.mailbox.id, 'protected', { ...initial, reviewStatus,
+    correctedAt: reviewStatus === 'corrected' ? '2026-10-01T00:00:00Z' : null,
     provider: 'notion-worklink', priority: 'critical' });
   service.classifyOne(f.mailbox.mailbox_key, 'normal');
   const before = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
   f.store.close();
   const result = await applyProjectImport(f.options(2));
-  assert.equal(result.reclassification.changed, 2);
+  assert.equal(result.reclassification.changed, match === 'none' ? 1 : 2);
   const check = new SQLiteMailStore({ databasePath: f.database, initialize: false });
   t.after(() => check.close());
   const after = check.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
   assert.deepEqual(after.map(nonProjectColumns), before.map(nonProjectColumns));
-  assert.equal(after[0].review_status, 'confirmed');
-  assert.equal(after[0].project_resolution, conflict ? 'review_required' : 'confirmed');
+  assert.equal(after[0].review_status, reviewStatus);
+  assert.equal(after[0].project_resolution, { unique: 'confirmed', multiple: 'review_required', none: 'unassigned' }[match]);
   assert.equal(after[1].project_resolution, 'confirmed');
   const changes = check.db.prepare('SELECT total_changes() AS n').get().n;
   assert.equal(reclassifyProjectAnalysis(check, f.mailbox, 2).changed, 0);
