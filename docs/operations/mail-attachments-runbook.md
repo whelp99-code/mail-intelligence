@@ -35,3 +35,11 @@ Do not put tokens, `.env`, or the operational SQLite file into a development wor
 ## Verification already run in development
 
 See `artifacts/attachments-acceptance/README.md` for synthetic commands. Live Outlook, live Google OAuth, browser operator UI, deploy, and real-mail receive remain `NOT_RUN` until explicitly approved.
+
+### Isolated attachment browser gate
+
+Run `npm run verify:attachments:ui` from a disposable development checkout. It uses synthetic mail, a temporary browser profile, loopback-only app/DevTools listeners, and disabled send/actions; it is not a deployment or live-mail check.
+
+Install Fontconfig (`fc-match`) and system **Noto Sans CJK KR** fonts first. The gate scans `/usr/share/fonts` recursively (including Arch's `noto-cjk` and Debian's Noto directories), never user font directories/configuration, and fails before browser startup if the Korean font is unavailable. Browser font errors or a Skia fatal error after the DevTools readiness line are not evidence of a Host/Origin rejection.
+
+`MAIL_INTELLIGENCE_CHROME=/absolute/path/to/browser npm run verify:attachments:ui` selects an explicit executable (including Chromium). Without it, discovery tries executable `google-chrome`, then `google-chrome-stable` on `PATH`, then `/opt/google/chrome/chrome`. An invalid explicit override fails rather than silently selecting another browser. No `remote-allow-origins` override is needed. Successful runs still enforce Korean glyph rendering, file input, scanner errors, download security headers, keyboard navigation, and mobile layout assertions; screenshots are written under `artifacts/attachments-acceptance` in that checkout.
