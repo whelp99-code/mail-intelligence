@@ -40,7 +40,9 @@ RECLASSIFY-PROJECTS mailbox=<id> count=<현재 실제 대상메일수>
 - 대상수는 현재 mailbox의 `deleted_at IS NULL` 고유 행수로 계산한다. 과거 857 같은 수를 강제하지 않는다. 백업 중 대상수 또는 DB/CSV가 바뀌면 적용 전에 거부한다.
 - 적용 전 **SQLite backup API**로 새 백업을 생성하고 `integrity_check`와 `foreign_key_check`를 통과해야 한다. 백업 디렉터리는 0700이며 파일은 0600, 기존 파일 덮어쓰기는 금지다. 백업 실패/무결성 실패 시 중단한다. 적용 직전 백업 경로·해시만 먼저 출력하고, 성공 후 프로젝트 생성/수정/변화없음 및 현재 재평가 건수를 출력한다.
 - maintenance store는 기존 스키마만 열며 WAL 설정·마이그레이션·mailbox upsert를 하지 않는다. 현재 migration 이름/체크섬이 소스와 다르면 거부한다. 프로젝트 등록과 재평가는 하나의 write transaction으로 묶여 실패 시 함께 rollback된다.
-- 안전 재평가는 기존 평가 로직의 AI 유지 → 명시적 보정 우선 → 학습 정책 순서를 유지한다. 보존된 AI의 업무 필드·provider/model을 덮지 않고 registry 기반 프로젝트 해석/근거만 갱신한 뒤 기존 보정·학습 정책을 적용한다. precision 분류/이력만 저장하며 초안·원본 메일 읽음/상태·analysis 원문·외부 작업을 변경하지 않는다. 본문·제목·주소·메일별 결과를 출력하지 않는다.
+- 안전 재평가는 전체 AI/rules 분류를 재실행하지 않고 `resolveProject`로 프로젝트만 평가한다. 명시적 보정 우선 → 학습 정책의 **프로젝트 필드만** 적용하며 보정/정책 원본 없이 남은 user-corrected/hybrid 프로젝트 선택은 보존한다. 기존 분류가 없는 메일은 신규 업무 분류를 만들지 않고 unchanged로 집계한다(프로젝트 상태 집계는 순수 평가 결과).
+- 기존 precision 행의 갱신 허용 열은 `primary_project_id`, `project_resolution`, `project_candidate_json`뿐이다. `review_status`는 프로젝트 충돌로 검토가 필요할 때만 review_required로 올리며 corrected는 보존한다. 기존 검토 상태를 자동 해제하지 않는다. source, corrected 필드, work-link provenance, priority, evidence/confidence, review_reasons, fingerprint와 모든 시간 필드 등 **나머지 모든 열은 그대로** 둔다. 변경 전후 프로젝트 값은 `precision.project_reclassified` audit에 남기고 동일 재실행은 audit도 추가하지 않는다. 기존 전체분류 fingerprint/이력은 재작성하지 않는다.
+- 초안·원본 메일 읽음/상태·analysis 원문·외부 작업은 변경하지 않으며 본문·제목·주소·메일별 결과를 출력하지 않는다. 확인 문자열·분모 drift·백업 검증 관문은 그대로 적용한다.
 
 ## 현재 버전
 

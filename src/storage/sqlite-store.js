@@ -1461,6 +1461,41 @@ export class SQLiteMailStore {
     return Object.fromEntries(rows.map((row) => [row.graph_id, precisionRow(row)]));
   }
 
+  updatePrecisionProjectResolution(mailboxId, graphId, project) {
+    const message = this.getMessageRecord(mailboxId, graphId);
+    if (!message) throw new Error(`Cannot update project resolution for unknown message: ${graphId}.`);
+    if (!PRECISION_PROJECT_RESOLUTIONS.has(project.projectResolution)) throw new Error('Invalid project resolution.');
+    if (!['auto', 'review_required', 'corrected'].includes(project.reviewStatus)) throw new Error('Invalid review status.');
+    if (project.primaryProjectId != null) {
+      const primary = this.getProject(mailboxId, project.primaryProjectId);
+      if (!primary || primary.status !== 'active') throw new Error('Primary project must reference an active project in the same mailbox.');
+    }
+    return this.transaction(() => {
+      const before = this.db.prepare(`
+        SELECT primary_project_id, project_resolution, project_candidate_json, review_status
+        FROM precision_classifications WHERE mailbox_id = ? AND message_id = ?
+      `).get(mailboxId, message.id);
+      // Project maintenance must not initialize or rerun work/AI classification.
+      if (!before) return false;
+      const after = { primary_project_id: project.primaryProjectId ?? null,
+        project_resolution: project.projectResolution, project_candidate_json: jsonText(project.projectCandidate, {}),
+        review_status: project.reviewStatus };
+      if (Object.keys(after).every((field) => before[field] === after[field])) return false;
+      const reviewChanged = before.review_status !== after.review_status;
+      const values = [after.primary_project_id, after.project_resolution, after.project_candidate_json];
+      if (reviewChanged) values.push(after.review_status);
+      this.db.prepare(`
+        UPDATE precision_classifications SET primary_project_id = ?, project_resolution = ?,
+          project_candidate_json = ? ${reviewChanged ? ', review_status = ?' : ''}
+        WHERE mailbox_id = ? AND message_id = ?
+      `).run(...values, mailboxId, message.id);
+      this.audit('precision.project_reclassified', {
+        entityType: 'message', entityId: graphId, payload: { mailboxId, before, after },
+      });
+      return true;
+    });
+  }
+
   savePrecisionClassification(mailboxId, graphId, classification) {
     const message = this.getMessageRecord(mailboxId, graphId);
     if (!message) throw new Error(`Cannot save precision classification for unknown message: ${graphId}.`);
