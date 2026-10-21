@@ -93,6 +93,7 @@ const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되
 const CONTROL_AUXILIARY_BASES = new Set(['확인', '생성', '처리']);
 const DEADLINE_CUE_PATTERN = /(?:까지|by\b|제출|납기|마감|회신)/i;
 const ABSOLUTE_DATE_PATTERN = /\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b|(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일|\b(\d{1,2})[-/.](\d{1,2})\b|(\d{1,2})월\s*(\d{1,2})일/;
+const KOREAN_TEMPORAL_TOKEN_PATTERN = /^(?:\d+(?:년|개월|월|주일|주|일|분기))+(?:까지|부터|동안|간|이내|전|후)?$/u;
 const SECURITY_TERM_PATTERN = /보안|security/i;
 const OUTAGE_PATTERN = /장애|중단|outage/i;
 const REMOTE_SESSION_GROUP_PATTERN = /원격|remote|vpn|접속|session|access/i;
@@ -202,7 +203,7 @@ export function dueRangeFor(filter, nowValue = new Date()) {
   return {};
 }
 
-function absoluteDueRangeFor(query, nowValue) {
+function absoluteDueFor(query, nowValue) {
   const datePattern = new RegExp(ABSOLUTE_DATE_PATTERN.source, 'g');
   const isClauseBoundary = (index) => {
     const character = query[index];
@@ -210,6 +211,7 @@ function absoluteDueRangeFor(query, nowValue) {
     return character === '.' && !/\d/.test(query[index - 1] || '') && !/\d/.test(query[index + 1] || '');
   };
   const candidates = [];
+  let invalidDate = false;
   let match;
   while ((match = datePattern.exec(query))) {
     let clauseStart = match.index;
@@ -224,10 +226,14 @@ function absoluteDueRangeFor(query, nowValue) {
     const month = Number(match[2] || match[5] || match[7] || match[9]);
     const day = Number(match[3] || match[6] || match[8] || match[10]);
     const candidate = new Date(Date.UTC(year, month - 1, day));
-    if (!month || !day || candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) continue;
+    if (!month || !day || candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) {
+      invalidDate = true;
+      continue;
+    }
     const dateOffset = match.index + (match[0].length / 2);
     candidates.push({
       candidate,
+      expression: match[0] + (query.slice(datePattern.lastIndex).match(/^\s*까지/u)?.[0] || ''),
       distance: Math.min(...cueOffsets.map((cueOffset) => Math.abs(cueOffset - dateOffset))),
       index: match.index,
     });
@@ -236,9 +242,17 @@ function absoluteDueRangeFor(query, nowValue) {
   if (candidates.length) {
     const from = new Date(candidates[0].candidate.getTime() - (9 * 60 * 60 * 1000));
     const before = new Date(from.getTime() + (24 * 60 * 60 * 1000));
-    return { from: from.toISOString(), before: before.toISOString(), requiresDue: true };
+    return {
+      range: { from: from.toISOString(), before: before.toISOString(), requiresDue: true },
+      expression: candidates[0].expression,
+    };
   }
-  return {};
+  return { range: {}, invalidDate };
+}
+
+function isTemporalToken(token) {
+  return KOREAN_TEMPORAL_TOKEN_PATTERN.test(token)
+    || token.match(ABSOLUTE_DATE_PATTERN)?.[0] === token;
 }
 
 function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
@@ -399,8 +413,13 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const normalizedDue = unique(dueFilters);
   const dueFilter = normalizedDue[0] || '';
   const dueRange = dueRangeFor(dueFilter, now);
-  const absoluteDueRange = absoluteDueRangeFor(query, now);
+  const absoluteDue = absoluteDueFor(query, now);
+  const absoluteDueRange = absoluteDue.range;
   const effectiveDueRange = absoluteDueRange.from ? absoluteDueRange : dueRange;
+  const questionDecomposed = query.split(/\s+/).length > MAX_DECOMPOSED_SEARCH_TOKENS;
+  // Only consume the selected, validated date. Unparsed periods remain lexical
+  // evidence rather than silently losing their temporal meaning.
+  if (questionDecomposed && absoluteDue.expression) residual = residual.replace(absoluteDue.expression, ' ');
   const residualStopWords = new Set([
     '메일', '찾아', '보여', '알려', '목록', '관련', '것', '건', '중',
     '에서', '대한', '할', '해야', '처리할', 'the', 'mail', 'email', 'show', 'find',
@@ -420,7 +439,6 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const incidentExpansion = lexicalIncidentOnly
     ? INCIDENT_LEXICAL_EXPANSIONS[query.toLowerCase()] || [query]
     : [];
-  const questionDecomposed = query.split(/\s+/).length > MAX_DECOMPOSED_SEARCH_TOKENS;
   const rawLexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
   const lexicalTokens = questionDecomposed ? decomposeQuestionTokens(rawLexicalTokens) : rawLexicalTokens;
   const residualText = lexicalTokens.join(' ');
@@ -446,14 +464,17 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   if (questionDecomposed) {
     // Never truncate meaningful terms to fit the budget, or turn an empty question
     // into a mailbox-wide query. Structured and security filters use the original.
-    const refused = lexicalTokens.length > MAX_DECOMPOSED_SEARCH_TOKENS
+    const refused = absoluteDue.invalidDate || lexicalTokens.length > MAX_DECOMPOSED_SEARCH_TOKENS
       || (lexicalTokens.length === 0 && !project?.value && recognized.length === 0);
     if (refused) {
       searchPlan.fallbackPolicy.allowed = false;
       searchPlan.fallbackPolicy.failClosed = true;
     }
+    // An unparsed period remains required lexical evidence, not an optional
+    // coverage term and not an invented metadata range.
+    if (lexicalTokens.some(isTemporalToken)) searchPlan.fallbackPolicy.allowed = false;
     for (const token of lexicalTokens) {
-      if (/[\p{L}]/u.test(token) && /\d/.test(token)) {
+      if (/\d/.test(token) && !isTemporalToken(token)) {
         searchPlan.hardAnchors.push({ kind: 'identifier', value: token });
       }
     }

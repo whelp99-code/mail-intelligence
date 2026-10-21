@@ -156,6 +156,46 @@ test('decomposition retains unknown business words and identifier particles with
   assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === 'ZX-2048'));
 });
 
+test('temporal units are not identifiers and unparsed periods keep their lexical meaning', () => {
+  for (const token of ['2026년', '9월', '10일', '10일까지', '2주', '1주일', '3분기', '2개월', '2026년9월10일', '2026년3분기', '1년2개월', '1개월2주3일', '2주동안', '3분기부터', '3분기까지', '2주이내', '3일전', '3일후', '2개월간', '2026-09-10']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest information about ${token} alpha beta`);
+    assert.ok(parsed.searchPlan.softTokens.includes(token), token);
+    assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false, token);
+    assert.deepEqual(parsed.filters.dueRange, {}, token);
+    assert.equal(parsed.searchPlan.fallbackPolicy.allowed, false, token);
+  }
+  for (const token of ['EPO2609-164', '49725', 'A2026년', '2026년형', '9월호', '3분기보고서', 'EPO-2026-09-10']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest information about ${token} alpha beta`);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === token), token);
+  }
+});
+
+test('selected Korean due-date spans become metadata filters, not lexical requirements', () => {
+  for (const date of ['2026년 9월 10일까지', '2026년9월10일까지', '9월 10일까지', '2026-09-10까지', '2026/09/10까지', '2026.09.10까지']) {
+    const parsed = parseIntelligentQuery(`지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 ${date} alpha beta`, { now });
+    assert.deepEqual(parsed.searchPlan.softTokens, ['alpha', 'beta'], date);
+    assert.deepEqual(parsed.filters.dueRange, { from: '2026-09-09T15:00:00.000Z', before: '2026-09-10T15:00:00.000Z', requiresDue: true }, date);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), date);
+    assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false, date);
+  }
+  const invalid = parseIntelligentQuery('지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년 2월 30일까지 alpha beta', { now });
+  assert.deepEqual(invalid.filters.dueRange, {});
+  assert.ok(invalid.searchPlan.softTokens.includes('30일까지'));
+  assert.equal(invalid.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), false);
+  assert.equal(invalid.searchPlan.fallbackPolicy.failClosed, true);
+  const separateDates = parseIntelligentQuery('지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년9월1일; 2026년9월10일까지 alpha beta', { now });
+  assert.ok(separateDates.searchPlan.softTokens.includes('2026년9월1일'));
+  assert.equal(separateDates.filters.dueRange.from, '2026-09-09T15:00:00.000Z');
+  const ten = 'EPO2609-164 49725 alpha beta gamma delta epsilon zeta eta theta';
+  const atBudget = parseIntelligentQuery(`지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년 9월 10일까지 ${ten}`, { now });
+  assert.equal(atBudget.searchPlan.softTokens.length, 10);
+  assert.equal(atBudget.searchPlan.fallbackPolicy.failClosed, false);
+  const overBudget = parseIntelligentQuery(`${atBudget.originalQuery} iota`, { now });
+  assert.equal(overBudget.searchPlan.softTokens.length, 11);
+  assert.equal(overBudget.searchPlan.fallbackPolicy.failClosed, true);
+  assert.equal(overBudget.searchPlan.fallbackPolicy.allowed, false);
+});
+
 test('스마트 뷰는 Outlook 폴더 변경 없이 안정적인 업무 관점을 제공한다', () => {
   const views = intelligentSmartViews(now);
   assert.ok(views.length >= 8);

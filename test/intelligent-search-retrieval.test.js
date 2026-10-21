@@ -295,3 +295,60 @@ test('long empty, over-budget and injection queries abstain; original hard guard
   assert.deepEqual(scoped.results.map((item) => item.message.id), ['inbox-action']);
   assert.ok(scoped.results[0].matchedAnchorKinds.includes('project'));
 });
+
+test('long Korean date questions retrieve due metadata without a date in message text', async (t) => {
+  const service = await seedSearchFixture(t);
+  for (const date of ['2026년 9월 10일까지', '2026년9월10일까지', '9월 10일까지', '2026-09-10까지']) {
+    const response = service.search('me@example.test', `지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 ${date} alpha beta`, { now: new Date('2026-09-04T00:00:00Z') });
+    assert.deepEqual(response.results.map((item) => item.message.id), ['due-action'], date);
+    assert.ok(response.results[0].matchedAnchorKinds.includes('due_date'), date);
+    assert.equal(response.results[0].matchedAnchorKinds.includes('identifier'), false, date);
+  }
+  for (const date of ['2026년 2월 30일까지', '2026년 13월 10일까지', '2026년2월30일까지', '2026년13월10일까지', '2026-02-30까지', '2026년 9월 0일까지']) {
+    const response = service.search('me@example.test', `지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 ${date} alpha beta`);
+    assert.equal(response.reason, 'no_safe_result', date);
+  }
+  for (const period of ['2주까지', '3분기까지', '2026년3분기', '2개월간']) {
+    const response = service.search('me@example.test', `지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 ${period} alpha beta`);
+    assert.equal(response.reason, 'no_safe_result', period);
+    assert.equal(response.fallbackApplied, false, period);
+    assert.ok(response.parsedQuery.searchPlan.softTokens.includes(period), period);
+  }
+  const mailbox = service.ensureMailbox('me@example.test');
+  const folder = service.store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  service.store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+    message: message('literal-period', 'alpha beta', '3분기까지 alpha beta', 'inbox') });
+  service.store.savePrecisionClassification(mailbox.id, 'literal-period', classification());
+  const literal = service.search('me@example.test', '지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 3분기까지 alpha beta');
+  assert.deepEqual(literal.results.map((item) => item.message.id), ['literal-period']);
+  assert.equal(literal.fallbackApplied, false);
+});
+
+test('long dated order questions require both order and numeric identifiers inside the mailbox', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const other = store.ensureMailbox({ key: 'other@example.test', address: 'other@example.test' });
+  for (const [target, id, body, dueAt, folderName] of [
+    [mailbox, 'right', 'EPO2609-164 49725 alpha beta', '2026-09-10T03:00:00Z', 'inbox'],
+    [mailbox, 'no-order', '49725 alpha beta', '2026-09-10T03:00:00Z', 'inbox'],
+    [mailbox, 'no-number', 'EPO2609-164 alpha beta', '2026-09-10T03:00:00Z', 'inbox'],
+    [mailbox, 'wrong-day', 'EPO2609-164 49725 alpha beta', '2026-09-11T03:00:00Z', 'inbox'],
+    [mailbox, 'junk', 'EPO2609-164 49725 alpha beta', '2026-09-10T03:00:00Z', 'junkemail'],
+    [mailbox, 'deleted', 'EPO2609-164 49725 alpha beta', '2026-09-10T03:00:00Z', 'deleteditems'],
+    [other, 'other-mailbox', 'EPO2609-164 49725 alpha beta', '2026-09-10T03:00:00Z', 'inbox'],
+  ]) {
+    const folder = store.ensureFolder({ mailboxId: target.id, graphId: folderName, wellKnownName: folderName, displayName: folderName });
+    store.upsertNormalizedMessage({ mailboxId: target.id, folderId: folder.id, message: message(id, 'alpha beta', body, folderName) });
+    store.savePrecisionClassification(target.id, id, classification({ dueAt }));
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  const prefix = '지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년 9월 10일까지';
+  const response = service.search('me@example.test', `${prefix} EPO2609-164 49725 alpha beta gamma`);
+  assert.equal(response.fallbackApplied, true);
+  assert.deepEqual(response.results.map((item) => item.message.id), ['right']);
+  assert.deepEqual(response.parsedQuery.searchPlan.hardAnchors.filter((item) => item.kind === 'identifier').map((item) => item.value), ['EPO2609-164', '49725']);
+  const overBudget = service.search('me@example.test', `${prefix} EPO2609-164 49725 alpha beta gamma delta epsilon zeta eta theta iota`);
+  assert.equal(overBudget.parsedQuery.searchPlan.softTokens.length, 11);
+  assert.equal(overBudget.reason, 'no_safe_result');
+});
