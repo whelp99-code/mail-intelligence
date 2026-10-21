@@ -19,16 +19,17 @@ import {
   publishCompanyMemoryDonor,
 } from './company-memory-donor.js';
 
-const REQUIRED_ENV = [
+export const companyMemoryDonorNames = [
   'COMPANY_MEMORY_SB_COMPANY',
   'COMPANY_MEMORY_SB_COMPANY_CONFIG',
   'COMPANY_MEMORY_SIGNING_KEY_FILE',
   'COMPANY_MEMORY_AUTHORITY_FILE',
 ];
 
-const REQUIRED_SET = new Set(REQUIRED_ENV);
+const REQUIRED_SET = new Set(companyMemoryDonorNames);
 
-export function loadCompanyMemoryDonorBind(env) {
+/** Shared syntax contract only: never opens command, config, authority or key files. */
+export function parseCompanyMemoryDonorEnvironment(env) {
   const companyKeys = Object.keys(env).filter((key) => key.startsWith('COMPANY_MEMORY_'));
   if (companyKeys.length === 0) {
     return { enabled: false };
@@ -49,10 +50,6 @@ export function loadCompanyMemoryDonorBind(env) {
     || !isAbsolute(configPath)
     || !isAbsolute(signingKeyFile)
     || !isAbsolute(authorityFile)
-    || !existsSync(command)
-    || !existsSync(configPath)
-    || !existsSync(signingKeyFile)
-    || !existsSync(authorityFile)
   ) {
     throw incomplete('donor command or key files are missing');
   }
@@ -61,6 +58,16 @@ export function loadCompanyMemoryDonorBind(env) {
     throw new Error('COMPANY_MEMORY_COMMAND_INVALID: command must be an absolute sb-company path');
   }
 
+  return { enabled: true, command, configPath, signingKeyFile, authorityFile };
+}
+
+export function loadCompanyMemoryDonorBind(env) {
+  const bind = parseCompanyMemoryDonorEnvironment(env);
+  if (!bind.enabled) return bind;
+  const { command, configPath, signingKeyFile, authorityFile } = bind;
+  if (![command, configPath, signingKeyFile, authorityFile].every(file => existsSync(file))) {
+    throw incomplete('donor command or key files are missing');
+  }
   const authority = loadAuthority(authorityFile);
   loadSigner(signingKeyFile, authority.keyId);
 

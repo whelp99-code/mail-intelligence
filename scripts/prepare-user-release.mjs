@@ -31,12 +31,14 @@ export async function prepareUserRelease({ codeRoot, dataDir, commit, environmen
   assert(original === environmentFiles[0].text, 'Operational environment changed before preparation');
   const overrides = releaseEnvironment(dataDir, commit);
   const retained = environmentFileRecords(original)
-    .filter(record => !record.donor && !Object.hasOwn(overrides, record.key))
+    .filter(record => !Object.hasOwn(overrides, record.key))
     .map(record => record.raw).join('');
-  const updated = retained + (retained.endsWith('\n') ? '' : '\n')
-    + Object.entries(overrides).map(([key, value]) => `${key}=${value}\n`).join('');
+  // Put rewritten keys first so even a final native record without a newline
+  // stays byte-for-byte intact. All prior records for these keys were removed.
+  const updated = Object.entries(overrides).map(([key, value]) => `${key}=${value}\n`).join('') + retained;
   const preparedFiles = environmentFiles.map((file, index) => index === 0 ? { ...file, text: updated } : file);
-  assertReleaseEnvironment(applyEnvironmentFiles({}, preparedFiles, dataDir), { dataDir, commit });
+  const preparedEnvironment = applyEnvironmentFiles({}, preparedFiles, dataDir);
+  assertReleaseEnvironment(preparedEnvironment, { dataDir, commit });
   const template = await readFile(join(codeRoot, 'deploy/systemd/mail-intelligence.service'), 'utf8');
   const unit = template
     .replace(/^Documentation=.*$/m, `Documentation=file://${codeRoot}/docs/runbooks/UBUNTU-DEPLOYMENT.md`)
@@ -64,7 +66,8 @@ export async function prepareUserRelease({ codeRoot, dataDir, commit, environmen
     'Environment=HOME=/home/jm',
     'Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/jm/.local/bin:/home/jm/.grok/bin',
     'UnsetEnvironment=',
-    `UnsetEnvironment=${[...new Set([...donorNames, ...managerDonorNames(managerEnvironment)])].join(' ')}`,
+    `UnsetEnvironment=${[...new Set([...donorNames, ...managerDonorNames(managerEnvironment)])]
+      .filter(name => !Object.hasOwn(preparedEnvironment, name)).join(' ')}`,
     'ReadWritePaths=',
     `ReadWritePaths=${dataDir} -/home/jm/.codex -/home/jm/.grok`,
     '',

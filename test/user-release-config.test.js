@@ -38,7 +38,6 @@ async function fixture(t) {
     'MAIL_INTELLIGENCE_CWOS_API_KEY=synthetic-cwos-secret',
     'MAIL_INTELLIGENCE_ALLOW_SEND=1',
     'MAIL_INTELLIGENCE_ALLOW_SEND=1',
-    'COMPANY_MEMORY_AUTHORITY_FILE=/synthetic/private/authority',
   ].join('\n') + '\n';
   await writeFile(join(dataDir, 'runtime.env'), original, { mode: 0o600 });
   await writeFile(join(dataDir, '.mail-intelligence-access-key'), 'synthetic-secret-key', { mode: 0o600 });
@@ -111,7 +110,7 @@ test('release identity or byte mismatch refuses before changing existing configu
   assert.equal(await readFile(join(input.dataDir, 'runtime.env'), 'utf8'), input.original);
 });
 
-test('release setup removes whitespace, exported and quoted donor assignments', async t => {
+test('release setup rejects unknown, exported and quoted donor assignments without deleting records', async t => {
   const input = await fixture(t);
   const adversarial = [
     '  COMPANY_MEMORY_AUTHORITY_FILE="/synthetic/authority"',
@@ -124,12 +123,8 @@ test('release setup removes whitespace, exported and quoted donor assignments', 
   ].join('\n') + '\n';
   await writeFile(join(input.dataDir, 'runtime.env'), input.original + adversarial, { mode: 0o600 });
   input.environmentFiles[0].text = input.original + adversarial;
-  const unitPath = await prepareUserRelease(input);
-  const prepared = await readFile(join(input.codeRoot, '.deployment/runtime.env'), 'utf8');
-  assert.equal(/COMPANY_MEMORY_[A-Z_]+\s*["']?=/.test(prepared), false);
-  assert(!prepared.includes('continued-pin'));
+  await assert.rejects(prepareUserRelease(input), /donor/i);
   assert.equal(await readFile(join(input.dataDir, 'runtime.env'), 'utf8'), input.original + adversarial);
-  assert(unitPath);
 });
 
 test('native EnvironmentFile records preserve quoted secrets and escaped whitespace as one record', () => {
@@ -452,5 +447,79 @@ test('preparation preserves native send records byte for byte and never fills an
     if (!sendRecords) await assert.rejects(prepareUserRelease({ ...input,
       environmentFiles: environmentFiles.map((file, index) => index === 1 ? { ...file, text: '' } : file),
     }), /ALLOW_SEND/);
+  }
+});
+
+test('donor file chain and PID share boot syntax without opening donor files', () => {
+  const context = boundaryFixture(false);
+  const donor = Object.fromEntries(donorNames.map((name, index) => [name,
+    index === 0 ? '/nonexistent/bin/sb-company' : `/nonexistent/private/file-${index}`]));
+  const encode = env => Object.entries(env).map(([key, value]) => `${key}=${JSON.stringify(value)}\n`).join('');
+  const properties = context.properties.replace(/^UnsetEnvironment=.*$/m, 'UnsetEnvironment=');
+  const environment = { ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: '1', ...donor };
+  const check = (binding, valid, suffix = '') => {
+    const input = { ...context, properties, environmentFiles: context.environmentFiles.map((file, index) => ({ ...file,
+      text: index === 0 ? encode({ ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: '1', ...binding }) : index === 1 ? suffix : '',
+    })) };
+    for (const verify of [assertEffectiveRelease, assertSafeRollback]) {
+      if (valid) assert.doesNotThrow(() => verify(input));
+      else assert.throws(() => verify(input), /donor|COMPANY_MEMORY/i);
+    }
+    if (!suffix) {
+      const env = { ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: '1', ...binding };
+      if (valid) assert.doesNotThrow(() => assertReleaseEnvironment(env, context));
+      else assert.throws(() => assertReleaseEnvironment(env, context), /donor|COMPANY_MEMORY/i);
+    }
+  };
+  check(donor, true);
+  for (const name of donorNames) {
+    const partial = { ...donor }; delete partial[name];
+    check(partial, false);
+    for (const value of ['', ' ', 'relative/path']) check({ ...donor, [name]: value }, false);
+  }
+  check({ ...donor, COMPANY_MEMORY_UNKNOWN: '/nonexistent/unknown' }, false);
+  check({ ...donor, COMPANY_MEMORY_SB_COMPANY: '/nonexistent/bin/sb' }, false);
+  // Later native records win; path validation applies to the merged result.
+  check({ ...donor, COMPANY_MEMORY_AUTHORITY_FILE: 'relative' }, true,
+    'COMPANY_MEMORY_AUTHORITY_FILE=/nonexistent/last-authority\n');
+  check(donor, false, 'COMPANY_MEMORY_AUTHORITY_FILE=relative\n');
+  // Partial individual files are accepted when their merged chain is complete.
+  const files = context.environmentFiles.map((file, index) => ({ ...file,
+    text: index === 0 ? encode(environment) : '',
+  }));
+  files[0].text = encode({ ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: '1', COMPANY_MEMORY_SB_COMPANY: donor.COMPANY_MEMORY_SB_COMPANY });
+  files[2].text = encode(Object.fromEntries(Object.entries(donor).slice(1)));
+  assert.doesNotThrow(() => assertSafeRollback({ ...context, properties, environmentFiles: files, managerEnvironment: 'COMPANY_MEMORY_SB_COMPANY=/inherited/bin/sb' }));
+  for (const name of donorNames) {
+    assert.throws(() => assertSafeRollback({ ...context, properties: properties.replace('UnsetEnvironment=', `UnsetEnvironment=${name}`), environmentFiles: files }), /donor/i);
+  }
+});
+
+test('prepare and commit preserve every donor native record including an unterminated last record', async t => {
+  const input = await fixture(t);
+  for (const ending of ['', '\n', '\r\n']) {
+    const records = '  COMPANY_MEMORY_SB_COMPANY = "/nonexistent/bin/sb-company"\r\n'
+      + 'COMPANY_MEMORY_SB_COMPANY_CONFIG=\'/nonexistent/config\'\n'
+      + 'COMPANY_MEMORY_SIGNING_KEY_FILE=/nonexistent/old-key\n'
+      + 'COMPANY_MEMORY_SIGNING_KEY_FILE="/nonexistent/\\\nkey"\n'
+      + 'COMPANY_MEMORY_AUTHORITY_FILE=\'/nonexistent/authority\'' + ending;
+    const original = input.original + records;
+    await writeFile(join(input.dataDir, 'runtime.env'), original);
+    const environmentFiles = input.environmentFiles.map((file, index) => ({ ...file,
+      text: index === 0 ? original : index === 2 ? 'COMPANY_MEMORY_AUTHORITY_FILE=/nonexistent/last-authority\n' : file.text,
+    }));
+    for (const file of environmentFiles.slice(1)) await writeFile(file.path, file.text);
+    await prepareUserRelease({ ...input, environmentFiles });
+    const prepared = await readFile(join(input.codeRoot, '.deployment/runtime.env'), 'utf8');
+    assert.equal(environmentFileRecords(prepared).filter(record => record.donor).map(record => record.raw).join(''), records);
+    const dropIn = await readFile(join(input.codeRoot, '.deployment/mail-intelligence.service.d', releaseDropInName), 'utf8');
+    assert(dropIn.includes('\nUnsetEnvironment=\n'));
+    const context = mergedFixture({ ...input, environmentFiles });
+    context.properties = context.properties.replace(/^UnsetEnvironment=.*$/m, 'UnsetEnvironment=');
+    await commitUserReleaseEnvironment(context);
+    assert.equal(await readFile(join(input.dataDir, 'runtime.env'), 'utf8'), prepared);
+    const effective = assertEffectiveRelease({ ...context, environmentFiles: environmentFiles.map((file, index) => index === 0 ? { ...file, text: prepared } : file) });
+    assert.equal(effective.COMPANY_MEMORY_AUTHORITY_FILE, '/nonexistent/last-authority');
+    for (const file of environmentFiles.slice(1)) assert.equal(await readFile(file.path, 'utf8'), file.text);
   }
 });

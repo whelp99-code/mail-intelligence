@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { prepareUserRelease, commitUserReleaseEnvironment } from './prepare-user-release.mjs';
-import { releaseDropInName, assertEffectiveRelease, assertReleaseEnvironment, assertSafeRollback, releaseEnvironmentFilePaths } from './user-release-boundary.mjs';
+import { releaseDropInName, donorNames, assertEffectiveRelease, assertReleaseEnvironment, assertSafeRollback, releaseEnvironmentFilePaths } from './user-release-boundary.mjs';
 
 const run = promisify(execFile);
 const service = 'mail-intelligence.service';
@@ -71,7 +71,7 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
       managerEnvironment: await systemctl('show-environment'),
     });
     runtimeChanged = true;
-    assertEffectiveRelease({
+    const expectedEnvironment = assertEffectiveRelease({
       ...context, properties: await effective(), environmentFiles: await readEnvironmentFiles(dataDir),
       managerEnvironment: await systemctl('show-environment'),
     });
@@ -105,6 +105,9 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
     const processEnvironment = Object.fromEntries((await readFile(`/proc/${pid}/environ`, 'utf8'))
       .split('\0').filter(Boolean).map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
     assertReleaseEnvironment(processEnvironment, context);
+    for (const name of donorNames) {
+      assert(processEnvironment[name] === expectedEnvironment[name], 'Loaded donor environment mismatch');
+    }
     const version = JSON.parse(await readFile(join(codeRoot, 'VERSION.json'), 'utf8'));
     assert(version.commit === commit && version.serverSha256 === digest(await readFile(join(codeRoot, 'server.mjs'))),
       'Loaded artifact bytes changed');
@@ -113,7 +116,7 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
       ...context, properties: await effective(), environmentFiles: await readEnvironmentFiles(dataDir),
       managerEnvironment: await systemctl('show-environment'),
     });
-    process.stdout.write(`MAIL_RELEASE_ACTIVE commit=${commit} pid=${pid} health=200 donor_assignments=0\n`);
+    process.stdout.write(`MAIL_RELEASE_ACTIVE commit=${commit} pid=${pid} health=200 donor_contract=valid\n`);
   } catch (error) {
     // Restore only our runtime rewrite and our owned drop-in. Trailing env files,
     // base/90/91/92 and other owners' drop-ins,
