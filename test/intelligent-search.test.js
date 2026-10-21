@@ -382,3 +382,52 @@ test('review 4342846527 applies the same Unicode word budget across punctuation'
   const code = parseIntelligentQuery('Could,you,please,find,the,most,recent,message,from,ZX-2048,in,my,mailbox?');
   assert.deepEqual(code.searchPlan.softTokens, ['ZX-2048']);
 });
+
+test('review 4342976943 ignores date-shaped substrings inside complete identifiers', () => {
+  for (const code of ['EPO-2026-13-10', 'EPO-2026-09-10', 'X_2026-13-10', '한글2026-13-10', '2026-13-10한글', 'EPO-2026-09-10-A']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest details about ${code} sent by Alice`);
+    assert.equal(parsed.searchPlan.fallbackPolicy.failClosed, false, code);
+    assert.deepEqual(parsed.filters.dueRange, {}, code);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === code), code);
+  }
+  const actual = parseIntelligentQuery('Please can you show me the latest details by 2026-09-10 for EPO-2026-13-10 alpha', { now });
+  assert.equal(actual.filters.dueRange.from, '2026-09-09T15:00:00.000Z');
+  const invalid = parseIntelligentQuery('Please can you show me the latest details by 2026-13-10 for EPO-2026-13-10 alpha', { now });
+  assert.equal(invalid.searchPlan.fallbackPolicy.failClosed, true);
+});
+
+test('review 4342976950 consumes only explicit result quantities as limit hints', () => {
+  for (const phrase of ['the 10 most recent', 'latest 10', 'most recent 10', 'top 10', '최근10건', '최신 10개']) {
+    const parsed = parseIntelligentQuery(`Could you please show me ${phrase} alpha beta gamma messages in my mailbox`);
+    assert.equal(parsed.limitHint, 10, phrase);
+    assert.equal(parsed.searchPlan.softTokens.includes('10'), false, phrase);
+    assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.value === '10'), false, phrase);
+    assert.ok(parsed.searchPlan.softTokens.includes('alpha'), phrase);
+  }
+  const number = parseIntelligentQuery('Could you please show me the latest ticket 10 alpha beta gamma in my mailbox');
+  assert.equal(number.limitHint, null);
+  assert.ok(number.searchPlan.hardAnchors.some((item) => item.value === '10'));
+  const mixed = parseIntelligentQuery('Please show the latest 2 invoice 49725 details with amount USD123456 by 2026-09-10');
+  assert.equal(mixed.limitHint, 2);
+  assert.deepEqual(mixed.searchPlan.hardAnchors.filter((item) => item.kind === 'identifier').map((item) => item.value), ['49725']);
+  const literal = parseIntelligentQuery('Please find the most recent messages for project:"Top 10" with ZX-2048');
+  assert.equal(literal.limitHint, null);
+  assert.equal(literal.filters.project, 'Top 10');
+  const ten = 'alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa';
+  assert.equal(parseIntelligentQuery(`top 2 ${ten}`).searchPlan.softTokens.length, 10);
+  assert.equal(parseIntelligentQuery(`top 2 ${ten},lambda`).searchPlan.fallbackPolicy.failClosed, true);
+});
+
+test('review 4342976956 normalizes every shared control particle without English suffix damage', () => {
+  for (const particle of ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로', '의', '로만', '으로도']) {
+    for (const query of [`ZX-2048${particle} 찾아주세요`, `Please can you show me the latest details about ZX-2048${particle} alpha beta`]) {
+      const parsed = parseIntelligentQuery(query);
+      assert.deepEqual(parsed.searchPlan.hardAnchors.filter((item) => item.kind === 'identifier').map((item) => item.value), ['ZX-2048'], query);
+    }
+  }
+  for (const code of ['ZX-2048Pro', 'ZX-2048Man', 'ZX-2048A', '모델123', 'RO2048', 'ZX-2048로봇']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest details about ${code} alpha beta`);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.value === code), code);
+  }
+  assert.ok(parseIntelligentQuery('ticket 7로 찾아주세요').searchPlan.hardAnchors.some((item) => item.value === '7'));
+});

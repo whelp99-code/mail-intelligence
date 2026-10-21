@@ -412,3 +412,86 @@ test('review 4342846517 exact Unicode identifier matching rejects prefix and sub
   bound.searchPlan.hardAnchors = [{ kind: 'identifier', value: 'ZX-2048\' OR 1=1 --' }];
   assert.deepEqual(store.intelligentSearch(mailbox.id, bound), []);
 });
+
+test('review 4342976934 matches indexed sender fields without text echoes or address prefixes', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const other = store.ensureMailbox({ key: 'other@example.test', address: 'other@example.test' });
+  for (const [target, id, email, name, folderName] of [
+    [mailbox, 'sender', 'alice123@example.com', 'Alice', 'inbox'],
+    [mailbox, 'local-prefix', 'alice1230@example.com', 'Alice', 'inbox'],
+    [mailbox, 'domain-prefix', 'alice123@example.company', 'Alice', 'inbox'],
+    [mailbox, 'local-extension', 'alice123.extra@example.com', 'Alice', 'inbox'],
+    [mailbox, 'name', 'person@example.test', '담당자77', 'inbox'],
+    [mailbox, 'name-prefix', 'person2@example.test', '담당자770', 'inbox'],
+    [mailbox, 'protected-address', 'invoice123로@example.com', 'Person', 'inbox'],
+    [other, 'other-mailbox', 'alice123@example.com', 'Alice', 'inbox'],
+    [mailbox, 'deleted', 'alice123@example.com', 'Alice', 'deleteditems'],
+    [mailbox, 'junk', 'alice123@example.com', 'Alice', 'junkemail'],
+  ]) {
+    const folder = store.ensureFolder({ mailboxId: target.id, graphId: folderName, wellKnownName: folderName, displayName: folderName });
+    store.upsertNormalizedMessage({ mailboxId: target.id, folderId: folder.id,
+      message: { ...message(id, 'Synthetic evidence', 'alpha beta', folderName), sender: { email, name } } });
+    store.savePrecisionClassification(target.id, id, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  const address = service.search('me@example.test', 'Could you please find the most recent message from alice123@example.com in my mailbox?');
+  assert.deepEqual(address.results.map((item) => item.message.id), ['sender']);
+  const byName = service.search('me@example.test', 'Could you please find the most recent message from 담당자77 in my mailbox?');
+  assert.deepEqual(byName.results.map((item) => item.message.id), ['name']);
+  const protectedAddress = service.search('me@example.test', 'Could you please find the most recent message from invoice123로@example.com in my mailbox?');
+  assert.deepEqual(protectedAddress.results.map((item) => item.message.id), ['protected-address']);
+  assert.deepEqual(protectedAddress.parsedQuery.filters.signals, []);
+});
+
+test('review 4342976950 applies result hints through existing validated caller limits only', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (let index = 0; index < 105; index += 1) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(`quantity-${index}`, 'Synthetic evidence', 'alpha beta gamma', 'inbox'), receivedAt: new Date(Date.UTC(2026, 8, 4, 0, index)).toISOString() } });
+    store.savePrecisionClassification(mailbox.id, `quantity-${index}`, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  const query = (quantity) => `Could you please show me ${quantity} alpha beta gamma messages in my mailbox`;
+  for (const phrase of ['the 10 most recent', 'latest 10', 'top 10', '최근10건']) {
+    assert.equal(service.search('me@example.test', query(phrase)).results.length, 10, phrase);
+  }
+  const latest = service.search('me@example.test', query('latest 2'));
+  assert.deepEqual(latest.results.map((item) => item.message.id), ['quantity-104', 'quantity-103']);
+  assert.equal(service.search('me@example.test', query('top 3'), { limit: 1 }).results.length, 1);
+  assert.equal(service.search('me@example.test', query('top 100000'), { limit: 1000 }).results.length, 100);
+  for (const value of ['0', '-1', '1.5']) {
+    assert.equal(service.search('me@example.test', query(`top ${value}`), { limit: 2 }).results.length, 2, value);
+  }
+  assert.equal(service.search('me@example.test', 'Could you please show me the latest 10 messages in my mailbox').reason, 'no_safe_result');
+  assert.equal(service.search('me@example.test', 'latest 10 emails').reason, 'no_safe_result');
+});
+
+test('review 4342976943 and 4342976956 preserve exact code retrieval and real due filters', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (const [id, code, dueAt] of [
+    ['code', 'EPO-2026-13-10', '2026-09-10T03:00:00Z'],
+    ['wrong-day', 'EPO-2026-13-10', '2026-09-11T03:00:00Z'],
+    ['particle', 'ZX-2048', ''],
+    ['longer', 'ZX-20480', ''],
+  ]) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id, message: message(id, 'Synthetic evidence', `${code} alpha sent Alice`, 'inbox') });
+    store.savePrecisionClassification(mailbox.id, id, classification({ dueAt }));
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  const codeQuery = 'Please can you show me the latest details about EPO-2026-13-10 alpha sent by Alice';
+  assert.deepEqual(service.search('me@example.test', codeQuery).results.map((item) => item.message.id).sort(), ['code', 'wrong-day']);
+  const dueQuery = 'Please can you show me the latest details by 2026-09-10 for EPO-2026-13-10 alpha';
+  assert.deepEqual(service.search('me@example.test', dueQuery).results.map((item) => item.message.id), ['code']);
+  for (const suffix of ['로', '만', '도', '으로도', '로만']) {
+    const response = service.search('me@example.test', `Please can you show me the latest details about ZX-2048${suffix} alpha`);
+    assert.deepEqual(response.results.map((item) => item.message.id), ['particle'], suffix);
+  }
+});
