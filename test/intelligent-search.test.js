@@ -156,6 +156,20 @@ test('decomposition retains unknown business words and identifier particles with
   assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === 'ZX-2048'));
 });
 
+test('decomposed Korean date units stay on the due anchor and are not required identifiers', () => {
+  const parsed = parseIntelligentQuery('Please can you show me alpha beta details by 2026년 9월 10일까지 please', { now });
+  assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), true);
+  assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false);
+  assert.deepEqual(parsed.searchPlan.softTokens, ['alpha', 'beta']);
+
+  const withoutCue = parseIntelligentQuery('Please can you show me the latest alpha beta information about 2026년 9월 10일 please', { now });
+  assert.equal(withoutCue.filters.dueRange.from, undefined);
+  assert.equal(withoutCue.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false);
+  assert.ok(withoutCue.searchPlan.softTokens.includes('2026년'));
+  assert.ok(withoutCue.searchPlan.softTokens.includes('9월'));
+  assert.ok(withoutCue.searchPlan.softTokens.includes('10일'));
+});
+
 test('스마트 뷰는 Outlook 폴더 변경 없이 안정적인 업무 관점을 제공한다', () => {
   const views = intelligentSmartViews(now);
   assert.ok(views.length >= 8);

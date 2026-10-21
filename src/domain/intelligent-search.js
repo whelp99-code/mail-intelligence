@@ -88,6 +88,15 @@ function decomposeQuestionTokens(tokens) {
       && !QUESTION_SCAFFOLD_TOKENS.has(token.toLowerCase())
       && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())));
 }
+
+// Year, month, and day units are calendar text, not document identifiers.
+function isCalendarDateToken(token) {
+  const value = String(token || '');
+  if (/^(?:\d{4}|\d{1,2})[-/.]\d{1,2}(?:[-/.]\d{1,2})?까지$/u.test(value)) return true;
+  return /^(?:\d{1,4}년)?(?:\d{1,2}월)?(?:\d{1,2}일)?(?:까지)?$/u.test(value)
+    && /[년월일]/u.test(value);
+}
+
 const CONTROL_PARTICLE_SUFFIXES = ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로'];
 const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되어', '될'];
 const CONTROL_AUXILIARY_BASES = new Set(['확인', '생성', '처리']);
@@ -422,7 +431,12 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     : [];
   const questionDecomposed = query.split(/\s+/).length > MAX_DECOMPOSED_SEARCH_TOKENS;
   const rawLexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
-  const lexicalTokens = questionDecomposed ? decomposeQuestionTokens(rawLexicalTokens) : rawLexicalTokens;
+  const decomposedTokens = questionDecomposed ? decomposeQuestionTokens(rawLexicalTokens) : rawLexicalTokens;
+  // The due anchor already covers these units. Keeping them as text terms
+  // fail-closes mail whose date exists only as due metadata.
+  const lexicalTokens = questionDecomposed && absoluteDueRange.from
+    ? decomposedTokens.filter((token) => !isCalendarDateToken(token))
+    : decomposedTokens;
   const residualText = lexicalTokens.join(' ');
   const residualOperator = lexicalIncidentOnly
     || (lexicalTokens.length > 1 && lexicalTokens.every((token) => PRESERVED_DOMAIN_TOKEN_PATTERN.test(token)))
@@ -453,6 +467,7 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
       searchPlan.fallbackPolicy.failClosed = true;
     }
     for (const token of lexicalTokens) {
+      if (isCalendarDateToken(token)) continue;
       if (/[\p{L}]/u.test(token) && /\d/.test(token)) {
         searchPlan.hardAnchors.push({ kind: 'identifier', value: token });
       }
