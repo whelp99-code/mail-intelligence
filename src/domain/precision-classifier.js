@@ -34,6 +34,7 @@ export const NEXT_ACTORS = Object.freeze([
 
 export const PRIORITIES = Object.freeze(['critical', 'high', 'normal', 'low']);
 export const PROJECT_RESOLUTIONS = Object.freeze(['confirmed', 'candidate', 'unassigned', 'review_required']);
+export const PROJECT_REVIEW_REASONS = Object.freeze(['multiple_project_matches', 'project_conflict_requires_review']);
 export const DUE_PRECISIONS = Object.freeze(['exact', 'date', 'relative', 'ambiguous', 'none']);
 
 export const SUPPORTING_SIGNALS = Object.freeze([
@@ -1449,6 +1450,23 @@ function exactTermClause(sourceText, term, sourceField, sourceMessageId) {
   };
 }
 
+export function projectResolutionMetadata(message, project, workState = '') {
+  const candidate = project.projectCandidate;
+  const term = candidate?.matchedTerm || candidate?.label || '';
+  const sourceField = candidate?.source === 'body' ? 'body' : 'subject';
+  const sourceText = sourceField === 'body'
+    ? splitMessageHistory(message.body || message.bodyPreview || '').currentContent
+    : String(message.subject || '');
+  return {
+    evidence: term ? evidence(exactTermClause(sourceText, term, sourceField, message.id),
+      'project', `project-${candidate?.source || 'candidate'}`) : null,
+    confidence: Number(project.confidence.toFixed(3)),
+    reviewReasons: project.projectResolution === 'review_required'
+      ? PROJECT_REVIEW_REASONS.filter((reason) => reason !== 'project_conflict_requires_review' || workState !== 'review_required')
+      : [],
+  };
+}
+
 export function validateClassificationEvidence(classification = {}, message = {}) {
   const history = splitMessageHistory(message.body || message.bodyPreview || '');
   const sources = {
@@ -1641,17 +1659,7 @@ export function classifyMessage(message = {}, {
     nextActor: evidence(actor.actorEvidence, 'nextActor', actor.actorRule),
     priority: evidence(priority.priorityEvidence, 'priority', priority.priorityRule),
     due: evidence(dueClause, 'due', due.duePrecision),
-    project: (() => {
-      const term = project.projectCandidate?.matchedTerm || project.projectCandidate?.label || '';
-      if (!term) return null;
-      const sourceField = project.projectCandidate?.source === 'body' ? 'body' : 'subject';
-      const sourceText = sourceField === 'body' ? bodySource : subjectSource;
-      return evidence(
-        exactTermClause(sourceText, term, sourceField, sourceMessageId),
-        'project',
-        `project-${project.projectCandidate?.source || 'candidate'}`,
-      );
-    })(),
+    project: projectResolutionMetadata(message, project).evidence,
   };
   const confidence = {
     workState: Number(state.stateConfidence.toFixed(3)),
@@ -1793,7 +1801,7 @@ export function applyPrecisionCorrection(classification, correction) {
 }
 
 export function refreshProjectResolution(classification, rules) {
-  const projectReasons = new Set(['multiple_project_matches', 'project_conflict_requires_review']);
+  const projectReasons = new Set(PROJECT_REVIEW_REASONS);
   const reviewReasons = unique([
     ...(classification.reviewReasons || []).filter((reason) => !projectReasons.has(reason)),
     ...(rules.reviewReasons || []).filter((reason) => projectReasons.has(reason)),

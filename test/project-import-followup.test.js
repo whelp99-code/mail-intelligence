@@ -6,9 +6,10 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
 import { SQLiteMailStore } from '../src/storage/sqlite-store.js';
 import { normalizeGraphMessage } from '../src/domain/mail-normalizer.js';
-import { classificationFingerprint } from '../src/domain/precision-classifier.js';
+import { classificationFingerprint, validateClassificationEvidence, PROJECT_REVIEW_REASONS } from '../src/domain/precision-classifier.js';
 import { PrecisionIntelligenceService } from '../src/application/precision-intelligence.js';
 import { previewProjectImport, importProjects } from '../src/application/project-import.js';
 import { applyProjectImport, createProjectImportBackup, validateApplyConfirmation, validateReclassificationConfirmation } from '../src/application/project-import-command.js';
@@ -53,7 +54,96 @@ function protectedTables(db) {
 }
 
 const projectColumns = new Set(['primary_project_id', 'project_resolution', 'project_candidate_json']);
-const nonProjectColumns = (row) => Object.fromEntries(Object.entries(row).filter(([key]) => !projectColumns.has(key)));
+const nonProjectColumns = (row) => {
+  const invariant = Object.fromEntries(Object.entries(row).filter(([key]) => !projectColumns.has(key)));
+  for (const key of ['evidence_json', 'confidence_json']) {
+    const parsed = JSON.parse(invariant[key]); delete parsed.project; invariant[key] = parsed;
+  }
+  invariant.review_reasons_json = JSON.parse(invariant.review_reasons_json).filter((reason) => !PROJECT_REVIEW_REASONS.includes(reason));
+  return invariant;
+};
+
+for (const initialResolution of ['unassigned', 'candidate']) for (const conflict of [false, true]) test(`evidence followup: ${initialResolution} to ${conflict ? 'conflict' : 'confirmed'} aligns only project metadata and UI evidence`, async (t) => {
+  const rows = [project(), ...(conflict ? [project({ projectKey: otherKey, name: 'Other project', aliases: ['material request'] })] : [])];
+  const f = fixture(t, rows); f.add('metadata');
+  const initial = new PrecisionIntelligenceService({ store: f.store }).classifyOne(f.mailbox.mailbox_key, 'metadata').classification;
+  f.store.savePrecisionClassification(f.mailbox.id, 'metadata', { ...initial,
+    projectResolution: initialResolution, projectCandidate: initialResolution === 'candidate' ? { label: 'Old project' } : null,
+    evidence: { ...initial.evidence, project: null, extension: { nested: ['keep', { exact: true }] } },
+    confidence: { ...initial.confidence, project: 0, extension: 0.321 },
+    reviewReasons: ['unrelated-before', ...(conflict ? [] : PROJECT_REVIEW_REASONS), 'learned-policy:keep', 'unknown_project_reason_keep'],
+    source: 'ai', provider: 'notion-worklink', model: 'preserve-model', priority: 'critical' });
+  f.store.db.exec('UPDATE precision_classifications SET evidence_json=json_set(evidence_json, \'$.extension.large\', json(\'9007199254740993\'))');
+  const before = f.store.db.prepare('SELECT * FROM precision_classifications').get();
+  f.store.close();
+  await applyProjectImport(f.options(1));
+  const check = new SQLiteMailStore({ databasePath: f.database, initialize: false });
+  t.after(() => check.close());
+  const actual = check.getPrecisionClassification(f.mailbox.id, 'metadata');
+  assert.equal(actual.projectResolution, conflict ? 'review_required' : 'confirmed');
+  assert.equal(actual.confidence.project, 0.98);
+  assert.equal(actual.evidence.project?.exactText || null, conflict ? null : 'Alpha unique');
+  assert.deepEqual(validateClassificationEvidence({ evidence: { project: actual.evidence.project } }, check.getMessage(f.mailbox.id, 'metadata')).failures, []);
+  assert.deepEqual(actual.reviewReasons, ['unrelated-before', 'learned-policy:keep', 'unknown_project_reason_keep',
+    ...(conflict ? ['multiple_project_matches', 'project_conflict_requires_review'] : [])]);
+  const after = check.db.prepare('SELECT * FROM precision_classifications').get();
+  assert.match(after.evidence_json, /9007199254740993/);
+  const invariant = (row) => {
+    const copy = { ...row };
+    for (const key of [...projectColumns, 'review_status']) delete copy[key];
+    for (const key of ['evidence_json', 'confidence_json']) {
+      const parsed = JSON.parse(copy[key]); delete parsed.project; copy[key] = parsed;
+    }
+    copy.review_reasons_json = JSON.parse(copy.review_reasons_json).filter((reason) => !['multiple_project_matches', 'project_conflict_requires_review'].includes(reason));
+    return copy;
+  };
+  assert.deepEqual(invariant(after), invariant(before));
+  const app = readFileSync(resolve('src/app.js'), 'utf8');
+  const functions = ['confidencePercent', 'precisionEvidenceList', 'precisionConfidenceList']
+    .map((name) => app.match(new RegExp(`function ${name}\\([^]*?\\n}`))[0]).join('\n');
+  const ui = runInNewContext(`${functions}; ({ evidence: precisionEvidenceList(input), confidence: precisionConfidenceList(input) })`, { input: actual });
+  assert.ok(ui.confidence.includes('project: 98%'));
+  assert.equal(ui.evidence.some((item) => item.startsWith('project: Alpha unique (project-subject)')), !conflict);
+  const changes = check.db.prepare('SELECT total_changes() AS n').get().n;
+  assert.equal(reclassifyProjectAnalysis(check, f.mailbox, 1).changed, 0);
+  assert.equal(check.db.prepare('SELECT total_changes() AS n').get().n, changes);
+});
+
+test('evidence followup: metadata-only refresh repairs confidence without rewriting project links or work fields', (t) => {
+  const f = fixture(t); f.add('metadata-only');
+  importProjects(f.store, f.mailbox.id, [project()]);
+  const initial = new PrecisionIntelligenceService({ store: f.store }).classifyOne(f.mailbox.mailbox_key, 'metadata-only').classification;
+  f.store.savePrecisionClassification(f.mailbox.id, 'metadata-only', { ...initial,
+    confidence: { ...initial.confidence, project: 0 }, evidence: { ...initial.evidence, project: null } });
+  const before = f.store.db.prepare('SELECT * FROM precision_classifications').get();
+  assert.equal(reclassifyProjectAnalysis(f.store, f.mailbox, 1).changed, 1);
+  const after = f.store.db.prepare('SELECT * FROM precision_classifications').get();
+  for (const field of projectColumns) assert.equal(after[field], before[field]);
+  assert.deepEqual(nonProjectColumns(after), nonProjectColumns(before));
+  assert.equal(JSON.parse(after.confidence_json).project, 0.98);
+  assert.equal(JSON.parse(after.evidence_json).project.exactText, 'Alpha unique');
+});
+
+for (const control of ['correction', 'policy']) test(`evidence followup: absent classification with archived ${control} skips without rolling back import`, async (t) => {
+  const retired = project({ projectKey: otherKey, name: 'Retired project', aliases: ['Legacy unique'] });
+  const f = fixture(t, [project(), { ...retired, status: 'archived' }]);
+  f.add('normal'); f.add('not-analyzed', 'Legacy unique awaiting reply', 'legacy@example.invalid');
+  const [old] = importProjects(f.store, f.mailbox.id, [retired]);
+  new PrecisionIntelligenceService({ store: f.store }).classifyOne(f.mailbox.mailbox_key, 'normal');
+  const overrides = { primaryProjectId: old.id, projectResolution: 'confirmed', projectCandidate: { projectId: old.id } };
+  if (control === 'correction') f.store.savePrecisionCorrection(f.mailbox.id, 'not-analyzed', { overrides, savedAt: '2026-10-01T00:00:00Z' });
+  else f.store.saveLearningPolicy(f.mailbox.id, { policyKey: 'archived-project', senderEmail: 'legacy@example.invalid', subjectTokens: ['legacy', 'unique'], overrides });
+  assert.equal(f.store.getPrecisionClassification(f.mailbox.id, 'not-analyzed'), null);
+  const protectedBefore = protectedTables(f.store.db); f.store.close();
+  const result = await applyProjectImport(f.options(2));
+  assert.equal(result.reclassification.changed, 1); assert.equal(result.reclassification.unchanged, 1);
+  const check = new SQLiteMailStore({ databasePath: f.database, initialize: false });
+  t.after(() => check.close());
+  assert.equal(check.getPrecisionClassification(f.mailbox.id, 'not-analyzed'), null);
+  assert.equal(check.getPrecisionClassification(f.mailbox.id, 'normal').projectResolution, 'confirmed');
+  assert.equal(check.getProject(f.mailbox.id, old.id).status, 'archived');
+  assert.deepEqual(protectedTables(check.db), protectedBefore);
+});
 
 for (const reviewStatus of ['confirmed', 'corrected']) for (const match of ['unique', 'multiple', 'none']) test(`review followup: protected ${reviewStatus} status survives ${match} project matches`, async (t) => {
   const rows = [project(), project({ projectKey: otherKey, name: 'Other project', aliases: ['material request'] })];
@@ -217,8 +307,13 @@ test('project policy overrides and orphaned corrected/hybrid project selections 
       workState: 'completed', priority: 'low' } });
   importProjects(f.store, f.mailbox.id, [project()]);
   const before = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  assert.equal(reclassifyProjectAnalysis(f.store, f.mailbox, 3).changed, 1);
+  const after = f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all();
+  assert.deepEqual(after.map(nonProjectColumns), before.map(nonProjectColumns));
+  assert.deepEqual(after.slice(1), before.slice(1));
+  assert.equal(JSON.parse(after[0].evidence_json).project.sourceField, 'user_correction');
+  assert.equal(JSON.parse(after[0].confidence_json).project, 1);
   assert.equal(reclassifyProjectAnalysis(f.store, f.mailbox, 3).changed, 0);
-  assert.deepEqual(f.store.db.prepare('SELECT * FROM precision_classifications ORDER BY message_id').all(), before);
 });
 
 test('only project review transitions may change review_status; unrelated and corrected reviews survive', (t) => {
