@@ -156,6 +156,15 @@ only: `COMPANY_MEMORY_SB_COMPANY`, `COMPANY_MEMORY_SB_COMPANY_CONFIG`,
 `COMPANY_MEMORY_SIGNING_KEY_FILE`, `COMPANY_MEMORY_AUTHORITY_FILE`. Absent =
 skipped. Incomplete, unknown, or missing files fail closed at server boot.
 The command must be an absolute `sb-company` path; personal `sb` is rejected.
+Release preparation and forward/rollback/PID boundaries reuse the boot parser's
+pure `parseCompanyMemoryDonorEnvironment` syntax stage, without opening any donor
+file. The boot loader still requires existing files, valid authority JSON and an
+Ed25519 signer. Release preparation preserves the four native donor records byte
+for byte; the ordered runtime → mail-send → hold chain must be absent or complete,
+with later records winning. Unknown/non-native donor assignments fail closed;
+manager values cannot complete a partial file binding. Preserving an existing
+binding is not approval for new publication, signer provisioning or unit write
+access; those remain operator-owned activation boundaries.
 When a Mail sqlite db is bound, the tick reads pending rows from
 `mail_company_memory_outbox` and fails closed if that schema is unavailable.
 Empty outbox is used only when no db is passed. Tests may still inject a

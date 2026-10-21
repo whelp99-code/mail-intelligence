@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { isAbsolute, resolve } from 'node:path';
+import { companyMemoryDonorNames, parseCompanyMemoryDonorEnvironment } from '../src/application/company-memory-donor-bind.js';
 
 export const releaseDropInName = 'zz-mail-intelligence-release.conf';
 const productionDataDir = '/home/jm/orca/projects/mail-intelligence/data';
@@ -25,19 +26,14 @@ export function applyEnvironmentFiles(environment, environmentFiles, dataDir) {
   assertEnvironmentFileInputs(environmentFiles, dataDir);
   for (const file of environmentFiles) {
     for (const record of environmentFileRecords(file.text)) {
-      assert(!record.donor, 'EnvironmentFile donor assignment must be absent');
+      assert(!record.donor || (record.key && donorNames.includes(record.key)), 'EnvironmentFile donor assignment is unknown or non-native');
       if (record.key) environment[record.key] = record.value;
     }
   }
   return environment;
 }
 
-export const donorNames = [
-  'COMPANY_MEMORY_SB_COMPANY',
-  'COMPANY_MEMORY_SB_COMPANY_CONFIG',
-  'COMPANY_MEMORY_SIGNING_KEY_FILE',
-  'COMPANY_MEMORY_AUTHORITY_FILE',
-];
+export const donorNames = companyMemoryDonorNames;
 
 export function releaseEnvironment(dataDir, commit) {
   return {
@@ -67,8 +63,7 @@ export function environmentFileRecords(text) {
       continue;
     }
     const name = line.slice(0, equal).replace(/^[ \t\r]+|[ \t\r]+$/g, '');
-    // export and quoted names are not native systemd names. Strip donor aliases
-    // defensively, rather than silently accepting shell syntax as an assignment.
+    // Export and quoted donor aliases are not native assignments and must fail closed.
     const alias = name.replace(/^export[ \t]+/, '').replace(/["']/g, '').replace(/^[ \t\r]+|[ \t\r]+$/g, '');
     const key = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : undefined;
     const donor = alias.startsWith('COMPANY_MEMORY_');
@@ -170,7 +165,7 @@ export function managerDonorNames(text) {
 }
 
 function assertExternalActionsDisabled(environment) {
-  assert(Object.keys(environment).every(key => !key.startsWith('COMPANY_MEMORY_')), 'Donor environment must be absent');
+  parseCompanyMemoryDonorEnvironment(environment);
   assert(environment.MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED !== '1', 'Calendar reader must remain disabled');
   for (const name of ['ACTIONS_APPROVED', 'ALLOW_MAIL_MUTATIONS', 'ALLOW_DATA_PLANE', 'ALLOW_EXTERNAL_AI']) {
     assert(environment[`MAIL_INTELLIGENCE_${name}`] === '0', `Release environment mismatch: MAIL_INTELLIGENCE_${name}`);
@@ -199,7 +194,9 @@ export function assertEffectiveRelease({ properties, environmentFiles, managerEn
   assert(command && command[1] === '/usr/bin/node' && command[2] === `/usr/bin/node ${codeRoot}/server.mjs`,
     'Effective ExecStart mismatch');
   assert(propertyWords(one('DropInPaths')).includes(ownedDropInPath), 'Owned release drop-in is not loaded');
-  assertReleaseEnvironment(mergedEnvironment({ properties, environmentFiles, managerEnvironment, dataDir }), { dataDir, commit });
+  const environment = mergedEnvironment({ properties, environmentFiles, managerEnvironment, dataDir });
+  assertReleaseEnvironment(environment, { dataDir, commit });
+  return environment;
 }
 
 // A restored legacy release need not have VERSION.json or the new commit.
@@ -235,9 +232,15 @@ function mergedEnvironment({ properties, environmentFiles, managerEnvironment = 
     environment[assignment.slice(0, equal)] = assignment.slice(equal + 1);
   }
   applyEnvironmentFiles(environment, environmentFiles, dataDir);
+  // Only the explicit file chain may supply a donor binding. Manager values
+  // cannot complete a partial file binding or silently enable an absent one.
+  const fileEnvironment = applyEnvironmentFiles({}, environmentFiles, dataDir);
+  parseCompanyMemoryDonorEnvironment(fileEnvironment);
   const unset = propertyWords(one('UnsetEnvironment'));
   for (const name of [...donorNames, ...managerDonorNames(managerEnvironment)]) {
-    assert(unset.includes(name), 'Inherited donor is not explicitly neutralised');
+    if (Object.hasOwn(fileEnvironment, name)) {
+      assert(!unset.includes(name) && !unset.includes(`${name}=${environment[name]}`), 'Configured donor must not be unset');
+    } else assert(unset.includes(name), 'Inherited donor is not explicitly neutralised');
   }
   for (const assignment of unset) {
     const equal = assignment.indexOf('=');

@@ -13,6 +13,11 @@ const { donorNames, releaseDropInName, releaseEnvironment } = boundary;
 
 const actions = ['ACTIONS_APPROVED', 'ALLOW_MAIL_MUTATIONS', 'ALLOW_DATA_PLANE', 'ALLOW_EXTERNAL_AI'];
 const text = environment => Object.entries(environment).map(([key, value]) => `${key}=${value}\n`).join('');
+const donor = Object.fromEntries(donorNames.map((key, index) => [key,
+  index === 0 ? '/synthetic/bin/sb-company' : `/synthetic/private/file-${index}`]));
+const donorRecords = '  COMPANY_MEMORY_SB_COMPANY = "/synthetic/bin/sb-company"\n'
+  + text(Object.fromEntries(Object.entries(donor).slice(1)))
+  + 'COMPANY_MEMORY_AUTHORITY_FILE=\'/synthetic/private/authority-original\'\n';
 
 // All command execution and /proc access are mocked before importing activation.
 // Ordinary file IO below is confined to a synthetic temporary directory.
@@ -70,6 +75,7 @@ test('activation rollback re-proves restored safety before restarting', async t 
       current.processRead = true;
       await current.mutate?.();
       return text({ ...releaseEnvironment(current.dataDir, current.commit),
+        ...(current.donor && !current.processDonorMissing ? { ...donor, COMPANY_MEMORY_AUTHORITY_FILE: '/synthetic/private/authority-last' } : {}),
         ...(current.processSend === undefined ? {} : { MAIL_INTELLIGENCE_ALLOW_SEND: current.processSend }) }).replaceAll('\n', '\0');
     }
     assert(!current || name !== join(current.oldRoot, 'VERSION.json'), 'Legacy VERSION must not be required');
@@ -86,6 +92,22 @@ test('activation rollback re-proves restored safety before restarting', async t 
   const { activateUserRelease } = await import('../scripts/activate-user-release.mjs');
 
   const scenarios = [
+    ...['0', '1'].flatMap(send => [
+      { name: `donor activation preserves native records send${send}`, send, success: true, donor: true },
+      { name: `donor rollback preserves native records send${send}`, send, safe: true, owned: true, donor: true },
+    ]),
+    { name: 'loaded donor cannot disappear while file binding remains complete', donor: true, processDonorMissing: true, safe: true },
+    ...[
+      'COMPANY_MEMORY_AUTHORITY_FILE=/synthetic/partial\n',
+      text({ ...donor, COMPANY_MEMORY_UNKNOWN: '/synthetic/unknown' }),
+      text({ ...donor, COMPANY_MEMORY_SB_COMPANY: '/synthetic/bin/sb' }),
+      text({ ...donor, COMPANY_MEMORY_SIGNING_KEY_FILE: 'relative' }),
+    ].map(invalidDonor => ({ name: `preparation rejects donor ${invalidDonor.split('=')[0]}`, invalidDonor, early: true })),
+    ...['mail-send.env', 'hold.env'].flatMap(file => [
+      { name: `${file} donor rollback bad path denied`, donor: true, file, addition: 'COMPANY_MEMORY_SIGNING_KEY_FILE=relative\n' },
+      { name: `${file} donor rollback empty path denied`, donor: true, file, addition: 'COMPANY_MEMORY_SIGNING_KEY_FILE=\n' },
+      { name: `${file} donor rollback unknown denied`, donor: true, file, addition: 'COMPANY_MEMORY_UNKNOWN=/synthetic/unknown\n' },
+    ]),
     ...['0', '1'].flatMap(send => [
       { name: `activation succeeds runtime send${send}, mail-send${send}, empty hold`, send, success: true },
       { name: `safe rollback preserves runtime send${send}, mail-send${send}, empty hold`, send, safe: true, owned: true },
@@ -130,11 +152,12 @@ test('activation rollback re-proves restored safety before restarting', async t 
       const send = Object.hasOwn(scenario, 'send') ? scenario.send : '0';
       const originalRuntime = text({ ...releaseEnvironment(dataDir, 'b'.repeat(40)),
         ...(send === undefined ? {} : { MAIL_INTELLIGENCE_ALLOW_SEND: send }),
-        ...(scenario.unsafeRuntime ? { MAIL_INTELLIGENCE_ACTIONS_APPROVED: '1' } : {}) });
+        ...(scenario.unsafeRuntime ? { MAIL_INTELLIGENCE_ACTIONS_APPROVED: '1' } : {}) }) + (scenario.donor ? donorRecords : '') + (scenario.invalidDonor || '');
       await fs.writeFile(join(dataDir, 'runtime.env'), originalRuntime, { mode: 0o600 });
       await fs.writeFile(join(dataDir, '.mail-intelligence-access-key'), 'synthetic-only', { mode: 0o600 });
       for (const file of ['mail-send.env', 'hold.env']) await fs.writeFile(join(dataDir, file), '# synthetic unchanged\n');
-      const trailingSend = scenario.send === '0' || scenario.send === '1' ? `MAIL_INTELLIGENCE_ALLOW_SEND=${send}\n` : '';
+      const trailingSend = (scenario.send === '0' || scenario.send === '1' ? `MAIL_INTELLIGENCE_ALLOW_SEND=${send}\n` : '')
+        + (scenario.donor ? 'COMPANY_MEMORY_AUTHORITY_FILE=/synthetic/private/authority-last\n' : '');
       await fs.appendFile(join(dataDir, 'mail-send.env'), trailingSend);
       const oldDrop = '# Owned by Mail Intelligence explicit immutable release activation.\n[Service]\n# synthetic old owned zz\n';
       if (scenario.owned) {
@@ -142,6 +165,8 @@ test('activation rollback re-proves restored safety before restarting', async t 
         await fs.writeFile(drop, oldDrop, { mode: 0o640 });
       }
       current = { codeRoot, oldRoot, dataDir, commit, originalRuntime, restarts: 0, processRead: false,
+        donor: scenario.donor,
+        processDonorMissing: scenario.processDonorMissing,
         success: scenario.success, processSend: scenario.processFailure ? scenario.processSend : send,
         trailingRace: Boolean(scenario.file), finalProofRead: false,
         propertyMutation: scenario.propertyMutation,
@@ -150,7 +175,7 @@ test('activation rollback re-proves restored safety before restarting', async t 
           `ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node ${root}/server.mjs ; ignore_errors=no ; pid=0 ; code=(null) ; status=0/0 }`,
           ...['runtime.env', 'mail-send.env', 'hold.env'].map(file => `EnvironmentFiles=${join(dataDir, file)} (ignore_errors=no)`),
           'Environment=HOME=/synthetic',
-          `UnsetEnvironment=${donorNames.join(' ')}`,
+          `UnsetEnvironment=${scenario.donor ? '' : donorNames.join(' ')}`,
           `DropInPaths=${drop}`,
           '',
         ].join('\n'),
@@ -166,7 +191,7 @@ test('activation rollback re-proves restored safety before restarting', async t 
       let failure;
       try { await activateUserRelease({ codeRoot, dataDir, commit }); } catch (error) { failure = error; }
       if (scenario.early) {
-        assert.match(failure?.message || '', /ALLOW_SEND/);
+        assert.match(failure?.message || '', scenario.invalidDonor ? /donor|COMPANY_MEMORY/i : /ALLOW_SEND/);
         assert.equal(current.restarts, 0);
         assert.equal(current.processRead, false);
         assert.equal(await realRead(join(dataDir, 'runtime.env'), 'utf8'), originalRuntime);
@@ -179,13 +204,14 @@ test('activation rollback re-proves restored safety before restarting', async t 
         const prepared = await realRead(join(dataDir, 'runtime.env'), 'utf8');
         assert(prepared.includes(`MAIL_INTELLIGENCE_ALLOW_SEND=${send}\n`));
         assert(prepared.includes(`MAIL_INTELLIGENCE_RELEASE_COMMIT=${commit}\n`));
+        if (scenario.donor) assert.equal(boundary.environmentFileRecords(prepared).filter(record => record.donor).map(record => record.raw).join(''), donorRecords);
         return;
       }
       assert(failure, 'Activation must retain final-proof failure');
       assert.equal(current.processRead, true, `Race must occur after new process read, not before activation precheck: ${failure.message}`);
-      assert.equal(current.finalProofRead, !scenario.processFailure, 'Final proof must re-query properties after reading the process');
+      assert.equal(current.finalProofRead, !scenario.processFailure && !scenario.processDonorMissing, 'Final proof must re-query properties after reading the process');
       assert.equal(current.restarts, scenario.safe ? 2 : 1);
-      if (scenario.safe) assert.match(failure.message, scenario.processFailure ? /ALLOW_SEND/ : /WorkingDirectory mismatch/);
+      if (scenario.safe) assert.match(failure.message, scenario.processDonorMissing ? /Loaded donor/ : scenario.processFailure ? /ALLOW_SEND/ : /WorkingDirectory mismatch/);
       else {
         assert.match(failure.message, /ROLLBACK_REQUIRES_MANUAL_INTERVENTION/);
         assert.equal(failure.cause, undefined);

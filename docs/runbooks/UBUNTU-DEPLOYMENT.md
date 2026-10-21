@@ -46,7 +46,14 @@ release 준비는 `.deployment/`에 환경과 unit을 생성하며 기존 환경
 `ACTIONS_APPROVED`·`ALLOW_MAIL_MUTATIONS`·`ALLOW_DATA_PLANE`·`ALLOW_EXTERNAL_AI`는 정확한 문자열 `0`이어야 한다.
 `MAIL_INTELLIGENCE_ALLOW_SEND` 원본 runtime 레코드는 그대로 보존하며 누락을 기본값으로 채우지 않는다.
 최종 send는 정확한 문자열 `0` 또는 `1`만 허용한다. 캘린더는 `1`이 아니어야 하며
-`COMPANY_MEMORY_*`는 EnvironmentFile에서 제거하며 manager 상속도 UnsetEnvironment로 차단한다.
+기존 donor 4키의 원본 논리 레코드는 인용·중복·공백·개행까지 보존한다. 합성된 세 파일 체인에는
+donor가 전부 없거나 `COMPANY_MEMORY_SB_COMPANY`·`COMPANY_MEMORY_SB_COMPANY_CONFIG`·
+`COMPANY_MEMORY_SIGNING_KEY_FILE`·`COMPANY_MEMORY_AUTHORITY_FILE`가 정확히 모두 있어야 한다.
+부팅 parser의 공통 순수 경로 검증을 재사용한다(절대경로, command basename `sb-company`,
+부분·unknown·비native donor 키 거절). 후행 파일 값이 우선하며 준비/경계 검사는 donor 파일을 열지 않는다.
+부팅의 실제 파일 존재·authority·Ed25519 검증은 그대로 필수다. manager donor는 파일 체인이 명시적으로
+덮어쓰거나 UnsetEnvironment로 차단해야 하며 unit Environment donor는 거절한다.
+구성된 donor를 최종 UnsetEnvironment로 제거할 수 없고 PID donor는 병합 체인과 같아야 한다.
 실효 파일은 runtime → mail-send → hold 순서의 필수 3개뿐이며 최종 UnsetEnvironment까지 반영한다.
 HTTP 200과 PID의 실제 경로·명령·환경·release bytes를 확인한다.
 activation 실패 시 자신이 바꾼 runtime과 owned drop-in만 복원한다. 이미 재시작을 시도했다면 복원 후
@@ -54,6 +61,8 @@ activation 실패 시 자신이 바꾼 runtime과 owned drop-in만 복원한다.
 증명 실패 시 `MAIL_RELEASE_ROLLBACK_REQUIRES_MANUAL_INTERVENTION`으로 중단하며 재시작하지 않는다.
 이 검사는 이전 commit에 새 VERSION/commit을 강요하지 않으며 복구 성공이나 운영 승인도 아니다.
 SQLite와 OAuth token cache를 자동으로 되감지 않는다. 별도 intake 검증 전에는 실사용 완료로 판정하지 않는다.
+기존 donor 보존은 신규 publication/권한/서명키/SB 쓰기 경로의 승인이 아니다. 운영 승인 경계 및
+기존 unit의 donor 쓰기 경로 적합성은 담당 확인이 필요하다. 확인 전 배포 중단을 유지한다.
 
 ## 상태 확인
 
