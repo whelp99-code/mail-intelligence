@@ -85,6 +85,6 @@
   },
   "description": "Read-only Outlook intelligence with SQLite memory, precision classification, and official OpenAI/xAI OAuth CLI providers",
   "engines": {
-    "node": "^22.16.0 || >=24.0.0"
+    "node": ">=22"
   }
 }
