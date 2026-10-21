@@ -15,6 +15,7 @@ import {
   applyPrecisionCorrection,
   classifyMessage,
   normalizePrecisionCorrection,
+  refreshProjectResolution,
   precisionSummary as summarizeClassifications,
 } from '../domain/precision-classifier.js';
 import {
@@ -93,6 +94,13 @@ export class PrecisionIntelligenceService {
       ? this.store.getMessage(mailbox.id, messageOrId)
       : messageOrId;
     if (!message?.id) throw new Error('Precision classification requires a stored message.');
+    const evaluated = this.evaluateOne(mailbox, message, options);
+    const saved = this.store.savePrecisionClassification(mailbox.id, message.id, evaluated.classification);
+    return { automatic: evaluated.automatic, correction: evaluated.correction, classification: saved,
+      changed: !evaluated.previous || evaluated.previous.fingerprint !== saved.fingerprint };
+  }
+
+  evaluateOne(mailbox, message, options = {}) {
     const projects = this.store.listProjects(mailbox.id);
     const mailboxAddresses = this.store.getMailboxSenderAliases(mailbox.id);
     const previous = this.store.getPrecisionClassification(mailbox.id, message.id);
@@ -100,11 +108,11 @@ export class PrecisionIntelligenceService {
       && previous.provider
       && previous.provider !== 'rules'
       && options.replaceAi !== true;
-    const automatic = keepAi
+    let automatic = keepAi
       ? previous
       : classifyMessage(message, {
         projects,
-        mailboxAddress: mailbox.address || mailboxUser,
+        mailboxAddress: mailbox.address || mailbox.mailbox_key,
         mailboxAddresses,
         now: options.now || this.now(),
         source: options.source || 'rules',
@@ -112,6 +120,11 @@ export class PrecisionIntelligenceService {
         model: options.model || '',
         promptVersion: options.promptVersion,
       });
+    if (keepAi && options.refreshProjects === true) {
+      const rules = classifyMessage(message, { projects, mailboxAddress: mailbox.address || mailbox.mailbox_key,
+        mailboxAddresses, now: options.now || this.now() });
+      automatic = refreshProjectResolution(previous, rules);
+    }
     const correction = this.store.getPrecisionCorrection(mailbox.id, message.id);
     const learnedPolicy = correction ? null : this.matchingPolicy(mailbox.id, message);
     const finalClassification = correction
@@ -119,12 +132,11 @@ export class PrecisionIntelligenceService {
       : learnedPolicy
         ? applyLearnedPolicy(automatic, learnedPolicy)
         : automatic;
-    const saved = this.store.savePrecisionClassification(mailbox.id, message.id, finalClassification);
     return {
-      classification: saved,
+      classification: finalClassification,
       automatic,
       correction,
-      changed: !previous || previous.fingerprint !== saved.fingerprint,
+      previous,
     };
   }
 

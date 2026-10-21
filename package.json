@@ -18,6 +18,8 @@
     "validate:css": "stylelint src/styles.css",
     "audit": "env -u npm_config_allow_scripts -u NPM_CONFIG_ALLOW_SCRIPTS npm audit --audit-level=high",
     "audit:fix": "npm audit fix --ignore-scripts --no-fund",
+    "projects:preview": "node scripts/import-projects.mjs --dry-run",
+    "projects:import": "node scripts/import-projects.mjs --apply",
     "memory:status": "node scripts/mail-memory-admin.mjs status",
     "memory:integrity": "node scripts/mail-memory-admin.mjs integrity",
     "memory:backup": "node scripts/mail-memory-admin.mjs backup",

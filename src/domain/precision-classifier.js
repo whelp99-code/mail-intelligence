@@ -1792,6 +1792,30 @@ export function applyPrecisionCorrection(classification, correction) {
   return next;
 }
 
+export function refreshProjectResolution(classification, rules) {
+  const projectReasons = new Set(['multiple_project_matches', 'project_conflict_requires_review']);
+  const reviewReasons = unique([
+    ...(classification.reviewReasons || []).filter((reason) => !projectReasons.has(reason)),
+    ...(rules.reviewReasons || []).filter((reason) => projectReasons.has(reason)),
+  ]);
+  const next = {
+    ...classification,
+    primaryProjectId: rules.primaryProjectId,
+    projectResolution: rules.projectResolution,
+    projectCandidate: rules.projectCandidate,
+    evidence: { ...classification.evidence, project: rules.evidence.project },
+    confidence: { ...classification.confidence, project: rules.confidence.project },
+    reviewReasons,
+    reviewStatus: classification.reviewStatus === 'corrected' ? 'corrected'
+      : classification.workState === 'review_required' || rules.projectResolution === 'review_required'
+        || (classification.reviewStatus === 'review_required' && reviewReasons.length) ? 'review_required' : 'auto',
+    analyzedAt: rules.analyzedAt,
+  };
+  next.operational = deriveOperationalClassification(next);
+  next.fingerprint = classificationFingerprint(next);
+  return next;
+}
+
 export function classifyMessages(messages = [], options = {}) {
   return messages.map((message) => classifyMessage(message, options));
 }
