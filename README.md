@@ -14,6 +14,19 @@ Mail Intelligence는 **Outlook 전체 메일을 지속적으로 분석해 프로
 → 승인된 행동만 실행
 ```
 
+## 승인된 프로젝트 CSV 가져오기 미리보기
+
+```sh
+npm run projects:preview -- --csv /approved/projects.csv --snapshot /approved/readonly-backup.sqlite --expected-sha256 SHA256 --mailbox-id 1
+```
+
+- CLI는 `--dry-run`만 지원한다. 운영 DB 대신 승인된 닫힌 SQLite backup 사본(0600, SHA-256 고정)을 제공한다. `mode=ro&immutable=1`, `query_only`로 읽고 DB·CSV·기존 sidecar의 전후 해시를 비교한다. 내용 있는 WAL/journal은 거부한다. 운영 DB를 이 명령에 지정하지 않는다.
+- CSV 필수 열은 `project_key`(Notion page id), `name`, `status`, `aliases`(JSON 배열)이다. `진행`은 active, `종료`는 archived다. `customer`는 저장 필드가 아니며 공란·거래처·고객명으로 별칭을 추정하지 않는다. 원본/제외 목록이 아니라 승인된 가져오기 후보 CSV만 지정한다.
+- 미리보기는 전체 가져올 프로젝트 목록과 active 메일의 **프로젝트 해석만** 순수 평가한다. 분모는 선택 mailbox의 `deleted_at IS NULL`인 `messages.id` 고유 행이다. 과거 요청 수와 현재 분모가 다르면 그대로 표시한다. 변화없음을 먼저 집계한 뒤 변경된 confirmed/review_required/other_changed를 나누므로 중복이 없다. 별도 resolutions는 미리보기 후 상태 총계이며 변경 집계에 더하지 않는다.
+- 저장된 AI·사용자 보정·학습 정책을 재실행한 전체 분류 결과가 아니다. 본문·제목·주소·메일별 평가를 출력하지 않으며 초안·메일 상태·외부 작업을 변경하지 않는다.
+- 승인 후 로컬 registry 적용 경로는 `importProjects(store, mailboxId, rows)`다. 기존 `store.createProject`를 transaction 안에서 호출하고 `createdBy='import'`와 같은 `projectKey`에만 멱등 upsert한다. user 생성 프로젝트·다른 프로젝트의 이름/별칭 충돌은 거부한다. 동일 입력은 audit/updated_at도 바꾸지 않는다. 수정 시 ID/created_at을 유지하고 변경 audit을 남긴다. 이 함수는 재분류하지 않는다.
+- 기존 application `createProject`는 기본으로 강제 재분류하고 분류/이력 저장 및 WAL checkpoint를 수행하므로 dry-run에서 호출하지 않는다. UI 조회 역시 분류를 호출할 수 있으므로 순수 평가를 대체하지 않는다. 실제 운영 등록·재분류는 별도 승인 대상이다.
+
 ## 현재 버전
 
 **Version: 1.2.2 — Operational Classification Stabilization**

@@ -18,6 +18,7 @@ import {
 } from '../application/handled-elsewhere.js';
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
+import { planProjectRegistration, normalizeProjectKey, normalizeProjectName } from '../domain/project-registration.js';
 import {
   WORKLINK_PROJECTION_PROVIDER,
   WORKLINK_PROJECTION_VERSION,
@@ -211,19 +212,6 @@ function attachmentRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function normalizeProjectKey(value = '') {
-  return String(value || '')
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 120);
-}
-
-function normalizeProjectName(value = '') {
-  return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function projectRow(row) {
@@ -1317,31 +1305,22 @@ export class SQLiteMailStore {
     status = 'active',
     createdBy = 'user',
   } = {}) {
-    const cleanName = String(name || '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 200);
-    const normalizedName = normalizeProjectName(cleanName);
-    if (normalizedName.length < 2) throw new Error('Project name must contain at least two characters.');
-    if (!['active', 'archived'].includes(status)) throw new Error('Invalid project status.');
-    if (!['user', 'import'].includes(createdBy)) throw new Error('Invalid project creation source.');
-    const cleanAliases = [...new Set((Array.isArray(aliases) ? aliases : [])
-      .map((value) => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 200))
-      .filter((value) => value.length >= 2 && normalizeProjectName(value) !== normalizedName))]
-      .slice(0, 30);
-    const proposedTerms = new Set([normalizedName, ...cleanAliases.map(normalizeProjectName)]);
-    for (const existing of this.listProjects(mailboxId, { includeArchived: true })) {
-      const existingTerms = new Set([
-        existing.normalizedName,
-        ...existing.aliases.map(normalizeProjectName),
-      ]);
-      const conflict = [...proposedTerms].find((term) => existingTerms.has(term));
-      if (conflict) {
-        const error = new Error(`Project name or alias already belongs to ${existing.name}.`);
-        error.code = 'PROJECT_ALIAS_CONFLICT';
-        throw error;
-      }
-    }
-    const key = normalizeProjectKey(projectKey || cleanName);
-    if (!key) throw new Error('Project key is invalid.');
+    const plan = planProjectRegistration({ name, projectKey, aliases, status, createdBy },
+      this.listProjects(mailboxId, { includeArchived: true }));
+    const { name: cleanName, normalizedName, aliases: cleanAliases, projectKey: key } = plan.project;
+    if (plan.action === 'unchanged') return plan.existing;
     const now = this.now();
+    if (plan.action === 'update') {
+      this.db.prepare(`
+        UPDATE projects SET name = ?, normalized_name = ?, aliases_json = ?, status = ?, updated_at = ?
+        WHERE mailbox_id = ? AND id = ?
+      `).run(cleanName, normalizedName, jsonText(cleanAliases, []), status, now, mailboxId, plan.existing.id);
+      this.audit('project.updated', {
+        entityType: 'project', entityId: plan.existing.id,
+        payload: { projectKey: key, name: cleanName, aliases: cleanAliases },
+      });
+      return this.getProject(mailboxId, plan.existing.id);
+    }
     const result = this.db.prepare(`
       INSERT INTO projects(
         mailbox_id, project_key, name, normalized_name, aliases_json,
