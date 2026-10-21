@@ -42,10 +42,17 @@ release 디렉터리에서 `bash scripts/deploy-user-service.sh --release <40자
 release 준비는 `.deployment/`에 환경과 unit을 생성하며 기존 환경·토큰은 변경하지 않는다.
 승인된 activation은 `zz-mail-intelligence-release.conf`만 설치하고 기존 base와 90/91/92 drop-in을 보존한다.
 `systemctl --user show`의 merged ExecStart·WorkingDirectory·전체 EnvironmentFiles 및 최종 환경을 검증한 뒤에만
-기존 `runtime.env`를 원자적으로 교체하고 재시작한다. 발송 등 외부 행동 플래그는 모두 0이고
+기존 `runtime.env`를 원자적으로 교체하고 재시작한다. DATA·commit 및 네 행동 플래그의 6개 키만 재작성한다.
+`ACTIONS_APPROVED`·`ALLOW_MAIL_MUTATIONS`·`ALLOW_DATA_PLANE`·`ALLOW_EXTERNAL_AI`는 정확한 문자열 `0`이어야 한다.
+`MAIL_INTELLIGENCE_ALLOW_SEND` 원본 runtime 레코드는 그대로 보존하며 누락을 기본값으로 채우지 않는다.
+최종 send는 정확한 문자열 `0` 또는 `1`만 허용한다. 캘린더는 `1`이 아니어야 하며
 `COMPANY_MEMORY_*`는 EnvironmentFile에서 제거하며 manager 상속도 UnsetEnvironment로 차단한다.
+실효 파일은 runtime → mail-send → hold 순서의 필수 3개뿐이며 최종 UnsetEnvironment까지 반영한다.
 HTTP 200과 PID의 실제 경로·명령·환경·release bytes를 확인한다.
-activation 실패 시 자신이 바꾼 환경과 owned drop-in을 복원하고 재시작을 시도했다면 기존 설정으로 다시 시작한다.
+activation 실패 시 자신이 바꾼 runtime과 owned drop-in만 복원한다. 이미 재시작을 시도했다면 복원 후
+세 파일·실효 unit·manager·UnsetEnvironment를 다시 조회하여 동일한 행동/send/캘린더/donor 기준을 증명한 뒤에만 재시작한다.
+증명 실패 시 `MAIL_RELEASE_ROLLBACK_REQUIRES_MANUAL_INTERVENTION`으로 중단하며 재시작하지 않는다.
+이 검사는 이전 commit에 새 VERSION/commit을 강요하지 않으며 복구 성공이나 운영 승인도 아니다.
 SQLite와 OAuth token cache를 자동으로 되감지 않는다. 별도 intake 검증 전에는 실사용 완료로 판정하지 않는다.
 
 ## 상태 확인

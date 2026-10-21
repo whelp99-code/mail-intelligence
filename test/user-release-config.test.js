@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { prepareUserRelease, commitUserReleaseEnvironment } from '../scripts/prepare-user-release.mjs';
 import {
-  releaseDropInName, donorNames, environmentFileRecords, assertEffectiveRelease, releaseEnvironment, assertReleaseEnvironment,
+  releaseDropInName, donorNames, environmentFileRecords, assertEffectiveRelease, releaseEnvironment, assertReleaseEnvironment, assertSafeRollback,
 } from '../scripts/user-release-boundary.mjs';
 
 async function fixture(t) {
@@ -74,7 +74,9 @@ test('release setup preserves bound config/secrets and disables external effects
   for (const line of input.original.split('\n').filter(line => /INTAKE_|CWOS_|ACCESS_KEY=/.test(line))) {
     assert(env.split('\n').includes(line));
   }
-  for (const name of ['ACTIONS_APPROVED', 'ALLOW_SEND', 'ALLOW_MAIL_MUTATIONS', 'ALLOW_DATA_PLANE', 'ALLOW_EXTERNAL_AI']) {
+  assert.deepEqual(environmentFileRecords(env).filter(record => record.key === 'MAIL_INTELLIGENCE_ALLOW_SEND').map(record => record.raw),
+    environmentFileRecords(input.original).filter(record => record.key === 'MAIL_INTELLIGENCE_ALLOW_SEND').map(record => record.raw));
+  for (const name of ['ACTIONS_APPROVED', 'ALLOW_MAIL_MUTATIONS', 'ALLOW_DATA_PLANE', 'ALLOW_EXTERNAL_AI']) {
     assert.equal(env.split('\n').filter(line => line.startsWith(`MAIL_INTELLIGENCE_${name}=`)).join(''), `MAIL_INTELLIGENCE_${name}=0`);
   }
   assert(!env.includes('COMPANY_MEMORY_'));
@@ -171,7 +173,7 @@ test('merged conflicts deny before any operational rewrite, including late drop-
     context.properties.replace(`UnsetEnvironment=${donorNames.join(' ')}`, 'UnsetEnvironment='),
     context.properties.replace(context.ownedDropInPath, '/synthetic/zz-unowned.conf'),
     context.properties.replace('Environment=HOME=', 'Environment=MAIL_INTELLIGENCE_ALLOW_SEND=1 HOME=')
-      .replace(`UnsetEnvironment=${donorNames.join(' ')}`, `UnsetEnvironment=${donorNames.join(' ')} MAIL_INTELLIGENCE_ALLOW_SEND=0`),
+      .replace(`UnsetEnvironment=${donorNames.join(' ')}`, `UnsetEnvironment=${donorNames.join(' ')} MAIL_INTELLIGENCE_ALLOW_SEND=1`),
   ];
   for (const properties of conflicts) {
     await assert.rejects(commitUserReleaseEnvironment({ ...context, properties }));
@@ -183,7 +185,7 @@ test('merged conflicts deny before any operational rewrite, including late drop-
   }), /DATA_DIR/);
   assert.throws(() => assertEffectiveRelease({
     ...context, environmentFiles: environmentFiles.map((file, index) => index === 0
-      ? { ...file, text: runtimeText + ' MAIL_INTELLIGENCE_ALLOW_SEND="1"\n' } : file),
+      ? { ...file, text: runtimeText + ' MAIL_INTELLIGENCE_ALLOW_SEND="2"\n' } : file),
   }), /ALLOW_SEND/);
 });
 
@@ -227,7 +229,7 @@ function boundaryFixture(production = true) {
     `${dataDir}/runtime.env`, '/home/jm/.config/mail-intelligence/mail-send.env',
     '/home/jm/.local/state/mail-intelligence/rollback-20261009/hold.env',
   ] : [`${dataDir}/runtime.env`, `${dataDir}/mail-send.env`, `${dataDir}/hold.env`];
-  const text = Object.entries(releaseEnvironment(dataDir, commit)).map(([key, value]) => `${key}=${value}\n`).join('');
+  const text = Object.entries({ ...releaseEnvironment(dataDir, commit), MAIL_INTELLIGENCE_ALLOW_SEND: '0' }).map(([key, value]) => `${key}=${value}\n`).join('');
   const environmentFiles = paths.map((path, index) => ({ path, text: index === 0 ? text : '# synthetic only\n' }));
   return mergedFixture({ codeRoot: `/synthetic/releases/${commit}`, dataDir, commit, environmentFiles });
 }
@@ -306,10 +308,11 @@ test('each missing, additional, duplicate, reordered or optional EnvironmentFile
   }
 });
 
-test('either trailing file final overrides of all seven keys, calendar or donor deny without leaking values', () => {
+test('either trailing file unsafe overrides of six rewritten keys, send, calendar or donor deny without leaking values', () => {
   const context = boundaryFixture();
   const assignments = [
     ...Object.keys(releaseEnvironment(context.dataDir, context.commit)).map(key => [key, 'synthetic-secret-override']),
+    ['MAIL_INTELLIGENCE_ALLOW_SEND', 'synthetic-secret-override'],
     ['MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED', '1'],
     ['COMPANY_MEMORY_FUTURE_DONOR', 'synthetic-secret-override'],
   ];
@@ -328,9 +331,9 @@ test('either trailing file final overrides of all seven keys, calendar or donor 
   }
 });
 
-test('final process calendar reader rejects enabled consent even with all seven safe keys', () => {
+test('final process calendar reader rejects enabled consent with six rewritten keys and valid send', () => {
   const context = boundaryFixture();
-  const environment = releaseEnvironment(context.dataDir, context.commit);
+  const environment = { ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: '0' };
   assert.throws(() => assertReleaseEnvironment({
     ...environment, MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED: '1',
   }, context), /Calendar reader/);
@@ -350,7 +353,7 @@ test('non-ASCII key whitespace cannot hide unsafe trailing values from the nativ
       ['MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED', 'Calendar reader must remain disabled'],
     ]) {
       for (const invalidKey of [`${space}${key}`, `${key}${space}`]) {
-        const text = `${key}=1\n${invalidKey}=0\n`;
+        const text = `${key}=${key === 'MAIL_INTELLIGENCE_ALLOW_SEND' ? '2' : '1'}\n${invalidKey}=0\n`;
         assert.equal(environmentFileRecords(text)[1].key, undefined);
         for (const index of [1, 2]) {
           const environmentFiles = context.environmentFiles.map((file, position) => ({
@@ -398,7 +401,7 @@ test('preparation refuses unsafe supplied trailing contents without touching ope
   const input = await fixture(t);
   for (const index of [1, 2]) {
     const environmentFiles = input.environmentFiles.map((file, position) => position === index
-      ? { ...file, text: 'MAIL_INTELLIGENCE_ALLOW_SEND=1\n' } : file);
+      ? { ...file, text: 'MAIL_INTELLIGENCE_ALLOW_SEND=2\n' } : file);
     await assert.rejects(prepareUserRelease({ ...input, environmentFiles }), /ALLOW_SEND/);
     assert.equal(await readFile(join(input.dataDir, 'runtime.env'), 'utf8'), input.original);
     for (const file of input.environmentFiles.slice(1)) {
@@ -406,4 +409,48 @@ test('preparation refuses unsafe supplied trailing contents without touching ope
     }
   }
   await assert.rejects(prepareUserRelease({ ...input, environmentFiles: undefined }), /EnvironmentFile/);
+});
+
+test('send accepts only exact strings zero or one in process and rollback proofs', () => {
+  const context = boundaryFixture(false);
+  for (const value of ['0', '1', undefined, '2', 'true', 'false', '', ' ', ' 0', '1 ', '\t', '01', 0, 1, true, null]) {
+    const environment = { ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: value };
+    if (value === undefined) delete environment.MAIL_INTELLIGENCE_ALLOW_SEND;
+    const valid = value === '0' || value === '1';
+    if (valid) assert.doesNotThrow(() => assertReleaseEnvironment(environment, context));
+    else assert.throws(() => assertReleaseEnvironment(environment, context), /ALLOW_SEND/);
+    // EnvironmentFile quoted values preserve significant whitespace; absence is not defaulted.
+    if (typeof value !== 'string' && value !== undefined) continue;
+    const environmentFiles = context.environmentFiles.map((file, index) => index === 0 ? { ...file,
+      text: Object.entries(environment).map(([key, item]) => `${key}=${JSON.stringify(item)}\n`).join(''),
+    } : file);
+    if (valid) assert.doesNotThrow(() => assertSafeRollback({ ...context, environmentFiles }));
+    else assert.throws(() => assertSafeRollback({ ...context, environmentFiles }), /ALLOW_SEND/);
+  }
+  for (const key of ['ACTIONS_APPROVED', 'ALLOW_MAIL_MUTATIONS', 'ALLOW_DATA_PLANE', 'ALLOW_EXTERNAL_AI']) {
+    for (const value of [undefined, '1', '', ' ', 'true', 0]) {
+      const environment = { ...releaseEnvironment(context.dataDir, context.commit), MAIL_INTELLIGENCE_ALLOW_SEND: '1',
+        [`MAIL_INTELLIGENCE_${key}`]: value };
+      assert.throws(() => assertReleaseEnvironment(environment, context), new RegExp(key));
+    }
+  }
+});
+
+test('preparation preserves native send records byte for byte and never fills an absent runtime send', async t => {
+  const input = await fixture(t);
+  const withoutSend = environmentFileRecords(input.original).filter(record => record.key !== 'MAIL_INTELLIGENCE_ALLOW_SEND').map(record => record.raw).join('');
+  for (const sendRecords of ['MAIL_INTELLIGENCE_ALLOW_SEND=0\n', '  MAIL_INTELLIGENCE_ALLOW_SEND = "1"\nMAIL_INTELLIGENCE_ALLOW_SEND=1\n', '']) {
+    const original = withoutSend + sendRecords;
+    await writeFile(join(input.dataDir, 'runtime.env'), original);
+    const environmentFiles = input.environmentFiles.map((file, index) => ({ ...file,
+      text: index === 0 ? original : index === 1 ? 'MAIL_INTELLIGENCE_ALLOW_SEND=1\n' : file.text,
+    }));
+    await prepareUserRelease({ ...input, environmentFiles });
+    const prepared = await readFile(join(input.codeRoot, '.deployment/runtime.env'), 'utf8');
+    assert.equal(environmentFileRecords(prepared).filter(record => record.key === 'MAIL_INTELLIGENCE_ALLOW_SEND').map(record => record.raw).join(''), sendRecords);
+    assert.equal(await readFile(join(input.dataDir, 'runtime.env'), 'utf8'), original);
+    if (!sendRecords) await assert.rejects(prepareUserRelease({ ...input,
+      environmentFiles: environmentFiles.map((file, index) => index === 1 ? { ...file, text: '' } : file),
+    }), /ALLOW_SEND/);
+  }
 });

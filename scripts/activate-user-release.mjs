@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { prepareUserRelease, commitUserReleaseEnvironment } from './prepare-user-release.mjs';
-import { releaseDropInName, assertEffectiveRelease, assertReleaseEnvironment, releaseEnvironmentFilePaths } from './user-release-boundary.mjs';
+import { releaseDropInName, assertEffectiveRelease, assertReleaseEnvironment, assertSafeRollback, releaseEnvironmentFilePaths } from './user-release-boundary.mjs';
 
 const run = promisify(execFile);
 const service = 'mail-intelligence.service';
@@ -125,6 +125,15 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
       await systemctl('daemon-reload');
     }
     if (restartAttempted) {
+      try {
+        assertSafeRollback({
+          dataDir, properties: await effective(), environmentFiles: await readEnvironmentFiles(dataDir),
+          managerEnvironment: await systemctl('show-environment'),
+        });
+      } catch {
+        // Do not expose environment bytes, systemctl output or nested causes.
+        throw new Error('MAIL_RELEASE_ROLLBACK_REQUIRES_MANUAL_INTERVENTION: restored environment could not be proven safe; restart refused');
+      }
       await systemctl('restart', service);
       await systemctl('is-active', service);
     }

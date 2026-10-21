@@ -43,7 +43,6 @@ export function releaseEnvironment(dataDir, commit) {
   return {
     MAIL_INTELLIGENCE_DATA_DIR: dataDir,
     MAIL_INTELLIGENCE_ACTIONS_APPROVED: '0',
-    MAIL_INTELLIGENCE_ALLOW_SEND: '0',
     MAIL_INTELLIGENCE_ALLOW_MAIL_MUTATIONS: '0',
     MAIL_INTELLIGENCE_ALLOW_DATA_PLANE: '0',
     MAIL_INTELLIGENCE_ALLOW_EXTERNAL_AI: '0',
@@ -170,9 +169,18 @@ export function managerDonorNames(text) {
     .filter(name => /^COMPANY_MEMORY_[A-Za-z0-9_]+$/.test(name));
 }
 
-export function assertReleaseEnvironment(environment, { dataDir, commit }) {
+function assertExternalActionsDisabled(environment) {
   assert(Object.keys(environment).every(key => !key.startsWith('COMPANY_MEMORY_')), 'Donor environment must be absent');
   assert(environment.MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED !== '1', 'Calendar reader must remain disabled');
+  for (const name of ['ACTIONS_APPROVED', 'ALLOW_MAIL_MUTATIONS', 'ALLOW_DATA_PLANE', 'ALLOW_EXTERNAL_AI']) {
+    assert(environment[`MAIL_INTELLIGENCE_${name}`] === '0', `Release environment mismatch: MAIL_INTELLIGENCE_${name}`);
+  }
+  assert(environment.MAIL_INTELLIGENCE_ALLOW_SEND === '0' || environment.MAIL_INTELLIGENCE_ALLOW_SEND === '1',
+    'Release environment mismatch: MAIL_INTELLIGENCE_ALLOW_SEND');
+}
+
+export function assertReleaseEnvironment(environment, { dataDir, commit }) {
+  assertExternalActionsDisabled(environment);
   for (const [key, value] of Object.entries(releaseEnvironment(dataDir, commit))) {
     assert(environment[key] === value, `Release environment mismatch: ${key}`);
   }
@@ -190,6 +198,22 @@ export function assertEffectiveRelease({ properties, environmentFiles, managerEn
   const command = executable.match(/^\{ path=([^;]+) ; argv\[\]=([^;]+) ; ignore_errors=no ; .* \}$/);
   assert(command && command[1] === '/usr/bin/node' && command[2] === `/usr/bin/node ${codeRoot}/server.mjs`,
     'Effective ExecStart mismatch');
+  assert(propertyWords(one('DropInPaths')).includes(ownedDropInPath), 'Owned release drop-in is not loaded');
+  assertReleaseEnvironment(mergedEnvironment({ properties, environmentFiles, managerEnvironment, dataDir }), { dataDir, commit });
+}
+
+// A restored legacy release need not have VERSION.json or the new commit.
+// Prove restart safety, not successful activation or immutable identity.
+export function assertSafeRollback(input) {
+  assertExternalActionsDisabled(mergedEnvironment(input));
+}
+
+function mergedEnvironment({ properties, environmentFiles, managerEnvironment = '', dataDir }) {
+  const merged = mergedProperties(properties);
+  const one = name => {
+    assert(merged.get(name)?.length === 1, `Missing/ambiguous effective ${name}`);
+    return merged.get(name)[0];
+  };
   const files = merged.get('EnvironmentFiles');
   const tuples = [];
   for (const field of files || []) {
@@ -203,7 +227,6 @@ export function assertEffectiveRelease({ properties, environmentFiles, managerEn
   assert(tuples.length === paths.length && tuples.every((tuple, index) =>
     tuple.path === paths[index] && tuple.flags === '(ignore_errors=no)'),
   'Effective EnvironmentFile chain mismatch');
-  assert(propertyWords(one('DropInPaths')).includes(ownedDropInPath), 'Owned release drop-in is not loaded');
   const environment = Object.fromEntries(managerEnvironment.split('\n').filter(line => line.includes('='))
     .map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
   for (const assignment of propertyWords(one('Environment'))) {
@@ -221,5 +244,5 @@ export function assertEffectiveRelease({ properties, environmentFiles, managerEn
     if (equal < 0) delete environment[assignment];
     else if (environment[assignment.slice(0, equal)] === assignment.slice(equal + 1)) delete environment[assignment.slice(0, equal)];
   }
-  assertReleaseEnvironment(environment, { dataDir, commit });
+  return environment;
 }
