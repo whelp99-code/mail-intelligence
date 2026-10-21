@@ -137,6 +137,25 @@ test('질의 길이와 빈 질의를 fail-closed로 거부한다', () => {
   assert.throws(() => parseIntelligentQuery('x'.repeat(501)), /500/);
 });
 
+test('long-question decomposition keeps ten keywords but refuses eleven without truncating', () => {
+  const ten = 'alpha beta gamma delta epsilon zeta eta theta iota kappa';
+  assert.equal(parseIntelligentQuery(ten).searchPlan.softTokens.length, 10);
+  const decomposed = parseIntelligentQuery(`Please ${ten}`);
+  assert.equal(decomposed.searchPlan.softTokens.length, 10);
+  assert.equal(decomposed.searchPlan.fallbackPolicy.failClosed, false);
+  const refused = parseIntelligentQuery(`${ten} lambda`);
+  assert.equal(refused.searchPlan.softTokens.length, 11);
+  assert.equal(refused.searchPlan.fallbackPolicy.failClosed, true);
+  assert.equal(refused.searchPlan.fallbackPolicy.allowed, false);
+  assert.equal(parseIntelligentQuery('Can you please show me what information is in the mail').searchPlan.fallbackPolicy.failClosed, true);
+});
+
+test('decomposition retains unknown business words and identifier particles without arbitrary stemming', () => {
+  const parsed = parseIntelligentQuery('Please can you show me what ZX-2048의 협의하는 유지보수 AlphaCorp details are');
+  assert.deepEqual(parsed.searchPlan.softTokens, ['ZX-2048', '협의하는', '유지보수', 'AlphaCorp']);
+  assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === 'ZX-2048'));
+});
+
 test('스마트 뷰는 Outlook 폴더 변경 없이 안정적인 업무 관점을 제공한다', () => {
   const views = intelligentSmartViews(now);
   assert.ok(views.length >= 8);
@@ -215,7 +234,7 @@ test('incident lexical query preserves the requested kind for strict ranking', (
 
 test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다', () => {
   const completedSupport = parseIntelligentQuery('완료된 패치 티켓', { now });
-  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix12');
+  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix13');
   assert.equal(completedSupport.filters.semanticIntent, 'completed_support_ticket');
   assert.deepEqual(completedSupport.filters.workStates, ['completed']);
   assert.equal(completedSupport.residualText, '');
@@ -228,7 +247,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
   const completedSangfor = parseIntelligentQuery('완료된 Sangfor 지원 문의', { now });
-  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix12');
+  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix13');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
   assert.equal(completedSangfor.residualText, 'Sangfor');

@@ -5,9 +5,10 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix12';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix13';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
+export const MAX_DECOMPOSED_SEARCH_TOKENS = 10;
 
 const STATE_PHRASES = [
   { value: 'action_required', pattern: /(?:내가|우리가|우리\s*쪽이)\s*(?:해야|처리|답장|회신|보내)|해야\s*할\s*(?:일|메일)|액션\s*필요|action\s*required|to\s*do/i },
@@ -64,6 +65,29 @@ const DUE_PHRASES = [
 ];
 
 const WEAK_SEARCH_TOKENS = new Set(['업무', '관련', '필요', '메일', '문서', '확인', '검토', '자동', '생성', '하면', '하는', '해서', '되는', '되어', '될']);
+// Remove question scaffolding, never unknown business terms or instructions.
+const QUESTION_SCAFFOLD_TOKENS = new Set([
+  'please', 'can', 'could', 'would', 'you', 'me', 'tell', 'show', 'find', 'give',
+  'what', 'which', 'where', 'when', 'how', 'is', 'are', 'was', 'were', 'has', 'have',
+  'been', 'the', 'a', 'an', 'of', 'for', 'to', 'in', 'on', 'about', 'with', 'and', 'by',
+  'mail', 'email',
+  'it', 'its', 'this', 'that', 'my', 'our', 'any', 'all', 'most', 'recent', 'latest',
+  'information', 'details', 'update', 'updates', 'status', 'question', 'regarding',
+  '지금', '현재', '최근', '최신', '어떤', '어떻게', '무엇을', '무슨', '있는', '있나요',
+  '있습니까', '인가요', '대해', '대해서', '관해', '관한', '상태를', '내용을', '내역을',
+  '상황을', '알려', '알려줘', '알려주세요', '찾아', '찾아서', '찾아줘', '찾아주세요',
+  '보여', '보여줘', '보여주세요', '부탁해', '부탁합니다', '좀', '요청', '질문',
+  '가장', '최근에', '관련해서', '메일에서', '무엇인가요', '무엇인지', '알고', '싶어요',
+  '정보가', '있는지', '내용이', '보여줄', '수',
+]);
+
+function decomposeQuestionTokens(tokens) {
+  return unique(tokens.flatMap((token) => token.match(/[\p{L}\p{N}_-]+/gu) || [])
+    .map((token) => normalizeControlToken(token).replace(/^(.*\d)(?:에게|에서|으로|은|는|을|를|이|가|에|와|과|의)$/u, '$1'))
+    .filter((token) => token.length >= 2
+      && !QUESTION_SCAFFOLD_TOKENS.has(token.toLowerCase())
+      && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())));
+}
 const CONTROL_PARTICLE_SUFFIXES = ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로'];
 const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되어', '될'];
 const CONTROL_AUXILIARY_BASES = new Set(['확인', '생성', '처리']);
@@ -396,7 +420,9 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const incidentExpansion = lexicalIncidentOnly
     ? INCIDENT_LEXICAL_EXPANSIONS[query.toLowerCase()] || [query]
     : [];
-  const lexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
+  const questionDecomposed = query.split(/\s+/).length > MAX_DECOMPOSED_SEARCH_TOKENS;
+  const rawLexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
+  const lexicalTokens = questionDecomposed ? decomposeQuestionTokens(rawLexicalTokens) : rawLexicalTokens;
   const residualText = lexicalTokens.join(' ');
   const residualOperator = lexicalIncidentOnly
     || (lexicalTokens.length > 1 && lexicalTokens.every((token) => PRESERVED_DOMAIN_TOKEN_PATTERN.test(token)))
@@ -417,6 +443,22 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     semanticIntent,
   };
   const searchPlan = searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange });
+  if (questionDecomposed) {
+    // Never truncate meaningful terms to fit the budget, or turn an empty question
+    // into a mailbox-wide query. Structured and security filters use the original.
+    const refused = lexicalTokens.length > MAX_DECOMPOSED_SEARCH_TOKENS
+      || (lexicalTokens.length === 0 && !project?.value && recognized.length === 0);
+    if (refused) {
+      searchPlan.fallbackPolicy.allowed = false;
+      searchPlan.fallbackPolicy.failClosed = true;
+    }
+    for (const token of lexicalTokens) {
+      if (/[\p{L}]/u.test(token) && /\d/.test(token)) {
+        searchPlan.hardAnchors.push({ kind: 'identifier', value: token });
+      }
+    }
+    recognized.push({ type: 'queryDecomposition', value: refused ? 'refused' : 'keywords' });
+  }
   if (searchPlan.hardAnchors.some((anchor) => anchor.kind === 'security_remote_session')) {
     filters = {
       ...filters,

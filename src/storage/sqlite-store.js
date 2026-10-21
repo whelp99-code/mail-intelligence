@@ -1735,6 +1735,11 @@ export class SQLiteMailStore {
       if (anchor.kind === 'due_date') hardAnchorKinds.push(anchor.kind);
       if (anchor.kind === 'external_actor') hardAnchorKinds.push(anchor.kind);
       if (anchor.kind === 'project') hardAnchorKinds.push(anchor.kind);
+      if (anchor.kind === 'identifier') {
+        clauses.push(`${searchableCurrentText} LIKE ? ESCAPE '\\'`);
+        params.push(`%${String(anchor.value).toLowerCase().replace(/[\\%_]/g, '\\$&')}%`);
+        hardAnchorKinds.push(anchor.kind);
+      }
       if (anchor.kind === 'security_remote_session') {
         const groupClause = (text, tokens) => `(${tokens.map((token) => `${text} LIKE ${sqlLiteral(`%${String(token).toLowerCase()}%`)}`).join(' OR ')})`;
         const security = groupClause(strictCurrentText, anchor.groups[0] || []);
