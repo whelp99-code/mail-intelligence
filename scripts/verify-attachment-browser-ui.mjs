@@ -2,17 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, constants, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { accessAuthorizationHeader } from '../src/security/access-user.js';
 
-const CHROME = '/usr/bin/google-chrome';
 const ARTIFACT_DIR = join(dirname(fileURLToPath(import.meta.url)), '../artifacts/attachments-acceptance');
 const CJK_NAME = '검토용-첨부-파일.txt';
 const OVERSIZE_NAME = '초과파일.txt';
 const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+
+async function resolveChrome(env = process.env) {
+  const candidates = env.MAIL_INTELLIGENCE_CHROME
+    ? [env.MAIL_INTELLIGENCE_CHROME]
+    : ['google-chrome', 'google-chrome-stable'].flatMap((name) => (
+      (env.PATH || '').split(delimiter).filter(Boolean).map((directory) => join(directory, name))
+    )).concat('/opt/google/chrome/chrome');
+  for (const candidate of candidates) {
+    try { await access(candidate, constants.X_OK); return candidate; }
+    catch { /* Try the next installed executable; an explicit override never falls back. */ }
+  }
+  throw new Error(`No executable Chrome found; set MAIL_INTELLIGENCE_CHROME. Tried: ${candidates.join(', ')}`);
+}
 
 async function freePort() {
   const server = createServer();
@@ -24,26 +36,30 @@ async function freePort() {
   return port;
 }
 
-async function waitForOutput(child, stream, marker) {
+async function waitForOutput(child, stream, marker, timeoutMs = 10_000) {
   await new Promise((resolve, reject) => {
     let output = '';
     const onData = (chunk) => {
       output += chunk.toString();
       if (output.includes(marker)) {
         cleanup();
-        resolve();
+        resolve(output);
       }
     };
     const onExit = (code, signal) => { cleanup(); reject(new Error(`${marker}: process exited ${signal || code}`)); };
+    const onError = (error) => { cleanup(); reject(error); };
     const onAbort = () => { cleanup(); reject(new Error(`${marker}: startup timeout`)); };
-    const timer = setTimeout(onAbort, 10_000);
+    const timer = setTimeout(onAbort, timeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
       stream.off('data', onData);
       child.off('exit', onExit);
+      child.off('error', onError);
     };
     stream.on('data', onData);
     child.on('exit', onExit);
+    child.on('error', onError);
+    if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode, child.signalCode);
   });
 }
 
@@ -55,6 +71,7 @@ function collectOutput(child, limit = 12_000) {
   };
   child.stdout?.on('data', append);
   child.stderr?.on('data', append);
+  child.on('exit', (code, signal) => append(`\nprocess exited: code=${code} signal=${signal}\n`));
   return () => text;
 }
 
@@ -73,14 +90,15 @@ async function stopChild(child) {
   }
 }
 
-function attachCdp(ws) {
+function attachCdp(ws, timeoutMs = 12_000) {
   const pending = new Map();
   const events = [];
   let nextId = 0;
   ws.addEventListener('message', (event) => {
     const message = JSON.parse(event.data);
     if (message.id && pending.has(message.id)) {
-      const { resolve, reject } = pending.get(message.id);
+      const { resolve, reject, timer } = pending.get(message.id);
+      clearTimeout(timer);
       pending.delete(message.id);
       if (message.error) reject(new Error(message.error.message || 'CDP error'));
       else resolve(message.result || {});
@@ -88,9 +106,25 @@ function attachCdp(ws) {
       events.push(message);
     }
   });
+  const failPending = () => {
+    for (const { reject, timer } of pending.values()) {
+      clearTimeout(timer);
+      reject(new Error('DevTools connection closed or failed'));
+    }
+    pending.clear();
+  };
+  ws.addEventListener('close', failPending);
+  ws.addEventListener('error', failPending);
   const send = async (method, params = {}) => {
+    if (ws.readyState !== WebSocket.OPEN) throw new Error('DevTools connection is not open');
     const id = ++nextId;
-    const result = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    const result = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`DevTools command timeout: ${method}`));
+      }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+    });
     ws.send(JSON.stringify({ id, method, params }));
     return result;
   };
@@ -131,8 +165,9 @@ function fontsConf(cacheDir) {
   return `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
-  <dir>/usr/share/fonts/opentype/noto</dir>
-  <dir>/usr/share/fonts/truetype/noto</dir>
+  <!-- Scan system fonts recursively, including Arch's noto-cjk and Debian's noto directories.
+       Never include the user's font configuration or home font directories. -->
+  <dir>/usr/share/fonts</dir>
   <cachedir>${cacheDir}</cachedir>
   <alias>
     <family>sans-serif</family>
@@ -153,8 +188,70 @@ test('cleanup completes for an already signal-terminated child', { timeout: 4_00
   await stopChild(child);
 });
 
+test('browser discovery honors explicit override and executable PATH order', async (t) => {
+  const directory = await mkdtemp('/var/tmp/mi-chrome-path-');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const stable = join(directory, 'google-chrome-stable');
+  const chrome = join(directory, 'google-chrome');
+  const override = join(directory, 'chromium');
+  await writeFile(stable, '#!/bin/sh\n', { mode: 0o700 });
+  assert.equal(await resolveChrome({ PATH: directory }), stable);
+  await writeFile(chrome, '#!/bin/sh\n', { mode: 0o600 });
+  assert.equal(await resolveChrome({ PATH: directory }), stable, 'non-executable files are not browsers');
+  await rm(chrome);
+  await writeFile(chrome, '#!/bin/sh\n', { mode: 0o700 });
+  assert.equal(await resolveChrome({ PATH: directory }), chrome);
+  await writeFile(override, '#!/bin/sh\n', { mode: 0o700 });
+  assert.equal(await resolveChrome({ PATH: directory, MAIL_INTELLIGENCE_CHROME: override }), override);
+  await assert.rejects(resolveChrome({ PATH: directory, MAIL_INTELLIGENCE_CHROME: join(directory, 'missing') }), /No executable Chrome found/);
+});
+
+test('startup rejects spawn errors, early exit, and missing readiness markers', async (t) => {
+  const missing = spawn('/nonexistent/mi-fixture-browser', [], { stdio: ['ignore', 'pipe', 'pipe'] });
+  await assert.rejects(waitForOutput(missing, missing.stderr, 'ready'), /ENOENT/);
+  const exited = spawn(process.execPath, ['-e', 'process.exit(7)'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  await once(exited, 'exit');
+  await assert.rejects(waitForOutput(exited, exited.stderr, 'ready'), /process exited 7/);
+  const silent = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => stopChild(silent));
+  await assert.rejects(waitForOutput(silent, silent.stderr, 'ready', 20), /startup timeout/);
+  assert.equal(silent.stderr.listenerCount('data'), 0);
+  assert.equal(silent.listenerCount('error'), 0);
+});
+
+test('DevTools settles replies, protocol errors, disconnects, and stalled commands', async () => {
+  class FixtureSocket extends EventTarget {
+    readyState = WebSocket.OPEN;
+    send(message) { this.last = JSON.parse(message); }
+    reply(message) { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) })); }
+  }
+  const ws = new FixtureSocket();
+  const cdp = attachCdp(ws, 20);
+  const success = cdp('Page.enable');
+  ws.reply({ id: ws.last.id, result: { enabled: true } });
+  assert.deepEqual(await success, { enabled: true });
+  const failure = cdp('Invalid.command');
+  ws.reply({ id: ws.last.id, error: { message: 'unsupported' } });
+  await assert.rejects(failure, /unsupported/);
+  const closed = cdp('Runtime.evaluate');
+  ws.dispatchEvent(new Event('close'));
+  await assert.rejects(closed, /connection closed/);
+  const errored = cdp('Page.navigate');
+  ws.dispatchEvent(new Event('error'));
+  await assert.rejects(errored, /connection closed or failed/);
+  await assert.rejects(cdp('Page.captureScreenshot'), /DevTools command timeout: Page.captureScreenshot/);
+  ws.readyState = WebSocket.CLOSED;
+  await assert.rejects(cdp('Page.enable'), /not open/);
+});
+
 test('isolated Chrome drives file input, errors, download, keyboard, and CJK labels', { timeout: 60_000 }, async (t) => {
+  const chromePath = await resolveChrome();
   const directory = await mkdtemp(join('/var/tmp', 'mi-g8-'));
+  const children = [];
+  t.after(async () => {
+    for (const child of children) await stopChild(child);
+    await rm(directory, { recursive: true, force: true });
+  });
   const profile = join(directory, 'chrome');
   const downloads = join(directory, 'downloads');
   const fontCache = join(directory, 'fontconfig-cache');
@@ -163,6 +260,17 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
   await mkdir(fontCache, { recursive: true, mode: 0o700 });
   const fontConfig = join(directory, 'fonts.conf');
   await writeFile(fontConfig, fontsConf(fontCache));
+  const fontEnv = {
+    ...process.env,
+    HOME: directory,
+    FONTCONFIG_FILE: fontConfig,
+    FONTCONFIG_PATH: directory,
+    XDG_CACHE_HOME: join(directory, 'cache'),
+  };
+  const matchedFont = execFileSync('fc-match', ['-f', '%{family}\n%{file}', 'Noto Sans CJK KR'], { env: fontEnv, encoding: 'utf8' });
+  assert.match(matchedFont.split('\n')[0], /\bNoto Sans CJK KR\b/, 'install system Noto Sans CJK KR fonts before running this gate');
+  await access(matchedFont.split('\n')[1], constants.R_OK);
+  t.diagnostic(`browser=${chromePath}; font=${matchedFont}`);
   const cjkPath = join(directory, CJK_NAME);
   const oversizePath = join(directory, OVERSIZE_NAME);
   const scannerPath = join(directory, 'gated-scan.sh');
@@ -196,7 +304,8 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const chrome = spawn(CHROME, [
+  children.push(app);
+  const chrome = spawn(chromePath, [
     '--headless=new',
     '--disable-gpu',
     '--no-sandbox',
@@ -208,24 +317,20 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
     `--remote-debugging-port=${debugPort}`,
   ], {
     env: {
-      ...process.env,
-      HOME: directory,
+      ...fontEnv,
       // Chrome's SingletonSocket must fit a Unix socket path; release TMPDIRs
       // can exceed that limit. Keep its sockets in this short owned fixture.
       TMPDIR: directory,
-      FONTCONFIG_FILE: fontConfig,
-      FONTCONFIG_PATH: directory,
-      XDG_CACHE_HOME: join(directory, 'cache'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  children.unshift(chrome);
   const appReady = waitForOutput(app, app.stdout, `app running at http://127.0.0.1:${appPort}`);
   const chromeReady = waitForOutput(chrome, chrome.stderr, 'DevTools listening on');
   const appLog = collectOutput(app);
   const chromeLog = collectOutput(chrome);
-  t.after(async () => {
-    for (const child of [chrome, app]) await stopChild(child);
-    await rm(directory, { recursive: true, force: true });
+  t.after(() => {
+    t.diagnostic(`app=${appLog()}\nchrome=${chromeLog()}`);
   });
 
   try {
@@ -234,10 +339,14 @@ test('isolated Chrome drives file input, errors, download, keyboard, and CJK lab
     throw new Error(`${error.message}\napp=${appLog()}\nchrome=${chromeLog()}`);
   }
 
-  const created = await (await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })).json();
+  const response = await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, {
+    method: 'PUT', signal: AbortSignal.timeout(8_000),
+  });
+  assert.equal(response.status, 200, 'DevTools must create a page target');
+  const created = await response.json();
   const ws = new WebSocket(created.webSocketDebuggerUrl);
-  await once(ws, 'open');
   t.after(() => { try { ws.close(); } catch { /* closed */ } });
+  await once(ws, 'open', { signal: AbortSignal.timeout(8_000) });
   const cdp = attachCdp(ws);
   await cdp('Page.enable');
   await cdp('Runtime.enable');
