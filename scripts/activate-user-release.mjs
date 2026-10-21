@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { prepareUserRelease, commitUserReleaseEnvironment } from './prepare-user-release.mjs';
-import { releaseDropInName, assertEffectiveRelease, assertReleaseEnvironment } from './user-release-boundary.mjs';
+import { releaseDropInName, assertEffectiveRelease, assertReleaseEnvironment, assertSafeRollback, releaseEnvironmentFilePaths } from './user-release-boundary.mjs';
 
 const run = promisify(execFile);
 const service = 'mail-intelligence.service';
@@ -14,6 +14,10 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const systemctl = async (...args) => (await run('systemctl', ['--user', ...args], { timeout: 35_000 })).stdout.trimEnd();
 const effective = () => systemctl('show', service, '-p', 'ExecStart', '-p', 'WorkingDirectory',
   '-p', 'EnvironmentFiles', '-p', 'Environment', '-p', 'UnsetEnvironment', '-p', 'DropInPaths');
+
+// Called only by explicit owner activation; the boundary itself performs no IO.
+const readEnvironmentFiles = async dataDir => Promise.all(releaseEnvironmentFilePaths(dataDir)
+  .map(async path => ({ path, text: await readFile(path, 'utf8') })));
 
 async function replacePrivateFile(path, bytes, mode = 0o600) {
   const temporary = `${path}.release-${randomUUID()}`;
@@ -46,7 +50,8 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
     if (error.code !== 'ENOENT') throw error;
   }
   const managerEnvironment = await systemctl('show-environment');
-  await prepareUserRelease({ codeRoot, dataDir, commit, managerEnvironment });
+  await prepareUserRelease({ codeRoot, dataDir, commit, managerEnvironment,
+    environmentFiles: await readEnvironmentFiles(dataDir) });
   const runtimePath = join(dataDir, 'runtime.env');
   const originalRuntime = await readFile(runtimePath);
   const preparedRuntime = await readFile(join(codeRoot, '.deployment/runtime.env'), 'utf8');
@@ -62,11 +67,12 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
     await systemctl('daemon-reload');
     await commitUserReleaseEnvironment({
       ...context, properties: await effective(),
+      environmentFiles: await readEnvironmentFiles(dataDir),
       managerEnvironment: await systemctl('show-environment'),
     });
     runtimeChanged = true;
     assertEffectiveRelease({
-      ...context, properties: await effective(), runtimeText: await readFile(runtimePath, 'utf8'),
+      ...context, properties: await effective(), environmentFiles: await readEnvironmentFiles(dataDir),
       managerEnvironment: await systemctl('show-environment'),
     });
     restartAttempted = true;
@@ -104,12 +110,13 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
       'Loaded artifact bytes changed');
     assert(digest(await readFile(runtimePath)) === digest(preparedRuntime), 'Operational runtime changed during activation');
     assertEffectiveRelease({
-      ...context, properties: await effective(), runtimeText: preparedRuntime,
+      ...context, properties: await effective(), environmentFiles: await readEnvironmentFiles(dataDir),
       managerEnvironment: await systemctl('show-environment'),
     });
     process.stdout.write(`MAIL_RELEASE_ACTIVE commit=${commit} pid=${pid} health=200 donor_assignments=0\n`);
   } catch (error) {
-    // Restore only our runtime rewrite and our owned drop-in. Base/90/91/92,
+    // Restore only our runtime rewrite and our owned drop-in. Trailing env files,
+    // base/90/91/92 and other owners' drop-ins,
     // SQLite and token caches are never edited or rewound by this operation.
     if (runtimeChanged) await replacePrivateFile(runtimePath, originalRuntime);
     if (dropInChanged) {
@@ -118,6 +125,15 @@ export async function activateUserRelease({ codeRoot, dataDir, commit }) {
       await systemctl('daemon-reload');
     }
     if (restartAttempted) {
+      try {
+        assertSafeRollback({
+          dataDir, properties: await effective(), environmentFiles: await readEnvironmentFiles(dataDir),
+          managerEnvironment: await systemctl('show-environment'),
+        });
+      } catch {
+        // Do not expose environment bytes, systemctl output or nested causes.
+        throw new Error('MAIL_RELEASE_ROLLBACK_REQUIRES_MANUAL_INTERVENTION: restored environment could not be proven safe; restart refused');
+      }
       await systemctl('restart', service);
       await systemctl('is-active', service);
     }
