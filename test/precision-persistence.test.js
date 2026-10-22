@@ -128,7 +128,8 @@ test('precision classification persists, is idempotent, and appends history only
   const action = service.getClassification('jm@example.com', 'action-1').classification;
   assert.equal(action.workState, 'action_required');
   assert.equal(action.nextActor, 'me');
-  assert.equal(action.projectResolution, 'candidate');
+  assert.equal(action.projectResolution, 'unassigned');
+  assert.deepEqual(action.projectCandidate, {});
 });
 
 test('explicit project registration is duplicate-safe and reclassifies exact aliases', async (t) => {

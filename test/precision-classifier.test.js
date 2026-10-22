@@ -144,7 +144,7 @@ test('여러 프로젝트 별칭이 함께 일치하면 임의 선택하지 않�
   assert.equal(result.projectCandidate.matches.length, 2);
 });
 
-test('등록되지 않은 대괄호 프로젝트명은 정식 프로젝트가 아니라 후보로만 둔다', () => {
+test('미등록 프로젝트 문구는 대괄호 자체가 아니라 프로젝트 문구 근거로만 후보가 된다', () => {
   const result = classifyMessage(message({
     subject: '[Acme HCI PoC] 일정 확인',
     body: '내일까지 일정표를 보내주세요.',
@@ -152,6 +152,47 @@ test('등록되지 않은 대괄호 프로젝트명은 정식 프로젝트가 �
   assert.equal(result.primaryProjectId, null);
   assert.equal(result.projectResolution, 'candidate');
   assert.equal(result.projectCandidate.label, 'Acme HCI PoC');
+  assert.equal(result.projectCandidate.source, 'project-phrase');
+});
+
+test('등록 프로젝트와 무관한 거래처·담당자·문서종류 대괄호는 후보가 아니다', () => {
+  const projects = [{ id: 7, name: 'Acme HCI Renewal', aliases: ['Acme HCI'], status: 'active' }];
+  for (const label of ['Example Vendor', 'Example 담당자님', '계산서/거래명세서', 'Monthly Report']) {
+    const result = resolveProject(message({ subject: `[${label}] 자료 전달`, body: '첨부 파일입니다.' }), projects);
+    assert.equal(result.projectResolution, 'unassigned');
+    assert.equal(result.primaryProjectId, null);
+    assert.equal(result.projectCandidate, null);
+  }
+});
+
+test('거래처·문서종류 형태라도 등록된 별칭이면 광역 blacklist 없이 보존한다', () => {
+  for (const alias of ['Example Vendor', '계산서/거래명세서']) {
+    const projects = [{ id: 7, name: 'Acme HCI Renewal', aliases: [alias], status: 'active' }];
+    const result = resolveProject(message({ subject: `[${alias}] 자료 전달` }), projects);
+    assert.equal(result.projectResolution, 'confirmed');
+    assert.equal(result.primaryProjectId, 7);
+    assert.equal(result.projectCandidate.matchedTerm, alias);
+  }
+});
+
+test('대괄호 별칭 충돌은 검토로 남기고 보관 프로젝트는 연결하지 않는다', () => {
+  const projects = [
+    { id: 7, name: 'Acme HCI Renewal', aliases: ['Shared Alias'], status: 'active' },
+    { id: 8, name: 'Acme Firewall Renewal', aliases: ['Shared Alias'], status: 'active' },
+  ];
+  const mail = message({ subject: '[Shared Alias] 자료 전달' });
+  assert.equal(resolveProject(mail, projects).projectResolution, 'review_required');
+  assert.equal(resolveProject(mail, projects.map(p => ({ ...p, status: 'archived' }))).projectResolution, 'unassigned');
+});
+
+test('무관한 대괄호가 본문 등록별칭이나 별도 프로젝트 문구를 가리지 않는다', () => {
+  const mail = message({ subject: '[Example Vendor] 일정 전달', body: 'Acme HCI 자료입니다.' });
+  const result = resolveProject(mail, [{ id: 7, name: 'Acme HCI Renewal', aliases: ['Acme HCI'] }]);
+  assert.equal(result.projectResolution, 'confirmed');
+  assert.equal(result.projectCandidate.source, 'body');
+  const candidate = resolveProject(message({ subject: '[Example Vendor] 자료 전달', body: 'Acme HCI 구축 일정입니다.' }));
+  assert.equal(candidate.projectResolution, 'candidate');
+  assert.equal(candidate.projectCandidate.source, 'project-phrase');
 });
 
 test('제한된 보조 신호만 생성하고 신호가 독립 업무 객체가 되지 않는다', () => {

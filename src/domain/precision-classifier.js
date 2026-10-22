@@ -597,12 +597,8 @@ function containsTerm(text, term) {
 }
 
 function extractProjectCandidate(subject, body) {
-  const bracketMatches = [...String(subject || '').matchAll(/\[([^\]]{2,60})\]/g)]
-    .map((match) => boundedText(match[1], 80))
-    .filter((value) => !/^(?:re|fw|fwd|외부|external|공지|notice)$/i.test(value));
-  if (bracketMatches.length === 1) {
-    return { label: bracketMatches[0], source: 'subject-bracket', confidence: 0.72 };
-  }
+  // Registered names/aliases are resolved first by resolveProject. Brackets alone
+  // identify neither a project nor an alias; retain only project-phrase evidence.
   const combined = `${subject || ''}\n${body || ''}`;
   const named = combined.match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|PoC|POC|프로젝트|사업))/u);
   if (named) return { label: boundedText(named[1], 80), source: 'project-phrase', confidence: 0.62 };

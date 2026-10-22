@@ -99,6 +99,8 @@ No requirement is considered complete until it has both implementation traceabil
 | REQ-PROJ-011 | SHOULD | Re-evaluate affected messages and knowledge after a project alias, merge, split, or correction. | 1.3.0 |
 | REQ-PROJ-012 | SHOULD | Support domain-profile-specific project and work schemas while retaining shared core fields. | 1.3.0 |
 
+Implementation trace (#97, not a release-gate completion claim): REQ-PROJ-002/003/004 use registered active names/aliases before project-phrase candidate rules; bare subject brackets do not establish project identity. `test/precision-classifier.test.js` and `test/precision-persistence.test.js` cover rejection, valid aliases, ambiguity and persistence. The identity-only `projects:diagnose` command and `test/project-registry-diagnostic.test.js` expose missing/ambiguous Notion-to-MI identities without registration, sync, mail access or reclassification (REQ-INT-009/011). No schema or authority change; existing stored decisions remain unchanged until separately authorized evaluation.
+
 ---
 
 ## 6. Persistent knowledge and learning requirements

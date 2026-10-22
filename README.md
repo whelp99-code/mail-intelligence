@@ -46,6 +46,19 @@ RECLASSIFY-PROJECTS mailbox=<id> count=<현재 실제 대상메일수>
 - 실제 무변경 행은 primary project의 active 참조 검증 전에 건너뛰므로 보존된 user-corrected/hybrid의 과거 참조가 archived여도 다른 정상 행의 적용을 막지 않는다. 실제 변경 행은 동일 mailbox의 active 프로젝트만 참조할 수 있다. 백업의 foreign_key_check는 유지하므로 이미 깨진 FK를 가진 DB의 import 승인을 의미하지 않는다.
 - 초안·원본 메일 읽음/상태·analysis 원문·외부 작업은 변경하지 않으며 본문·제목·주소·메일별 결과를 출력하지 않는다. 확인 문자열·분모 drift·백업 검증 관문은 그대로 적용한다.
 
+## 프로젝트 후보 검증과 registry 누락 진단
+
+- 대괄호는 프로젝트 근거가 아니다. 등록된 active 프로젝트명/별칭은 기존 경계 검증으로 연결하고, 복수 일치는 검토로 남긴다. 거래처·담당자·문서종류를 별도 blacklist로 차단하지 않으므로 같은 표현이라도 승인된 별칭은 유지된다. 미등록 후보는 기존 `구축`, `PoC` 등 프로젝트 문구 규칙에 해당할 때만 남는다.
+- 누락 진단은 **승인된 정제 identity JSON**만 읽는다. DB·Notion API·메일·credential 접근, 자동등록·동기화·재분류는 없다. 운영 DB나 원본 Notion snapshot을 이 명령에 넘기지 않는다.
+
+```sh
+npm run projects:diagnose -- --input /approved/project-identities.json --expected-sha256 SHA256
+```
+
+입력은 단일 mailbox/workspace 범위의 `{"notionProjects":[{"sourceId":"notion-page-id","projectKey":"exact-business-key"}],"miProjects":[{"id":1,"projectKey":"exact-business-key","status":"active"}]}`다. Notion sourceId UUID와 MI key의 UUID 값 또는 business key 완전일치만 비교한다. 이름/별칭 추측은 하지 않는다. 중복·다중 대응은 `ambiguous`, archived 참조는 존재하는 프로젝트, 미대응은 제공된 입력 범위에서만 `missing_in_mi`로 보고한다. 출력은 ID/key/status와 집계뿐이며 입력 SHA256을 고정한다.
+
+REQ-PROJ-002/003/004와 REQ-INT-009/011의 회귀 근거는 `test/precision-classifier.test.js`, `test/precision-persistence.test.js`, `test/project-registry-diagnostic.test.js`다. 스키마/마이그레이션 변경은 없고 rollback은 코드 revert만 필요하다. 저장된 판정은 코드만 바꿔도 갱신되지 않는다. 같은 고정 평가기의 저장결과 점수 보존과 코드 회귀시험 통과를 구분하며, 목표 점수 달성에는 별도 승인된 post-change 판정 fixture/재실행이 필요하다. 스레드/SN 전파는 이 변경에 포함하지 않는다.
+
 ## 현재 버전
 
 **Version: 1.2.2 — Operational Classification Stabilization**
