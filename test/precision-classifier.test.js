@@ -235,6 +235,23 @@ test('registered alias evidence treats regex punctuation literally across whites
   assert.equal(validateClassificationEvidence(result, mail).ok, true);
 });
 
+test('registered alias evidence skips boundary-invalid occurrences before the real alias', () => {
+  for (const invalid of ['XAcme\tHCI', 'Acme\tHCIx', 'Acme\tHCI에서x']) {
+    const mail = message({ subject: '자료 전달', body: `${invalid} ..., Acme HCI에서 일정 확인` });
+    const result = classifyMessage(mail, {
+      projects: [{ id: 7, name: 'Acme Renewal', aliases: ['Acme HCI'], status: 'active' }],
+    });
+    assert.equal(result.projectResolution, 'confirmed');
+    assert.equal(result.primaryProjectId, 7);
+    assert.equal(result.projectCandidate.matchedTerm, 'Acme HCI');
+    assert.equal(result.evidence.project.sourceField, 'body');
+    assert.equal(result.evidence.project.exactText, 'Acme HCI');
+    assert.equal(result.evidence.project.startOffset, mail.body.indexOf('Acme HCI'));
+    assert.equal(result.evidence.project.endOffset, mail.body.indexOf('Acme HCI') + 'Acme HCI'.length);
+    assert.equal(validateClassificationEvidence(result, mail).ok, true);
+  }
+});
+
 test('등록 프로젝트와 무관한 거래처·담당자·문서종류 대괄호는 후보가 아니다', () => {
   const projects = [{ id: 7, name: 'Acme HCI Renewal', aliases: ['Acme HCI'], status: 'active' }];
   for (const label of ['Example Vendor', 'Example 담당자님', '계산서/거래명세서', 'Monthly Report']) {

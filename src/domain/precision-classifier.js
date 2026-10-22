@@ -1435,7 +1435,8 @@ function exactTermClause(sourceText, term, sourceField, sourceMessageId) {
   // Match normalized phrase whitespace against the original source so offsets
   // and evidence retain tabs, non-ASCII spaces and repeated whitespace.
   const pattern = needle.split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
-  const match = new RegExp(pattern, 'iu').exec(source);
+  // Use containsTerm's letter/number boundaries and Korean particle suffixes.
+  const match = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}]|(?:에서|으로|와|과|은|는|이|가|을|를|의|및)(?:$|[^\\p{L}\\p{N}]))`, 'iu').exec(source);
   if (!match) return null;
   const index = match.index;
   const exactText = match[0];
