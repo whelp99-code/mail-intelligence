@@ -426,14 +426,19 @@ export class PrecisionIntelligenceService {
     this.classifyStored(mailboxUser);
     const parsedQuery = parseIntelligentQuery(query, { now });
     const callerLimit = boundedLimit(limit, 25, 100);
+    const resultLimit = Math.min(callerLimit, boundedLimit(parsedQuery.limitHint, callerLimit, 100));
+    const chronological = parsedQuery.sortOrder === 'date_desc';
     const searchOptions = {
-      limit: Math.min(callerLimit, boundedLimit(parsedQuery.limitHint, callerLimit, 100)),
+      // Admit semantic evidence before latest-N truncation without exceeding the candidate cap.
+      limit: chronological ? 100 : resultLimit,
     };
+    const evaluationOptions = { preserveOrder: chronological };
     let evaluated = evaluateSemanticSearchResults(
       parsedQuery.originalQuery,
       this.store.intelligentSearch(mailbox.id, parsedQuery, searchOptions),
+      evaluationOptions,
     );
-    let results = evaluated.results;
+    let results = evaluated.results.slice(0, resultLimit);
     let effectiveParsedQuery = parsedQuery;
     let fallbackApplied = false;
     if (results.length === 0 && parsedQuery.searchPlan?.fallbackPolicy?.allowed) {
@@ -444,8 +449,9 @@ export class PrecisionIntelligenceService {
       evaluated = evaluateSemanticSearchResults(
         parsedQuery.originalQuery,
         this.store.intelligentSearch(mailbox.id, effectiveParsedQuery, searchOptions),
+        evaluationOptions,
       );
-      results = evaluated.results;
+      results = evaluated.results.slice(0, resultLimit);
       fallbackApplied = true;
     }
     const decision = validatedSearchDecision(evaluated.decision, results);

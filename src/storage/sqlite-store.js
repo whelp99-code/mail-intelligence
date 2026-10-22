@@ -19,7 +19,7 @@ import {
 
 import { deriveOperationalClassification } from '../domain/operational-classification.js';
 import { PROJECT_REVIEW_REASONS } from '../domain/precision-classifier.js';
-import { tokenizeIntelligentSearchText } from '../domain/intelligent-search.js';
+import { normalizeIntelligentSearchToken, tokenizeIntelligentSearchText } from '../domain/intelligent-search.js';
 import { planProjectRegistration, planProjectBatch, normalizeProjectKey, normalizeProjectName } from '../domain/project-registration.js';
 import {
   WORKLINK_PROJECTION_PROVIDER,
@@ -307,9 +307,10 @@ export class SQLiteMailStore {
     if (initialize) ensurePrivateDirectorySync(databaseDirectory);
     else if (!existsSync(this.databasePath)) throw new Error('Existing database required.');
     this.db = new DatabaseSync(this.databasePath);
+    this.db.function('intelligent_normalize_email', { deterministic: true }, (value) => normalizeEmail(value));
     this.db.function('intelligent_identifier_matches', { deterministic: true }, (text, identifier) => {
-      const expected = String(identifier || '').normalize('NFKC').toLowerCase();
-      return tokenizeIntelligentSearchText(text).some((token) => token.toLowerCase() === expected) ? 1 : 0;
+      const expected = normalizeIntelligentSearchToken(identifier).toLowerCase();
+      return tokenizeIntelligentSearchText(text).some((token) => normalizeIntelligentSearchToken(token).toLowerCase() === expected) ? 1 : 0;
     });
     if (initialize) {
       this.configure();
@@ -1745,7 +1746,7 @@ export class SQLiteMailStore {
         hardAnchorKinds.push(anchor.kind);
       }
       if (anchor.kind === 'sender_address') {
-        clauses.push('LOWER(m.sender_email) = ?');
+        clauses.push('intelligent_normalize_email(m.sender_email) = ?');
         params.push(normalizeEmail(anchor.value));
         hardAnchorKinds.push(anchor.kind);
       }
@@ -1987,6 +1988,7 @@ export class SQLiteMailStore {
       WHERE ${clauses.join(' AND ')}
       ORDER BY
         CASE WHEN m.is_promotional = 1 AND pc.review_status <> 'corrected' THEN 1 ELSE 0 END ASC,
+        ${parsedQuery?.sortOrder === 'date_desc' ? 'COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC, m.id DESC,' : ''}
         ${semanticRank}
         ${incidentRank}
         ${subjectRank}

@@ -495,3 +495,146 @@ test('review 4342976943 and 4342976956 preserve exact code retrieval and real du
     assert.deepEqual(response.results.map((item) => item.message.id), ['particle'], suffix);
   }
 });
+
+test('MI95 latest N selects by message date before limiting, not by relevance', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (const [id, subject, body, receivedAt] of [
+    ['old', 'alpha beta gamma', 'alpha beta gamma', '2026-09-01T00:00:00.000Z'],
+    ['new', 'Synthetic evidence', 'alpha beta gamma with additional context', '2026-09-03T00:00:00.000Z'],
+    ['middle', 'Synthetic evidence', 'alpha beta gamma', '2026-09-02T00:00:00.000Z'],
+  ]) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(id, subject, body, 'inbox'), receivedAt } });
+    store.savePrecisionClassification(mailbox.id, id, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const phrase of ['latest 2', 'the 2 most recent', '최근 2건', '최신 2개']) {
+    const response = service.search('me@example.test', `${phrase} alpha beta gamma`);
+    assert.deepEqual(response.results.map((item) => item.message.id), ['new', 'middle'], phrase);
+    assert.deepEqual(service.search('me@example.test', `${phrase} alpha beta gamma`, { limit: 1 }).results.map((item) => item.message.id), ['new']);
+    const coverage = service.search('me@example.test', `${phrase} alpha beta gamma absent`);
+    assert.equal(coverage.fallbackApplied, true);
+    assert.deepEqual(coverage.results.map((item) => item.message.id), ['new', 'middle']);
+  }
+  assert.equal(service.search('me@example.test', 'top 2 alpha beta gamma').results[0].message.id, 'old');
+});
+
+test('MI95 chronological order survives semantic qualification without admitting unrelated evidence', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (const [id, workState, receivedAt, body] of [
+    ['old', 'completed', '2026-09-01T00:00:00.000Z', 'patch ticket fixed'],
+    ['new', 'reference', '2026-09-02T00:00:00.000Z', 'patch ticket fixed'],
+    ['unrelated', 'reference', '2026-09-03T00:00:00.000Z', 'unrelated notice'],
+  ]) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(id, 'Synthetic evidence', body, 'inbox'), receivedAt } });
+    store.savePrecisionClassification(mailbox.id, id, classification({ workState }));
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  const chronological = service.search('me@example.test', 'latest 2 patch ticket fixed');
+  assert.deepEqual(chronological.results.map((item) => item.message.id), ['new', 'old']);
+  assert.ok(chronological.results[1].semanticRank.score > chronological.results[0].semanticRank.score);
+  assert.deepEqual(service.search('me@example.test', 'top 2 patch ticket fixed').results.map((item) => item.message.id), ['old', 'new']);
+});
+
+test('review 4345085547 admits semantic evidence before latest N truncation within 100 candidates', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  const seed = (id, body, receivedAt) => {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(id, 'quotation purchase order progress', body, 'inbox'), receivedAt } });
+    store.savePrecisionClassification(mailbox.id, id, classification({ signals: ['quotation_contract'] }));
+  };
+  seed('subject-only', 'Unrelated current notice', '2026-09-03T00:00:00.000Z');
+  seed('new-safe', 'quotation purchase order progress', '2026-09-02T00:00:00.000Z');
+  seed('old-safe', 'quotation purchase order progress', '2026-09-01T00:00:00.000Z');
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const suffix of ['', ' absent']) {
+    const response = service.search('me@example.test', `latest 1 quotation purchase order progress${suffix}`);
+    assert.equal(response.answerable, true);
+    assert.equal(response.fallbackApplied, Boolean(suffix));
+    assert.deepEqual(response.results.map((item) => item.message.id), ['new-safe']);
+    assert.deepEqual(service.search('me@example.test', `latest 2 quotation purchase order progress${suffix}`).results.map((item) => item.message.id), ['new-safe', 'old-safe']);
+    assert.deepEqual(service.search('me@example.test', `latest 2 quotation purchase order progress${suffix}`, { limit: 1 }).results.map((item) => item.message.id), ['new-safe']);
+  }
+  // Do not scan beyond the existing 100-candidate safety boundary to fill slots.
+  for (let index = 0; index < 100; index += 1) {
+    seed(`unsafe-${index}`, 'Unrelated current notice', '2026-09-04T00:00:00.000Z');
+  }
+  const bounded = service.search('me@example.test', 'latest 1 quotation purchase order progress');
+  assert.equal(bounded.reason, 'no_safe_result');
+  assert.deepEqual(bounded.results, []);
+});
+
+test('review 4345085553 keeps promotion guard before latest N dates and honors corrections', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (const [id, receivedAt, isPromotional] of [
+    ['promotion', '2026-09-03T00:00:00.000Z', true],
+    ['new-safe', '2026-09-02T00:00:00.000Z', false],
+    ['old-safe', '2026-09-01T00:00:00.000Z', false],
+  ]) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(id, 'alpha beta', 'alpha beta', 'inbox'), receivedAt, isPromotional } });
+    store.savePrecisionClassification(mailbox.id, id, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const suffix of ['', ' gamma']) {
+    const query = `latest 1 alpha beta${suffix}`;
+    assert.deepEqual(service.search('me@example.test', query).results.map((item) => item.message.id), ['new-safe']);
+    assert.deepEqual(service.search('me@example.test', `latest 2 alpha beta${suffix}`).results.map((item) => item.message.id), ['new-safe', 'old-safe']);
+  }
+  assert.equal(service.search('me@example.test', 'top 1 alpha beta').results[0].message.id, 'new-safe');
+  store.savePrecisionClassification(mailbox.id, 'promotion', classification({ reviewStatus: 'corrected' }));
+  assert.deepEqual(service.search('me@example.test', 'latest 1 alpha beta').results.map((item) => item.message.id), ['promotion']);
+});
+
+test('MI95 Unicode sender case normalization matches exact addresses and keeps isolation', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const other = store.ensureMailbox({ key: 'other@example.test', address: 'other@example.test' });
+  for (const [target, id, email, folderName] of [
+    [mailbox, 'exact', 'Équipe@ÉXAMPLE.test', 'inbox'],
+    [mailbox, 'prefix', 'Équipe2@ÉXAMPLE.test', 'inbox'],
+    [mailbox, 'domain', 'Équipe@ÉXAMPLE.testing', 'inbox'],
+    [mailbox, 'deleted', 'Équipe@ÉXAMPLE.test', 'deleteditems'],
+    [mailbox, 'junk', 'Équipe@ÉXAMPLE.test', 'junkemail'],
+    [other, 'other', 'Équipe@ÉXAMPLE.test', 'inbox'],
+  ]) {
+    const folder = store.ensureFolder({ mailboxId: target.id, graphId: folderName, wellKnownName: folderName, displayName: folderName });
+    store.upsertNormalizedMessage({ mailboxId: target.id, folderId: folder.id,
+      message: { ...message(id, 'Synthetic evidence', 'alpha beta', folderName), sender: { email, name: 'Synthetic' } } });
+    store.savePrecisionClassification(target.id, id, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const address of ['équipe@éxample.test', 'ÉQUIPE@ÉXAMPLE.TEST']) {
+    assert.deepEqual(service.search('me@example.test', `latest 2 alpha from ${address}`).results.map((item) => item.message.id), ['exact']);
+  }
+});
+
+test('MI95 stored and query identifier particles share exact-token normalization', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (const [id, token] of [['exact', 'ZX-2048으로도'], ['longer', 'ZX-20480으로도'], ['suffix', 'ZX-2048abc'], ['prefix', '한글ZX-2048으로도']]) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id, message: message(id, 'Synthetic evidence', `${token} alpha beta`, 'inbox') });
+    store.savePrecisionClassification(mailbox.id, id, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const suffix of ['', '로', '만', '도', '으로도', '로만']) {
+    const response = service.search('me@example.test', `latest 2 ZX-2048${suffix} alpha beta`);
+    assert.deepEqual(response.results.map((item) => item.message.id), ['exact'], suffix);
+  }
+});
