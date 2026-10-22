@@ -20,6 +20,7 @@
     "audit:fix": "npm audit fix --ignore-scripts --no-fund",
     "projects:preview": "node scripts/import-projects.mjs --dry-run",
     "projects:import": "node scripts/import-projects.mjs --apply",
+    "projects:diagnose": "node scripts/diagnose-project-registry.mjs",
     "memory:status": "node scripts/mail-memory-admin.mjs status",
     "memory:integrity": "node scripts/mail-memory-admin.mjs integrity",
     "memory:backup": "node scripts/mail-memory-admin.mjs backup",

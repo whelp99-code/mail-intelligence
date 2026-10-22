@@ -7,6 +7,7 @@ import {
   classifyMessage,
   extractDue,
   normalizePrecisionCorrection,
+  PRECISION_CLASSIFICATION_VERSION,
   resolveProject,
   splitMessageHistory,
   stripQuotedHistory,
@@ -144,7 +145,7 @@ test('여러 프로젝트 별칭이 함께 일치하면 임의 선택하지 않�
   assert.equal(result.projectCandidate.matches.length, 2);
 });
 
-test('등록되지 않은 대괄호 프로젝트명은 정식 프로젝트가 아니라 후보로만 둔다', () => {
+test('미등록 프로젝트 문구는 대괄호 자체가 아니라 프로젝트 문구 근거로만 후보가 된다', () => {
   const result = classifyMessage(message({
     subject: '[Acme HCI PoC] 일정 확인',
     body: '내일까지 일정표를 보내주세요.',
@@ -152,6 +153,163 @@ test('등록되지 않은 대괄호 프로젝트명은 정식 프로젝트가 �
   assert.equal(result.primaryProjectId, null);
   assert.equal(result.projectResolution, 'candidate');
   assert.equal(result.projectCandidate.label, 'Acme HCI PoC');
+  assert.equal(result.projectCandidate.source, 'subject');
+  assert.equal(result.evidence.project.sourceField, 'subject');
+  assert.equal(result.evidence.project.exactText, 'Acme HCI PoC');
+});
+
+test('candidate rule revision is distinguishable from stored fix11 and fix12 classifications', () => {
+  const result = classifyMessage(message({ subject: '[Example Vendor] 자료 전달' }));
+  assert.notEqual(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix11');
+  assert.notEqual(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix12');
+  assert.equal(result.promptVersion, PRECISION_CLASSIFICATION_VERSION);
+  assert.equal(result.projectResolution, 'unassigned');
+});
+
+test('body-only project phrases retain exact current-body evidence', () => {
+  const mail = message({ subject: '[Example Vendor] 자료 전달',
+    body: 'Acme HCI 구축 일정입니다.\n\n-----Original Message-----\nOld 프로젝트 일정입니다.' });
+  const result = classifyMessage(mail);
+  assert.equal(result.projectResolution, 'candidate');
+  assert.equal(result.projectCandidate.source, 'body');
+  assert.equal(result.projectCandidate.label, 'Acme HCI 구축');
+  assert.equal(result.evidence.project.sourceField, 'body');
+  assert.equal(result.evidence.project.exactText, 'Acme HCI 구축');
+  assert.equal(result.evidence.project.sourceMessageId, mail.id);
+  assert.equal(mail.body.slice(result.evidence.project.startOffset, result.evidence.project.endOffset), 'Acme HCI 구축');
+  assert.equal(validateClassificationEvidence(result, mail).ok, true);
+  const quotedOnly = classifyMessage(message({ subject: '[Example Vendor] 자료 전달',
+    body: '자료입니다.\n\n-----Original Message-----\nOld 프로젝트 일정입니다.' }));
+  assert.equal(quotedOnly.projectResolution, 'unassigned');
+});
+
+test('project phrase candidates preserve evidence before a verb suffix', () => {
+  for (const source of ['subject', 'body']) {
+    for (const phrase of ['Acme 구축', 'Acme\t구축']) {
+      const mail = message({ subject: '자료 전달', [source]: `${phrase}합니다` });
+      const result = classifyMessage(mail);
+      assert.equal(result.projectResolution, 'candidate');
+      assert.equal(result.projectCandidate.label, 'Acme 구축');
+      assert.equal(result.projectCandidate.source, source);
+      assert.ok(result.evidence.project);
+      assert.equal(result.evidence.project.sourceField, source);
+      assert.equal(result.evidence.project.exactText, phrase);
+      assert.equal(result.evidence.project.sourceMessageId, mail.id);
+      assert.equal(result.evidence.project.startOffset, 0);
+      assert.equal(result.evidence.project.endOffset, phrase.length);
+      assert.equal(mail[source].slice(result.evidence.project.startOffset, result.evidence.project.endOffset), phrase);
+      assert.equal(validateClassificationEvidence(result, mail).ok, true);
+    }
+  }
+});
+
+test('body PoC project phrases survive case normalization', () => {
+  for (const phrase of ['Acme PoC', 'ACME POC', 'acme poc']) {
+    const mail = message({ subject: '[Example Vendor] 일정 전달', body: `${phrase} 일정입니다.` });
+    const result = classifyMessage(mail);
+    assert.equal(result.projectResolution, 'candidate', phrase);
+    assert.equal(result.projectCandidate.label, phrase);
+    assert.equal(result.evidence.project.exactText, phrase);
+    assert.equal(result.evidence.project.sourceField, 'body');
+    assert.equal(validateClassificationEvidence(result, mail).ok, true);
+  }
+});
+
+for (const whitespace of ['\t', ' ', ' ', '  \t ']) {
+  for (const suffix of ['구축', 'PoC', 'POC', 'poc']) {
+    test(`body project whitespace ${JSON.stringify(whitespace)} preserves ${suffix} evidence`, () => {
+      const phrase = `Acme${whitespace}${suffix}`;
+      const mail = message({ subject: '[Example Vendor] 자료 전달',
+        body: `참고: ${phrase} 일정입니다.\n\n-----Original Message-----\nOld 프로젝트 일정입니다.` });
+      const result = classifyMessage(mail);
+      assert.equal(result.projectResolution, 'candidate');
+      assert.equal(result.projectCandidate.label, `Acme ${suffix}`);
+      assert.equal(result.projectCandidate.source, 'body');
+      assert.equal(result.evidence.project?.sourceField, 'body');
+      assert.equal(result.evidence.project?.exactText, phrase);
+      assert.equal(result.evidence.project?.sourceMessageId, mail.id);
+      assert.equal(mail.body.slice(result.evidence.project.startOffset, result.evidence.project.endOffset), phrase);
+      assert.equal(validateClassificationEvidence(result, mail).ok, true);
+    });
+  }
+}
+
+test('subject project whitespace retains exact evidence and subject precedence', () => {
+  const mail = message({ subject: '[Acme\tPoC] 일정 확인', body: 'Other 구축 일정입니다.' });
+  const result = classifyMessage(mail);
+  assert.equal(result.projectCandidate.label, 'Acme PoC');
+  assert.equal(result.projectCandidate.source, 'subject');
+  assert.equal(result.evidence.project.exactText, 'Acme\tPoC');
+  assert.equal(result.evidence.project.sourceField, 'subject');
+  assert.equal(validateClassificationEvidence(result, mail).ok, true);
+});
+
+test('registered alias evidence treats regex punctuation literally across whitespace', () => {
+  const mail = message({ subject: '자료 전달', body: 'AcmeXHCI\tPoC, Acme.HCI PoC 일정입니다.' });
+  const result = classifyMessage(mail, {
+    projects: [{ id: 7, name: 'Acme.HCI PoC', aliases: [], status: 'active' }],
+  });
+  assert.equal(result.projectResolution, 'confirmed');
+  assert.equal(result.evidence.project.exactText, 'Acme.HCI PoC');
+  assert.equal(mail.body.slice(result.evidence.project.startOffset, result.evidence.project.endOffset), 'Acme.HCI PoC');
+  assert.equal(validateClassificationEvidence(result, mail).ok, true);
+});
+
+test('registered alias evidence skips boundary-invalid occurrences before the real alias', () => {
+  for (const invalid of ['XAcme\tHCI', 'Acme\tHCIx', 'Acme\tHCI에서x']) {
+    const mail = message({ subject: '자료 전달', body: `${invalid} ..., Acme HCI에서 일정 확인` });
+    const result = classifyMessage(mail, {
+      projects: [{ id: 7, name: 'Acme Renewal', aliases: ['Acme HCI'], status: 'active' }],
+    });
+    assert.equal(result.projectResolution, 'confirmed');
+    assert.equal(result.primaryProjectId, 7);
+    assert.equal(result.projectCandidate.matchedTerm, 'Acme HCI');
+    assert.equal(result.evidence.project.sourceField, 'body');
+    assert.equal(result.evidence.project.exactText, 'Acme HCI');
+    assert.equal(result.evidence.project.startOffset, mail.body.indexOf('Acme HCI'));
+    assert.equal(result.evidence.project.endOffset, mail.body.indexOf('Acme HCI') + 'Acme HCI'.length);
+    assert.equal(validateClassificationEvidence(result, mail).ok, true);
+  }
+});
+
+test('등록 프로젝트와 무관한 거래처·담당자·문서종류 대괄호는 후보가 아니다', () => {
+  const projects = [{ id: 7, name: 'Acme HCI Renewal', aliases: ['Acme HCI'], status: 'active' }];
+  for (const label of ['Example Vendor', 'Example 담당자님', '계산서/거래명세서', 'Monthly Report']) {
+    const result = resolveProject(message({ subject: `[${label}] 자료 전달`, body: '첨부 파일입니다.' }), projects);
+    assert.equal(result.projectResolution, 'unassigned');
+    assert.equal(result.primaryProjectId, null);
+    assert.equal(result.projectCandidate, null);
+  }
+});
+
+test('거래처·문서종류 형태라도 등록된 별칭이면 광역 blacklist 없이 보존한다', () => {
+  for (const alias of ['Example Vendor', '계산서/거래명세서']) {
+    const projects = [{ id: 7, name: 'Acme HCI Renewal', aliases: [alias], status: 'active' }];
+    const result = resolveProject(message({ subject: `[${alias}] 자료 전달` }), projects);
+    assert.equal(result.projectResolution, 'confirmed');
+    assert.equal(result.primaryProjectId, 7);
+    assert.equal(result.projectCandidate.matchedTerm, alias);
+  }
+});
+
+test('대괄호 별칭 충돌은 검토로 남기고 보관 프로젝트는 연결하지 않는다', () => {
+  const projects = [
+    { id: 7, name: 'Acme HCI Renewal', aliases: ['Shared Alias'], status: 'active' },
+    { id: 8, name: 'Acme Firewall Renewal', aliases: ['Shared Alias'], status: 'active' },
+  ];
+  const mail = message({ subject: '[Shared Alias] 자료 전달' });
+  assert.equal(resolveProject(mail, projects).projectResolution, 'review_required');
+  assert.equal(resolveProject(mail, projects.map(p => ({ ...p, status: 'archived' }))).projectResolution, 'unassigned');
+});
+
+test('무관한 대괄호가 본문 등록별칭이나 별도 프로젝트 문구를 가리지 않는다', () => {
+  const mail = message({ subject: '[Example Vendor] 일정 전달', body: 'Acme HCI 자료입니다.' });
+  const result = resolveProject(mail, [{ id: 7, name: 'Acme HCI Renewal', aliases: ['Acme HCI'] }]);
+  assert.equal(result.projectResolution, 'confirmed');
+  assert.equal(result.projectCandidate.source, 'body');
+  const candidate = resolveProject(message({ subject: '[Example Vendor] 자료 전달', body: 'Acme HCI 구축 일정입니다.' }));
+  assert.equal(candidate.projectResolution, 'candidate');
+  assert.equal(candidate.projectCandidate.source, 'body');
 });
 
 test('제한된 보조 신호만 생성하고 신호가 독립 업무 객체가 되지 않는다', () => {

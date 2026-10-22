@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 
 const EXPECTED = Object.freeze({
   evaluation: 'precision-classification-fixture-v2',
-  classifierVersion: 'precision-classification-v1.2.2-fix11',
+  classifierVersion: 'precision-classification-v1.2.2-fix13',
   fixtures: 20,
   assertions: 77,
   passed: 77,

@@ -11,7 +11,7 @@ import {
   operationalSummary,
 } from './operational-classification.js';
 
-export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix11';
+export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix13';
 export const EVIDENCE_NORMALIZATION_VERSION = 'exact-source-span-v1';
 
 export const WORK_STATES = Object.freeze([
@@ -597,21 +597,19 @@ function containsTerm(text, term) {
 }
 
 function extractProjectCandidate(subject, body) {
-  const bracketMatches = [...String(subject || '').matchAll(/\[([^\]]{2,60})\]/g)]
-    .map((match) => boundedText(match[1], 80))
-    .filter((value) => !/^(?:re|fw|fwd|외부|external|공지|notice)$/i.test(value));
-  if (bracketMatches.length === 1) {
-    return { label: bracketMatches[0], source: 'subject-bracket', confidence: 0.72 };
+  // Registered names/aliases are resolved first by resolveProject. Brackets alone
+  // identify neither a project nor an alias; retain only project-phrase evidence.
+  for (const [source, text] of [['subject', subject], ['body', body]]) {
+    const named = normalizeSpace(text).match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|poc|프로젝트|사업))/iu);
+    if (named) return { label: boundedText(named[1], 80), source, confidence: 0.62 };
   }
-  const combined = `${subject || ''}\n${body || ''}`;
-  const named = combined.match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|PoC|POC|프로젝트|사업))/u);
-  if (named) return { label: boundedText(named[1], 80), source: 'project-phrase', confidence: 0.62 };
   return null;
 }
 
 export function resolveProject(message, projects = []) {
   const subject = normalizeComparable(message.subject || '');
-  const body = normalizeComparable(stripQuotedHistory(message.body || message.bodyPreview || ''));
+  const currentBody = stripQuotedHistory(message.body || message.bodyPreview || '');
+  const body = normalizeComparable(currentBody);
   const matches = [];
   for (const project of projects.filter((item) => String(item.status || 'active') === 'active')) {
     const terms = projectTerms(project);
@@ -645,7 +643,7 @@ export function resolveProject(message, projects = []) {
       reviewReasons: ['multiple_project_matches'],
     };
   }
-  const candidate = extractProjectCandidate(message.subject, body);
+  const candidate = extractProjectCandidate(message.subject, currentBody);
   if (candidate) {
     return {
       primaryProjectId: null,
@@ -1430,13 +1428,22 @@ function dueEvidenceClause(clauses, due) {
     || null;
 }
 
-function exactTermClause(sourceText, term, sourceField, sourceMessageId) {
+function exactTermClause(sourceText, term, sourceField, sourceMessageId, requireTermBoundary) {
   const source = String(sourceText || '');
   const needle = String(term || '');
   if (!source || !needle) return null;
-  const index = source.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
-  if (index < 0) return null;
-  const exactText = source.slice(index, index + needle.length);
+  // Match normalized phrase whitespace against the original source so offsets
+  // and evidence retain tabs, non-ASCII spaces and repeated whitespace.
+  const pattern = needle.split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+  // Registered aliases use containsTerm's boundaries; extracted phrases may
+  // end inside a verb such as 구축합니다 and must retain that exact span.
+  const sourcePattern = requireTermBoundary
+    ? `(?<![\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}]|(?:에서|으로|와|과|은|는|이|가|을|를|의|및)(?:$|[^\\p{L}\\p{N}]))`
+    : pattern;
+  const match = new RegExp(sourcePattern, 'iu').exec(source);
+  if (!match) return null;
+  const index = match.index;
+  const exactText = match[0];
   return {
     text: exactText,
     exactText,
@@ -1458,7 +1465,7 @@ export function projectResolutionMetadata(message, project, workState = '') {
     ? splitMessageHistory(message.body || message.bodyPreview || '').currentContent
     : String(message.subject || '');
   return {
-    evidence: term ? evidence(exactTermClause(sourceText, term, sourceField, message.id),
+    evidence: term ? evidence(exactTermClause(sourceText, term, sourceField, message.id, Boolean(candidate?.matchedTerm)),
       'project', `project-${candidate?.source || 'candidate'}`) : null,
     confidence: Number(project.confidence.toFixed(3)),
     reviewReasons: project.projectResolution === 'review_required'
