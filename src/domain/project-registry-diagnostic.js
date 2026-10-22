@@ -18,12 +18,18 @@ export function diagnoseProjectRegistry({ notionProjects, miProjects } = {}) {
     throw new Error('Invalid project identity projection.');
   }
   const sourceIdentity = p => uuidValue(p.sourceId) || p.sourceId;
+  const localIdentity = p => uuidValue(p.projectKey) || p.projectKey;
   const sourceCounts = new Map();
   const businessKeyCounts = new Map();
+  const localKeyCounts = new Map();
+  for (const p of miProjects) {
+    const key = localIdentity(p);
+    localKeyCounts.set(key, (localKeyCounts.get(key) || 0) + 1);
+  }
   for (const p of notionProjects) {
     const key = sourceIdentity(p);
     sourceCounts.set(key, (sourceCounts.get(key) || 0) + 1);
-    if (p.projectKey !== '') {
+    if (p.projectKey.trim() !== '') {
       businessKeyCounts.set(p.projectKey, (businessKeyCounts.get(p.projectKey) || 0) + 1);
     }
   }
@@ -31,7 +37,7 @@ export function diagnoseProjectRegistry({ notionProjects, miProjects } = {}) {
   // Name, alias, fuzzy matching, status filtering and inferred identities are forbidden.
   const candidates = notionProjects.map(n => miProjects.filter(m =>
     (uuidValue(n.sourceId) !== null && uuidValue(n.sourceId) === uuidValue(m.projectKey))
-    || (n.projectKey !== '' && n.projectKey === m.projectKey)));
+    || (n.projectKey.trim() !== '' && n.projectKey === m.projectKey)));
   const references = new Map();
   for (const matches of candidates) {
     for (const m of matches) references.set(m.id, (references.get(m.id) || 0) + 1);
@@ -40,6 +46,7 @@ export function diagnoseProjectRegistry({ notionProjects, miProjects } = {}) {
     const matches = candidates[i];
     const ambiguous = sourceCounts.get(sourceIdentity(n)) > 1
       || businessKeyCounts.get(n.projectKey) > 1 || matches.length > 1
+      || matches.some(m => localKeyCounts.get(localIdentity(m)) > 1)
       || matches.some(m => references.get(m.id) > 1);
     return {
       sourceId: n.sourceId, projectKey: n.projectKey,
@@ -49,17 +56,19 @@ export function diagnoseProjectRegistry({ notionProjects, miProjects } = {}) {
   });
   const unmatchedMiProjects = miProjects.filter(m => !references.has(m.id))
     .map(m => ({ id: m.id, projectKey: m.projectKey, status: m.status }));
+  const ambiguousMiProjects = miProjects.filter(m => localKeyCounts.get(localIdentity(m)) > 1)
+    .map(m => ({ id: m.id, projectKey: m.projectKey, status: m.status }));
   return {
     readOnly: true,
     counts: {
       notion: notionProjects.length, mi: miProjects.length,
       matched: projects.filter(p => p.status === 'matched').length,
       missingInMi: projects.filter(p => p.status === 'missing_in_mi').length,
-      ambiguous: projects.filter(p => p.status === 'ambiguous').length,
+      ambiguous: projects.filter(p => p.status === 'ambiguous').length + ambiguousMiProjects.length,
       matchedArchived: projects.filter(p => p.status === 'matched' && p.miProjects[0].status === 'archived').length,
       unmatchedMi: unmatchedMiProjects.length,
     },
-    projects, unmatchedMiProjects,
-    semantics: 'Only explicit identity projections; exact business key or UUID value. Missing is relative to supplied scope, not proof of operational absence. No registration, sync or classification.',
+    projects, unmatchedMiProjects, ambiguousMiProjects,
+    semantics: 'Only explicit identity projections; exact business key or UUID value. Ambiguous counts affected Notion rows plus duplicate-key MI rows, whether referenced or unmatched. Unmatched MI includes ambiguous rows with no reference. Missing is relative to supplied scope, not proof of operational absence. No registration, sync or classification.',
   };
 }

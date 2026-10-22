@@ -158,9 +158,10 @@ test('미등록 프로젝트 문구는 대괄호 자체가 아니라 프로젝�
   assert.equal(result.evidence.project.exactText, 'Acme HCI PoC');
 });
 
-test('bracket rule revision is distinguishable from stored fix11 classifications', () => {
+test('candidate rule revision is distinguishable from stored fix11 and fix12 classifications', () => {
   const result = classifyMessage(message({ subject: '[Example Vendor] 자료 전달' }));
   assert.notEqual(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix11');
+  assert.notEqual(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix12');
   assert.equal(result.promptVersion, PRECISION_CLASSIFICATION_VERSION);
   assert.equal(result.projectResolution, 'unassigned');
 });
@@ -192,6 +193,46 @@ test('body PoC project phrases survive case normalization', () => {
     assert.equal(result.evidence.project.sourceField, 'body');
     assert.equal(validateClassificationEvidence(result, mail).ok, true);
   }
+});
+
+for (const whitespace of ['\t', ' ', ' ', '  \t ']) {
+  for (const suffix of ['구축', 'PoC', 'POC', 'poc']) {
+    test(`body project whitespace ${JSON.stringify(whitespace)} preserves ${suffix} evidence`, () => {
+      const phrase = `Acme${whitespace}${suffix}`;
+      const mail = message({ subject: '[Example Vendor] 자료 전달',
+        body: `참고: ${phrase} 일정입니다.\n\n-----Original Message-----\nOld 프로젝트 일정입니다.` });
+      const result = classifyMessage(mail);
+      assert.equal(result.projectResolution, 'candidate');
+      assert.equal(result.projectCandidate.label, `Acme ${suffix}`);
+      assert.equal(result.projectCandidate.source, 'body');
+      assert.equal(result.evidence.project?.sourceField, 'body');
+      assert.equal(result.evidence.project?.exactText, phrase);
+      assert.equal(result.evidence.project?.sourceMessageId, mail.id);
+      assert.equal(mail.body.slice(result.evidence.project.startOffset, result.evidence.project.endOffset), phrase);
+      assert.equal(validateClassificationEvidence(result, mail).ok, true);
+    });
+  }
+}
+
+test('subject project whitespace retains exact evidence and subject precedence', () => {
+  const mail = message({ subject: '[Acme\tPoC] 일정 확인', body: 'Other 구축 일정입니다.' });
+  const result = classifyMessage(mail);
+  assert.equal(result.projectCandidate.label, 'Acme PoC');
+  assert.equal(result.projectCandidate.source, 'subject');
+  assert.equal(result.evidence.project.exactText, 'Acme\tPoC');
+  assert.equal(result.evidence.project.sourceField, 'subject');
+  assert.equal(validateClassificationEvidence(result, mail).ok, true);
+});
+
+test('registered alias evidence treats regex punctuation literally across whitespace', () => {
+  const mail = message({ subject: '자료 전달', body: 'AcmeXHCI\tPoC, Acme.HCI PoC 일정입니다.' });
+  const result = classifyMessage(mail, {
+    projects: [{ id: 7, name: 'Acme.HCI PoC', aliases: [], status: 'active' }],
+  });
+  assert.equal(result.projectResolution, 'confirmed');
+  assert.equal(result.evidence.project.exactText, 'Acme.HCI PoC');
+  assert.equal(mail.body.slice(result.evidence.project.startOffset, result.evidence.project.endOffset), 'Acme.HCI PoC');
+  assert.equal(validateClassificationEvidence(result, mail).ok, true);
 });
 
 test('등록 프로젝트와 무관한 거래처·담당자·문서종류 대괄호는 후보가 아니다', () => {

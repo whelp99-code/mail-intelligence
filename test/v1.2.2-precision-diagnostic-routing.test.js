@@ -19,7 +19,7 @@ test('precision diagnostic requires a clean strict evaluation without report-onl
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
   assert.equal(report.precisionDiagnostic, 'PASS');
-  assert.equal(report.classifierVersion, 'precision-classification-v1.2.2-fix12');
+  assert.equal(report.classifierVersion, 'precision-classification-v1.2.2-fix13');
   assert.equal(report.strictExitCode, 0);
   assert.equal(report.blocking, 0);
   assert.equal(report.reportOnly, 0);
@@ -38,7 +38,7 @@ test('precision diagnostic rejects old or unknown versions even with clean fixtu
   const report = JSON.parse(clean.stdout);
   assert.equal(report.failed, 0);
   assert.deepEqual(report.failures, []);
-  for (const classifierVersion of ['precision-classification-v1.2.2-fix11', 'unknown-version']) {
+  for (const classifierVersion of ['precision-classification-v1.2.2-fix11', 'precision-classification-v1.2.2-fix12', 'unknown-version']) {
     writeFileSync(join(directory, 'scripts/evaluate-precision-classification.mjs'),
       `console.log(${JSON.stringify(JSON.stringify({ ...report, classifierVersion }))});\n`);
     const result = run(directory);

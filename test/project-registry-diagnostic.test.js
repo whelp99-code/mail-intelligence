@@ -46,7 +46,8 @@ test('duplicate or conflicting identities are ambiguous, never silently chosen',
   ];
   for (const input of scenarios) {
     const report = diagnoseProjectRegistry(input);
-    assert.equal(report.counts.ambiguous, input.notionProjects.length);
+    const duplicateLocals = input.miProjects.length === 2 && input.miProjects.every(p => p.projectKey === key) ? 2 : 0;
+    assert.equal(report.counts.ambiguous, input.notionProjects.length + duplicateLocals);
     assert.equal(report.counts.missingInMi, 0);
     assert.equal(report.counts.matched, 0);
   }
@@ -76,6 +77,52 @@ test('archived local projects are present, and empty scoped registries are expli
   assert.equal(report.counts.missingInMi, 0);
   assert.equal(diagnoseProjectRegistry({ notionProjects: [], miProjects: [mi()] }).counts.unmatchedMi, 1);
   assert.equal(diagnoseProjectRegistry({ notionProjects: [], miProjects: [] }).counts.missingInMi, 0);
+});
+
+test('whitespace-only Notion keys are absent without mutating the projection', () => {
+  for (const blank of [' ', '\t', ' ', ' ']) {
+    const input = { notionProjects: [notion('syn-one', blank), notion('syn-two', blank)], miProjects: [] };
+    const before = structuredClone(input);
+    const report = diagnoseProjectRegistry(input);
+    assert.equal(report.counts.ambiguous, 0);
+    assert.equal(report.counts.missingInMi, 2);
+    assert.deepEqual(input, before);
+    assert.equal(report.projects[0].projectKey, blank);
+    const linked = diagnoseProjectRegistry({ notionProjects: [notion(uuid, blank)], miProjects: [mi()] });
+    assert.equal(linked.counts.matched, 1);
+    assert.throws(() => diagnoseProjectRegistry({ notionProjects: [], miProjects: [mi(blank)] }),
+      /Invalid project identity projection/);
+  }
+});
+
+test('unreferenced duplicate MI keys are ambiguous independently of input order', () => {
+  for (const keys of [['PRJ-LOCAL', 'PRJ-LOCAL'], [uuid, key.toUpperCase()]]) {
+    const locals = [mi(keys[0]), mi(keys[1], 8, 'archived'), mi('UNIQUE', 9)];
+    for (const miProjects of [locals, [...locals].reverse()]) {
+      for (const notionProjects of [[], [notion('unrelated', '')]]) {
+        const input = { notionProjects, miProjects };
+        const before = structuredClone(input);
+        const report = diagnoseProjectRegistry(input);
+        assert.equal(report.counts.ambiguous, 2);
+        assert.deepEqual(report.ambiguousMiProjects.map(p => p.id).sort(), [7, 8]);
+        assert.equal(report.counts.matched, 0);
+        assert.equal(report.counts.unmatchedMi, 3);
+        assert.deepEqual(input, before);
+      }
+    }
+  }
+});
+
+test('referenced UUID-equivalent duplicate MI keys remain ambiguous with one exact business match', () => {
+  const locals = [mi(uuid), mi(key.toUpperCase(), 8)];
+  for (const miProjects of [locals, [...locals].reverse()]) {
+    const report = diagnoseProjectRegistry({ notionProjects: [notion('syn-business', uuid)], miProjects });
+    assert.equal(report.projects[0].miProjects.length, 1);
+    assert.equal(report.projects[0].status, 'ambiguous');
+    assert.equal(report.counts.ambiguous, 3);
+    assert.equal(report.counts.matched, 0);
+    assert.deepEqual(report.ambiguousMiProjects.map(p => p.id).sort(), [7, 8]);
+  }
 });
 
 test('invalid projections fail closed rather than reporting false absence', () => {

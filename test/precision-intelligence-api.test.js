@@ -159,7 +159,7 @@ test('v1.2.2 intelligence APIs provide safe operational lanes, summaries, drafts
   assert.equal(health.storage.schemaVersion, 9);
   assert.equal(health.safety.mode, 'read-only');
   assert.equal(health.graphConsent.includes('Mail.Send'), false);
-  assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix12');
+  assert.equal(health.precisionClassificationVersion, 'precision-classification-v1.2.2-fix13');
   assert.equal(health.operationalClassificationVersion, 'operational-classification-v1.2.2');
   assert.equal(health.mailAssistantToolsVersion, 'mail-assistant-tools-v1.2.2');
   assert.equal(health.outlookOAuthRedirectUri, 'http://localhost:3010/auth/callback');

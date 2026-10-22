@@ -11,7 +11,7 @@ import {
   operationalSummary,
 } from './operational-classification.js';
 
-export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix12';
+export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix13';
 export const EVIDENCE_NORMALIZATION_VERSION = 'exact-source-span-v1';
 
 export const WORK_STATES = Object.freeze([
@@ -600,7 +600,7 @@ function extractProjectCandidate(subject, body) {
   // Registered names/aliases are resolved first by resolveProject. Brackets alone
   // identify neither a project nor an alias; retain only project-phrase evidence.
   for (const [source, text] of [['subject', subject], ['body', body]]) {
-    const named = String(text || '').match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|poc|프로젝트|사업))/iu);
+    const named = normalizeSpace(text).match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|poc|프로젝트|사업))/iu);
     if (named) return { label: boundedText(named[1], 80), source, confidence: 0.62 };
   }
   return null;
@@ -1432,9 +1432,13 @@ function exactTermClause(sourceText, term, sourceField, sourceMessageId) {
   const source = String(sourceText || '');
   const needle = String(term || '');
   if (!source || !needle) return null;
-  const index = source.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
-  if (index < 0) return null;
-  const exactText = source.slice(index, index + needle.length);
+  // Match normalized phrase whitespace against the original source so offsets
+  // and evidence retain tabs, non-ASCII spaces and repeated whitespace.
+  const pattern = needle.split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+  const match = new RegExp(pattern, 'iu').exec(source);
+  if (!match) return null;
+  const index = match.index;
+  const exactText = match[0];
   return {
     text: exactText,
     exactText,

@@ -48,14 +48,14 @@ RECLASSIFY-PROJECTS mailbox=<id> count=<현재 실제 대상메일수>
 
 ## 프로젝트 후보 검증과 registry 누락 진단
 
-- 대괄호는 프로젝트 근거가 아니다. 등록된 active 프로젝트명/별칭은 기존 경계 검증으로 연결하고, 복수 일치는 검토로 남긴다. 거래처·담당자·문서종류를 별도 blacklist로 차단하지 않으므로 같은 표현이라도 승인된 별칭은 유지된다. 미등록 후보는 기존 `구축`, `PoC` 등 프로젝트 문구 규칙에 해당할 때만 남는다. 문구 후보도 제목/현재 본문 source와 exact-span 근거를 보존하며 PoC 대소문자를 구분하지 않는다. 인용된 과거 본문은 후보 근거가 아니다.
+- 대괄호는 프로젝트 근거가 아니다. 등록된 active 프로젝트명/별칭은 기존 경계 검증으로 연결하고, 복수 일치는 검토로 남긴다. 거래처·담당자·문서종류를 별도 blacklist로 차단하지 않으므로 같은 표현이라도 승인된 별칭은 유지된다. 미등록 후보는 기존 `구축`, `PoC` 등 프로젝트 문구 규칙에 해당할 때만 남는다. 공백을 정규화해 문구를 매칭하되 제목/현재 본문 source와 원래 탭·비ASCII·반복 공백을 포함한 exact-span 근거를 보존하며 PoC 대소문자를 구분하지 않는다. 인용된 과거 본문은 후보 근거가 아니다.
 - 누락 진단은 **승인된 정제 identity JSON**만 읽는다. DB·Notion API·메일·credential 접근, 자동등록·동기화·재분류는 없다. 운영 DB나 원본 Notion snapshot을 이 명령에 넘기지 않는다.
 
 ```sh
 npm run projects:diagnose -- --input /approved/project-identities.json --expected-sha256 SHA256
 ```
 
-입력은 단일 mailbox/workspace 범위의 `{"notionProjects":[{"sourceId":"notion-page-id","projectKey":"exact-business-key"}],"miProjects":[{"id":1,"projectKey":"exact-business-key","status":"active"}]}`다. Notion sourceId UUID와 MI key의 UUID 값 또는 business key 완전일치만 비교한다. 이름/별칭 추측은 하지 않는다. 중복·다중 대응은 `ambiguous`, archived 참조는 존재하는 프로젝트, 미대응은 제공된 입력 범위에서만 `missing_in_mi`로 보고한다. sourceId가 달라도 비어 있지 않은 business key가 중복이면 MI 대응 유무와 입력 순서에 관계없이 `ambiguous`다. 출력은 ID/key/status와 집계뿐이며 입력 SHA256을 고정한다.
+입력은 단일 mailbox/workspace 범위의 `{"notionProjects":[{"sourceId":"notion-page-id","projectKey":"exact-business-key"}],"miProjects":[{"id":1,"projectKey":"exact-business-key","status":"active"}]}`다. Notion sourceId UUID와 MI key의 UUID 값 또는 business key 완전일치만 비교한다. 이름/별칭 추측은 하지 않는다. 중복·다중 대응은 `ambiguous`, archived 참조는 존재하는 프로젝트, 미대응은 제공된 입력 범위에서만 `missing_in_mi`로 보고한다. 공백뿐인 Notion key는 키 없음으로 취급한다. sourceId가 달라도 비어 있지 않은 business key가 중복이면 MI 대응 유무와 입력 순서에 관계없이 `ambiguous`다. MI key 중복도 Notion 참조 없이 `ambiguousMiProjects`에 노출하며, `counts.ambiguous`는 모호한 Notion 행과 중복 MI 행 수의 합이다. 참조 없는 MI 행은 모호하더라도 `unmatchedMiProjects`에도 포함한다. 출력은 ID/key/status와 집계뿐이며 입력 SHA256을 고정한다.
 
 REQ-PROJ-002/003/004와 REQ-INT-009/011의 회귀 근거는 `test/precision-classifier.test.js`, `test/precision-persistence.test.js`, `test/project-registry-diagnostic.test.js`다. 스키마/마이그레이션 변경은 없고 rollback은 코드 revert만 필요하다. 저장된 판정은 코드만 바꿔도 갱신되지 않는다. 같은 고정 평가기의 저장결과 점수 보존과 코드 회귀시험 통과를 구분하며, 목표 점수 달성에는 별도 승인된 post-change 판정 fixture/재실행이 필요하다. 스레드/SN 전파는 이 변경에 포함하지 않는다.
 
@@ -63,7 +63,7 @@ REQ-PROJ-002/003/004와 REQ-INT-009/011의 회귀 근거는 `test/precision-clas
 
 **Version: 1.2.2 — Operational Classification Stabilization**
 
-v1.2.2는 v1.2.1의 **authoritative SQLite**, 정밀 분류, 지능형 탐색, 공식 CLI OAuth Provider와 읽기 전용 안전 기준을 유지하면서, 의미 사건·상태 머신과 `DO_NOW / WAITING / REVIEW / ARCHIVE` 운영 Lane을 추가한 버전입니다. 이 소스의 classifier는 `precision-classification-v1.2.2-fix12`, 검색은 `intelligent-search-v1.2.2-fix12`입니다. 확실한 업무는 빠르게 배치하고, 불확실하거나 충돌하는 메일은 Silent Action Miss 방지 Gate를 통해 자동 보관하지 않습니다.
+v1.2.2는 v1.2.1의 **authoritative SQLite**, 정밀 분류, 지능형 탐색, 공식 CLI OAuth Provider와 읽기 전용 안전 기준을 유지하면서, 의미 사건·상태 머신과 `DO_NOW / WAITING / REVIEW / ARCHIVE` 운영 Lane을 추가한 버전입니다. 이 소스의 classifier는 `precision-classification-v1.2.2-fix13`, 검색은 `intelligent-search-v1.2.2-fix12`입니다. 확실한 업무는 빠르게 배치하고, 불확실하거나 충돌하는 메일은 Silent Action Miss 방지 Gate를 통해 자동 보관하지 않습니다.
 
 MailMaestro 메일에서 확인된 Improve, Thread Summary, Rapid Reply, Auto Label, Meeting Intent, AI Personality, Email/Attachment Summary는 발송·캘린더·CRM 쓰기 없이 로컬 요약·초안·검토 기능으로만 반영합니다. 공개 API, Gmail 지원, 가격 숫자는 근거가 없으므로 제품 기능으로 주장하지 않습니다.
 
@@ -641,7 +641,7 @@ v1.2.2는 엔지니어링 검증 대상이며, 최종 Production GO는 신규 �
 
 ## v1.2.2 사건·운영 Lane 기반 분류
 
-이 소스의 분류기는 `precision-classification-v1.2.2-fix12`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. 저장된 기존 판정은 재분류하지 않으며 이 버전 표기는 배포 증거가 아닙니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다. 검색 버전은 `intelligent-search-v1.2.2-fix12`입니다.
+이 소스의 분류기는 `precision-classification-v1.2.2-fix13`이며, `mail-event-frame-v3`에서 현재 본문의 Support lifecycle, 자동 알림 종류, 서비스 위험, 발신/수신 방향, 요청·완료·대기 사건을 먼저 추출합니다. 저장된 기존 판정은 재분류하지 않으며 이 버전 표기는 배포 증거가 아닙니다. Canonical 상태를 결정한 뒤 `operational-classification-v1.2.2`가 `DO_NOW`, `WAITING`, `REVIEW`, `ARCHIVE`로 투영하고, 위험 신호가 있는 메일의 자동 Archive를 차단합니다. 검색 버전은 `intelligent-search-v1.2.2-fix12`입니다.
 
 조건부 문의 Footer, 법적 Disclaimer, 마케팅 수신거부, tracking asset은 상태·Priority Evidence에서 제외한다. 외부 행동과 외부 AI는 운영 안전선에서 기본 비활성화 상태를 유지한다.
 
