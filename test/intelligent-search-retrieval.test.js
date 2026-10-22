@@ -543,6 +543,62 @@ test('MI95 chronological order survives semantic qualification without admitting
   assert.deepEqual(service.search('me@example.test', 'top 2 patch ticket fixed').results.map((item) => item.message.id), ['old', 'new']);
 });
 
+test('review 4345085547 admits semantic evidence before latest N truncation within 100 candidates', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  const seed = (id, body, receivedAt) => {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(id, 'quotation purchase order progress', body, 'inbox'), receivedAt } });
+    store.savePrecisionClassification(mailbox.id, id, classification({ signals: ['quotation_contract'] }));
+  };
+  seed('subject-only', 'Unrelated current notice', '2026-09-03T00:00:00.000Z');
+  seed('new-safe', 'quotation purchase order progress', '2026-09-02T00:00:00.000Z');
+  seed('old-safe', 'quotation purchase order progress', '2026-09-01T00:00:00.000Z');
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const suffix of ['', ' absent']) {
+    const response = service.search('me@example.test', `latest 1 quotation purchase order progress${suffix}`);
+    assert.equal(response.answerable, true);
+    assert.equal(response.fallbackApplied, Boolean(suffix));
+    assert.deepEqual(response.results.map((item) => item.message.id), ['new-safe']);
+    assert.deepEqual(service.search('me@example.test', `latest 2 quotation purchase order progress${suffix}`).results.map((item) => item.message.id), ['new-safe', 'old-safe']);
+    assert.deepEqual(service.search('me@example.test', `latest 2 quotation purchase order progress${suffix}`, { limit: 1 }).results.map((item) => item.message.id), ['new-safe']);
+  }
+  // Do not scan beyond the existing 100-candidate safety boundary to fill slots.
+  for (let index = 0; index < 100; index += 1) {
+    seed(`unsafe-${index}`, 'Unrelated current notice', '2026-09-04T00:00:00.000Z');
+  }
+  const bounded = service.search('me@example.test', 'latest 1 quotation purchase order progress');
+  assert.equal(bounded.reason, 'no_safe_result');
+  assert.deepEqual(bounded.results, []);
+});
+
+test('review 4345085553 keeps promotion guard before latest N dates and honors corrections', async (t) => {
+  const store = await withStore(t);
+  const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });
+  const folder = store.ensureFolder({ mailboxId: mailbox.id, graphId: 'inbox', wellKnownName: 'inbox', displayName: 'inbox' });
+  for (const [id, receivedAt, isPromotional] of [
+    ['promotion', '2026-09-03T00:00:00.000Z', true],
+    ['new-safe', '2026-09-02T00:00:00.000Z', false],
+    ['old-safe', '2026-09-01T00:00:00.000Z', false],
+  ]) {
+    store.upsertNormalizedMessage({ mailboxId: mailbox.id, folderId: folder.id,
+      message: { ...message(id, 'alpha beta', 'alpha beta', 'inbox'), receivedAt, isPromotional } });
+    store.savePrecisionClassification(mailbox.id, id, classification());
+  }
+  const service = new PrecisionIntelligenceService({ store });
+  service.classifyStored = () => ({ processed: 0 });
+  for (const suffix of ['', ' gamma']) {
+    const query = `latest 1 alpha beta${suffix}`;
+    assert.deepEqual(service.search('me@example.test', query).results.map((item) => item.message.id), ['new-safe']);
+    assert.deepEqual(service.search('me@example.test', `latest 2 alpha beta${suffix}`).results.map((item) => item.message.id), ['new-safe', 'old-safe']);
+  }
+  assert.equal(service.search('me@example.test', 'top 1 alpha beta').results[0].message.id, 'new-safe');
+  store.savePrecisionClassification(mailbox.id, 'promotion', classification({ reviewStatus: 'corrected' }));
+  assert.deepEqual(service.search('me@example.test', 'latest 1 alpha beta').results.map((item) => item.message.id), ['promotion']);
+});
+
 test('MI95 Unicode sender case normalization matches exact addresses and keeps isolation', async (t) => {
   const store = await withStore(t);
   const mailbox = store.ensureMailbox({ key: 'me@example.test', address: 'me@example.test' });

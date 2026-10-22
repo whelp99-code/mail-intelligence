@@ -1987,8 +1987,8 @@ export class SQLiteMailStore {
       ${joins.join('\n')}
       WHERE ${clauses.join(' AND ')}
       ORDER BY
-        ${parsedQuery?.sortOrder === 'date_desc' ? 'COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC, m.id DESC,' : ''}
         CASE WHEN m.is_promotional = 1 AND pc.review_status <> 'corrected' THEN 1 ELSE 0 END ASC,
+        ${parsedQuery?.sortOrder === 'date_desc' ? 'COALESCE(m.received_at, m.sent_at, m.first_seen_at) DESC, m.id DESC,' : ''}
         ${semanticRank}
         ${incidentRank}
         ${subjectRank}
