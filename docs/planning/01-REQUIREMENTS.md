@@ -101,6 +101,8 @@ No requirement is considered complete until it has both implementation traceabil
 
 Implementation trace (#97, not a release-gate completion claim): REQ-PROJ-002/003/004 use registered active names/aliases before project-phrase candidate rules; bare subject brackets do not establish project identity. `test/precision-classifier.test.js` and `test/precision-persistence.test.js` cover rejection, valid aliases, ambiguity and persistence. The identity-only `projects:diagnose` command and `test/project-registry-diagnostic.test.js` expose missing/ambiguous Notion-to-MI identities without registration, sync, mail access or reclassification (REQ-INT-009/011). No schema or authority change; existing stored decisions remain unchanged until separately authorized evaluation.
 
+PR #98 review follow-up: `precision-classification-v1.2.2-fix12` distinguishes changed candidate rules from stored fix11 outputs (REQ-INT-011). Project-phrase candidates preserve subject/current-body exact evidence, including case-insensitive PoC phrases (REQ-PROJ-001). Duplicate non-empty Notion business keys are ambiguous even with distinct source IDs and no MI match, independent of input order (REQ-PROJ-004). The same synthetic tests cover these regressions; no stored-decision reclassification or accuracy improvement is claimed.
+
 ---
 
 ## 6. Persistent knowledge and learning requirements

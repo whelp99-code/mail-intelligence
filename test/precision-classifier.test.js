@@ -7,6 +7,7 @@ import {
   classifyMessage,
   extractDue,
   normalizePrecisionCorrection,
+  PRECISION_CLASSIFICATION_VERSION,
   resolveProject,
   splitMessageHistory,
   stripQuotedHistory,
@@ -152,7 +153,45 @@ test('미등록 프로젝트 문구는 대괄호 자체가 아니라 프로젝�
   assert.equal(result.primaryProjectId, null);
   assert.equal(result.projectResolution, 'candidate');
   assert.equal(result.projectCandidate.label, 'Acme HCI PoC');
-  assert.equal(result.projectCandidate.source, 'project-phrase');
+  assert.equal(result.projectCandidate.source, 'subject');
+  assert.equal(result.evidence.project.sourceField, 'subject');
+  assert.equal(result.evidence.project.exactText, 'Acme HCI PoC');
+});
+
+test('bracket rule revision is distinguishable from stored fix11 classifications', () => {
+  const result = classifyMessage(message({ subject: '[Example Vendor] 자료 전달' }));
+  assert.notEqual(PRECISION_CLASSIFICATION_VERSION, 'precision-classification-v1.2.2-fix11');
+  assert.equal(result.promptVersion, PRECISION_CLASSIFICATION_VERSION);
+  assert.equal(result.projectResolution, 'unassigned');
+});
+
+test('body-only project phrases retain exact current-body evidence', () => {
+  const mail = message({ subject: '[Example Vendor] 자료 전달',
+    body: 'Acme HCI 구축 일정입니다.\n\n-----Original Message-----\nOld 프로젝트 일정입니다.' });
+  const result = classifyMessage(mail);
+  assert.equal(result.projectResolution, 'candidate');
+  assert.equal(result.projectCandidate.source, 'body');
+  assert.equal(result.projectCandidate.label, 'Acme HCI 구축');
+  assert.equal(result.evidence.project.sourceField, 'body');
+  assert.equal(result.evidence.project.exactText, 'Acme HCI 구축');
+  assert.equal(result.evidence.project.sourceMessageId, mail.id);
+  assert.equal(mail.body.slice(result.evidence.project.startOffset, result.evidence.project.endOffset), 'Acme HCI 구축');
+  assert.equal(validateClassificationEvidence(result, mail).ok, true);
+  const quotedOnly = classifyMessage(message({ subject: '[Example Vendor] 자료 전달',
+    body: '자료입니다.\n\n-----Original Message-----\nOld 프로젝트 일정입니다.' }));
+  assert.equal(quotedOnly.projectResolution, 'unassigned');
+});
+
+test('body PoC project phrases survive case normalization', () => {
+  for (const phrase of ['Acme PoC', 'ACME POC', 'acme poc']) {
+    const mail = message({ subject: '[Example Vendor] 일정 전달', body: `${phrase} 일정입니다.` });
+    const result = classifyMessage(mail);
+    assert.equal(result.projectResolution, 'candidate', phrase);
+    assert.equal(result.projectCandidate.label, phrase);
+    assert.equal(result.evidence.project.exactText, phrase);
+    assert.equal(result.evidence.project.sourceField, 'body');
+    assert.equal(validateClassificationEvidence(result, mail).ok, true);
+  }
 });
 
 test('등록 프로젝트와 무관한 거래처·담당자·문서종류 대괄호는 후보가 아니다', () => {
@@ -192,7 +231,7 @@ test('무관한 대괄호가 본문 등록별칭이나 별도 프로젝트 문�
   assert.equal(result.projectCandidate.source, 'body');
   const candidate = resolveProject(message({ subject: '[Example Vendor] 자료 전달', body: 'Acme HCI 구축 일정입니다.' }));
   assert.equal(candidate.projectResolution, 'candidate');
-  assert.equal(candidate.projectCandidate.source, 'project-phrase');
+  assert.equal(candidate.projectCandidate.source, 'body');
 });
 
 test('제한된 보조 신호만 생성하고 신호가 독립 업무 객체가 되지 않는다', () => {

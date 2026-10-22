@@ -52,6 +52,24 @@ test('duplicate or conflicting identities are ambiguous, never silently chosen',
   }
 });
 
+test('duplicate business keys are ambiguous without MI matches regardless of order', () => {
+  const projects = [notion('syn-one'), notion('syn-two')];
+  for (const notionProjects of [projects, [...projects].reverse()]) {
+    for (const miProjects of [[], [mi(key)], [mi('PRJ-SYN-001')]]) {
+      const report = diagnoseProjectRegistry({ notionProjects, miProjects });
+      assert.equal(report.counts.ambiguous, 2);
+      assert.equal(report.counts.missingInMi, 0);
+      assert.equal(report.counts.matched, 0);
+      assert.deepEqual(report.projects.map(p => p.status), ['ambiguous', 'ambiguous']);
+    }
+  }
+  const emptyKeys = diagnoseProjectRegistry({
+    notionProjects: [notion('syn-one', ''), notion('syn-two', '')], miProjects: [],
+  });
+  assert.equal(emptyKeys.counts.missingInMi, 2);
+  assert.equal(emptyKeys.counts.ambiguous, 0);
+});
+
 test('archived local projects are present, and empty scoped registries are explicit', () => {
   const report = diagnoseProjectRegistry({ notionProjects: [notion()], miProjects: [mi(key, 7, 'archived')] });
   assert.equal(report.counts.matchedArchived, 1);

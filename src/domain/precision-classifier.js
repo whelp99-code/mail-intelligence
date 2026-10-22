@@ -11,7 +11,7 @@ import {
   operationalSummary,
 } from './operational-classification.js';
 
-export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix11';
+export const PRECISION_CLASSIFICATION_VERSION = 'precision-classification-v1.2.2-fix12';
 export const EVIDENCE_NORMALIZATION_VERSION = 'exact-source-span-v1';
 
 export const WORK_STATES = Object.freeze([
@@ -599,15 +599,17 @@ function containsTerm(text, term) {
 function extractProjectCandidate(subject, body) {
   // Registered names/aliases are resolved first by resolveProject. Brackets alone
   // identify neither a project nor an alias; retain only project-phrase evidence.
-  const combined = `${subject || ''}\n${body || ''}`;
-  const named = combined.match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|PoC|POC|프로젝트|사업))/u);
-  if (named) return { label: boundedText(named[1], 80), source: 'project-phrase', confidence: 0.62 };
+  for (const [source, text] of [['subject', subject], ['body', body]]) {
+    const named = String(text || '').match(/([\p{L}\p{N}][\p{L}\p{N} _./-]{1,42}(?:구축|도입|전환|고도화|개선|poc|프로젝트|사업))/iu);
+    if (named) return { label: boundedText(named[1], 80), source, confidence: 0.62 };
+  }
   return null;
 }
 
 export function resolveProject(message, projects = []) {
   const subject = normalizeComparable(message.subject || '');
-  const body = normalizeComparable(stripQuotedHistory(message.body || message.bodyPreview || ''));
+  const currentBody = stripQuotedHistory(message.body || message.bodyPreview || '');
+  const body = normalizeComparable(currentBody);
   const matches = [];
   for (const project of projects.filter((item) => String(item.status || 'active') === 'active')) {
     const terms = projectTerms(project);
@@ -641,7 +643,7 @@ export function resolveProject(message, projects = []) {
       reviewReasons: ['multiple_project_matches'],
     };
   }
-  const candidate = extractProjectCandidate(message.subject, body);
+  const candidate = extractProjectCandidate(message.subject, currentBody);
   if (candidate) {
     return {
       primaryProjectId: null,

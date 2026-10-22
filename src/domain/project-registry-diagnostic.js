@@ -19,9 +19,13 @@ export function diagnoseProjectRegistry({ notionProjects, miProjects } = {}) {
   }
   const sourceIdentity = p => uuidValue(p.sourceId) || p.sourceId;
   const sourceCounts = new Map();
+  const businessKeyCounts = new Map();
   for (const p of notionProjects) {
     const key = sourceIdentity(p);
     sourceCounts.set(key, (sourceCounts.get(key) || 0) + 1);
+    if (p.projectKey !== '') {
+      businessKeyCounts.set(p.projectKey, (businessKeyCounts.get(p.projectKey) || 0) + 1);
+    }
   }
   // The local key may be a Notion page UUID or an exact business project key.
   // Name, alias, fuzzy matching, status filtering and inferred identities are forbidden.
@@ -34,7 +38,8 @@ export function diagnoseProjectRegistry({ notionProjects, miProjects } = {}) {
   }
   const projects = notionProjects.map((n, i) => {
     const matches = candidates[i];
-    const ambiguous = sourceCounts.get(sourceIdentity(n)) > 1 || matches.length > 1
+    const ambiguous = sourceCounts.get(sourceIdentity(n)) > 1
+      || businessKeyCounts.get(n.projectKey) > 1 || matches.length > 1
       || matches.some(m => references.get(m.id) > 1);
     return {
       sourceId: n.sourceId, projectKey: n.projectKey,
