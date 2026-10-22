@@ -183,6 +183,26 @@ test('body-only project phrases retain exact current-body evidence', () => {
   assert.equal(quotedOnly.projectResolution, 'unassigned');
 });
 
+test('project phrase candidates preserve evidence before a verb suffix', () => {
+  for (const source of ['subject', 'body']) {
+    for (const phrase of ['Acme 구축', 'Acme\t구축']) {
+      const mail = message({ subject: '자료 전달', [source]: `${phrase}합니다` });
+      const result = classifyMessage(mail);
+      assert.equal(result.projectResolution, 'candidate');
+      assert.equal(result.projectCandidate.label, 'Acme 구축');
+      assert.equal(result.projectCandidate.source, source);
+      assert.ok(result.evidence.project);
+      assert.equal(result.evidence.project.sourceField, source);
+      assert.equal(result.evidence.project.exactText, phrase);
+      assert.equal(result.evidence.project.sourceMessageId, mail.id);
+      assert.equal(result.evidence.project.startOffset, 0);
+      assert.equal(result.evidence.project.endOffset, phrase.length);
+      assert.equal(mail[source].slice(result.evidence.project.startOffset, result.evidence.project.endOffset), phrase);
+      assert.equal(validateClassificationEvidence(result, mail).ok, true);
+    }
+  }
+});
+
 test('body PoC project phrases survive case normalization', () => {
   for (const phrase of ['Acme PoC', 'ACME POC', 'acme poc']) {
     const mail = message({ subject: '[Example Vendor] 일정 전달', body: `${phrase} 일정입니다.` });

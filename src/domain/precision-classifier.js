@@ -1428,15 +1428,19 @@ function dueEvidenceClause(clauses, due) {
     || null;
 }
 
-function exactTermClause(sourceText, term, sourceField, sourceMessageId) {
+function exactTermClause(sourceText, term, sourceField, sourceMessageId, requireTermBoundary) {
   const source = String(sourceText || '');
   const needle = String(term || '');
   if (!source || !needle) return null;
   // Match normalized phrase whitespace against the original source so offsets
   // and evidence retain tabs, non-ASCII spaces and repeated whitespace.
   const pattern = needle.split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
-  // Use containsTerm's letter/number boundaries and Korean particle suffixes.
-  const match = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}]|(?:에서|으로|와|과|은|는|이|가|을|를|의|및)(?:$|[^\\p{L}\\p{N}]))`, 'iu').exec(source);
+  // Registered aliases use containsTerm's boundaries; extracted phrases may
+  // end inside a verb such as 구축합니다 and must retain that exact span.
+  const sourcePattern = requireTermBoundary
+    ? `(?<![\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}]|(?:에서|으로|와|과|은|는|이|가|을|를|의|및)(?:$|[^\\p{L}\\p{N}]))`
+    : pattern;
+  const match = new RegExp(sourcePattern, 'iu').exec(source);
   if (!match) return null;
   const index = match.index;
   const exactText = match[0];
@@ -1461,7 +1465,7 @@ export function projectResolutionMetadata(message, project, workState = '') {
     ? splitMessageHistory(message.body || message.bodyPreview || '').currentContent
     : String(message.subject || '');
   return {
-    evidence: term ? evidence(exactTermClause(sourceText, term, sourceField, message.id),
+    evidence: term ? evidence(exactTermClause(sourceText, term, sourceField, message.id, Boolean(candidate?.matchedTerm)),
       'project', `project-${candidate?.source || 'candidate'}`) : null,
     confidence: Number(project.confidence.toFixed(3)),
     reviewReasons: project.projectResolution === 'review_required'
