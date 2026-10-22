@@ -137,6 +137,79 @@ test('질의 길이와 빈 질의를 fail-closed로 거부한다', () => {
   assert.throws(() => parseIntelligentQuery('x'.repeat(501)), /500/);
 });
 
+test('long-question decomposition keeps ten keywords but refuses eleven without truncating', () => {
+  const ten = 'alpha beta gamma delta epsilon zeta eta theta iota kappa';
+  assert.equal(parseIntelligentQuery(ten).searchPlan.softTokens.length, 10);
+  const decomposed = parseIntelligentQuery(`Please ${ten}`);
+  assert.equal(decomposed.searchPlan.softTokens.length, 10);
+  assert.equal(decomposed.searchPlan.fallbackPolicy.failClosed, false);
+  const refused = parseIntelligentQuery(`${ten} lambda`);
+  assert.equal(refused.searchPlan.softTokens.length, 11);
+  assert.equal(refused.searchPlan.fallbackPolicy.failClosed, true);
+  assert.equal(refused.searchPlan.fallbackPolicy.allowed, false);
+  assert.equal(parseIntelligentQuery('Can you please show me what information is in the mail').searchPlan.fallbackPolicy.failClosed, true);
+});
+
+test('decomposition retains unknown business words and identifier particles without arbitrary stemming', () => {
+  const parsed = parseIntelligentQuery('Please can you show me what ZX-2048의 협의하는 유지보수 AlphaCorp details are');
+  assert.deepEqual(parsed.searchPlan.softTokens, ['ZX-2048', '협의하는', '유지보수', 'AlphaCorp']);
+  assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === 'ZX-2048'));
+});
+
+test('temporal units are not identifiers and unparsed periods keep their lexical meaning', () => {
+  for (const token of ['2026년', '9월', '10일', '10일까지', '2주', '1주일', '3분기', '2개월', '2026년9월10일', '2026년3분기', '1년2개월', '1개월2주3일', '2주동안', '3분기부터', '3분기까지', '2주이내', '3일전', '3일후', '2개월간', '2026-09-10']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest information about ${token} alpha beta`);
+    assert.ok(parsed.searchPlan.softTokens.includes(token), token);
+    assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false, token);
+    assert.deepEqual(parsed.filters.dueRange, {}, token);
+    assert.equal(parsed.searchPlan.fallbackPolicy.allowed, false, token);
+  }
+  for (const token of ['EPO2609-164', '49725', 'A2026년', '2026년형', '9월호', '3분기보고서', 'EPO-2026-09-10']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest information about ${token} alpha beta`);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === token), token);
+  }
+});
+
+test('selected Korean due-date spans become metadata filters, not lexical requirements', () => {
+  for (const date of ['2026년 9월 10일까지', '2026년9월10일까지', '9월 10일까지', '2026-09-10까지', '2026/09/10까지', '2026.09.10까지']) {
+    const parsed = parseIntelligentQuery(`지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 ${date} alpha beta`, { now });
+    assert.deepEqual(parsed.searchPlan.softTokens, ['alpha', 'beta'], date);
+    assert.deepEqual(parsed.filters.dueRange, { from: '2026-09-09T15:00:00.000Z', before: '2026-09-10T15:00:00.000Z', requiresDue: true }, date);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), date);
+    assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false, date);
+  }
+  const invalid = parseIntelligentQuery('지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년 2월 30일까지 alpha beta', { now });
+  assert.deepEqual(invalid.filters.dueRange, {});
+  assert.ok(invalid.searchPlan.softTokens.includes('30일까지'));
+  assert.equal(invalid.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), false);
+  assert.equal(invalid.searchPlan.fallbackPolicy.failClosed, true);
+  const separateDates = parseIntelligentQuery('지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년9월1일; 2026년9월10일까지 alpha beta', { now });
+  assert.ok(separateDates.searchPlan.softTokens.includes('2026년9월1일'));
+  assert.equal(separateDates.filters.dueRange.from, '2026-09-09T15:00:00.000Z');
+  const ten = 'EPO2609-164 49725 alpha beta gamma delta epsilon zeta eta theta';
+  const atBudget = parseIntelligentQuery(`지금 가장 최근에 어떤 내용을 메일에서 찾아서 보여줘 2026년 9월 10일까지 ${ten}`, { now });
+  assert.equal(atBudget.searchPlan.softTokens.length, 10);
+  assert.equal(atBudget.searchPlan.fallbackPolicy.failClosed, false);
+  const overBudget = parseIntelligentQuery(`${atBudget.originalQuery} iota`, { now });
+  assert.equal(overBudget.searchPlan.softTokens.length, 11);
+  assert.equal(overBudget.searchPlan.fallbackPolicy.failClosed, true);
+  assert.equal(overBudget.searchPlan.fallbackPolicy.allowed, false);
+});
+
+test('decomposed Korean date units stay on the due anchor and are not required identifiers', () => {
+  const parsed = parseIntelligentQuery('Please can you show me alpha beta details by 2026년 9월 10일까지 please', { now });
+  assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'due_date'), true);
+  assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false);
+  assert.deepEqual(parsed.searchPlan.softTokens, ['alpha', 'beta']);
+
+  const withoutCue = parseIntelligentQuery('Please can you show me the latest alpha beta information about 2026년 9월 10일 please', { now });
+  assert.equal(withoutCue.filters.dueRange.from, undefined);
+  assert.equal(withoutCue.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'), false);
+  assert.ok(withoutCue.searchPlan.softTokens.includes('2026년'));
+  assert.ok(withoutCue.searchPlan.softTokens.includes('9월'));
+  assert.ok(withoutCue.searchPlan.softTokens.includes('10일'));
+});
+
 test('스마트 뷰는 Outlook 폴더 변경 없이 안정적인 업무 관점을 제공한다', () => {
   const views = intelligentSmartViews(now);
   assert.ok(views.length >= 8);
@@ -215,7 +288,7 @@ test('incident lexical query preserves the requested kind for strict ranking', (
 
 test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다', () => {
   const completedSupport = parseIntelligentQuery('완료된 패치 티켓', { now });
-  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix12');
+  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix13');
   assert.equal(completedSupport.filters.semanticIntent, 'completed_support_ticket');
   assert.deepEqual(completedSupport.filters.workStates, ['completed']);
   assert.equal(completedSupport.residualText, '');
@@ -228,7 +301,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
   const completedSangfor = parseIntelligentQuery('완료된 Sangfor 지원 문의', { now });
-  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix12');
+  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix13');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
   assert.equal(completedSangfor.residualText, 'Sangfor');
@@ -260,4 +333,101 @@ test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태�
   const sangforIag = parseIntelligentQuery('Sangfor IAG', { now });
   assert.equal(sangforIag.filters.semanticIntent, 'sangfor_iag');
   assert.equal(sangforIag.residualText, 'Sangfor IAG');
+});
+
+test('review 4342846497 removes message-query scaffolding without removing business terms', () => {
+  const parsed = parseIntelligentQuery('Could you please find the most recent message from ZX-2048 in my mailbox?');
+  assert.deepEqual(parsed.searchPlan.softTokens, ['ZX-2048']);
+  const mixed = parseIntelligentQuery('Could you please find messages from ZX-2048 받은편지함 메일함에서 내용을 찾아주세요 alpha renewal');
+  assert.ok(mixed.searchPlan.softTokens.includes('renewal'));
+  assert.equal(mixed.searchPlan.softTokens.includes('메일함에서'), false);
+});
+
+test('review 4342846504 computes anchored coverage after identifier admission', () => {
+  const parsed = parseIntelligentQuery('Please can you show me the latest details about ZX-2048 alpha beta gamma');
+  assert.equal(parsed.searchPlan.softTokens.length, 4);
+  assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier'));
+  assert.equal(parsed.searchPlan.fallbackPolicy.minimumCoverage, 2);
+  const ordinary = parseIntelligentQuery('Please can you show me the latest details about alpha beta gamma delta');
+  assert.equal(ordinary.searchPlan.fallbackPolicy.minimumCoverage, 3);
+});
+
+test('review 4342846508 distinguishes reference numbers from amounts and dates', () => {
+  const identifiers = (query) => parseIntelligentQuery(query).searchPlan.hardAnchors
+    .filter((item) => item.kind === 'identifier').map((item) => item.value);
+  for (const label of ['invoice', 'order', 'ticket', 'case', 'quote', 'quotation', '인보이스', '주문', '티켓', '견적', '참조번호']) {
+    assert.ok(identifiers(`Please can you find the latest details about ${label} 42 Acme renewal`).includes('42'), label);
+  }
+  assert.ok(identifiers('ticket 7 Acme renewal project').includes('7'));
+  for (const token of ['123456', '49725', 'EPO2609-164', 'ZX-2048']) {
+    assert.ok(identifiers(`Please can you find the latest details about ${token} Acme renewal`).includes(token), token);
+  }
+  assert.equal(identifiers('Please can you find the latest details about 2026 Acme renewal').includes('2026'), false);
+  for (const amount of ['$123456', '₩49725', 'USD 123456', 'USD123456', '49725 KRW', '49725KRW', '123456원', '금액 123456', 'amount 123456', '123456.78']) {
+    assert.deepEqual(identifiers(`Please can you find the latest details about ${amount} Acme renewal`), [], amount);
+  }
+  assert.ok(identifiers('Please find the latest invoice 123456 with amount USD 123456 in my mail').includes('123456'));
+});
+
+test('review 4342846527 applies the same Unicode word budget across punctuation', () => {
+  const ten = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'];
+  for (const separator of [',', ';', '/', '·', '，', '：']) {
+    const atLimit = parseIntelligentQuery(ten.join(separator));
+    assert.deepEqual(atLimit.searchPlan.softTokens, ten, separator);
+    const above = parseIntelligentQuery([...ten, 'lambda'].join(separator));
+    assert.equal(above.searchPlan.softTokens.length, 11, separator);
+    assert.equal(above.searchPlan.fallbackPolicy.failClosed, true, separator);
+    assert.equal(above.searchPlan.fallbackPolicy.allowed, false, separator);
+  }
+  const code = parseIntelligentQuery('Could,you,please,find,the,most,recent,message,from,ZX-2048,in,my,mailbox?');
+  assert.deepEqual(code.searchPlan.softTokens, ['ZX-2048']);
+});
+
+test('review 4342976943 ignores date-shaped substrings inside complete identifiers', () => {
+  for (const code of ['EPO-2026-13-10', 'EPO-2026-09-10', 'X_2026-13-10', '한글2026-13-10', '2026-13-10한글', 'EPO-2026-09-10-A']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest details about ${code} sent by Alice`);
+    assert.equal(parsed.searchPlan.fallbackPolicy.failClosed, false, code);
+    assert.deepEqual(parsed.filters.dueRange, {}, code);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === code), code);
+  }
+  const actual = parseIntelligentQuery('Please can you show me the latest details by 2026-09-10 for EPO-2026-13-10 alpha', { now });
+  assert.equal(actual.filters.dueRange.from, '2026-09-09T15:00:00.000Z');
+  const invalid = parseIntelligentQuery('Please can you show me the latest details by 2026-13-10 for EPO-2026-13-10 alpha', { now });
+  assert.equal(invalid.searchPlan.fallbackPolicy.failClosed, true);
+});
+
+test('review 4342976950 consumes only explicit result quantities as limit hints', () => {
+  for (const phrase of ['the 10 most recent', 'latest 10', 'most recent 10', 'top 10', '최근10건', '최신 10개']) {
+    const parsed = parseIntelligentQuery(`Could you please show me ${phrase} alpha beta gamma messages in my mailbox`);
+    assert.equal(parsed.limitHint, 10, phrase);
+    assert.equal(parsed.searchPlan.softTokens.includes('10'), false, phrase);
+    assert.equal(parsed.searchPlan.hardAnchors.some((item) => item.value === '10'), false, phrase);
+    assert.ok(parsed.searchPlan.softTokens.includes('alpha'), phrase);
+  }
+  const number = parseIntelligentQuery('Could you please show me the latest ticket 10 alpha beta gamma in my mailbox');
+  assert.equal(number.limitHint, null);
+  assert.ok(number.searchPlan.hardAnchors.some((item) => item.value === '10'));
+  const mixed = parseIntelligentQuery('Please show the latest 2 invoice 49725 details with amount USD123456 by 2026-09-10');
+  assert.equal(mixed.limitHint, 2);
+  assert.deepEqual(mixed.searchPlan.hardAnchors.filter((item) => item.kind === 'identifier').map((item) => item.value), ['49725']);
+  const literal = parseIntelligentQuery('Please find the most recent messages for project:"Top 10" with ZX-2048');
+  assert.equal(literal.limitHint, null);
+  assert.equal(literal.filters.project, 'Top 10');
+  const ten = 'alpha,beta,gamma,delta,epsilon,zeta,eta,theta,iota,kappa';
+  assert.equal(parseIntelligentQuery(`top 2 ${ten}`).searchPlan.softTokens.length, 10);
+  assert.equal(parseIntelligentQuery(`top 2 ${ten},lambda`).searchPlan.fallbackPolicy.failClosed, true);
+});
+
+test('review 4342976956 normalizes every shared control particle without English suffix damage', () => {
+  for (const particle of ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로', '의', '로만', '으로도']) {
+    for (const query of [`ZX-2048${particle} 찾아주세요`, `Please can you show me the latest details about ZX-2048${particle} alpha beta`]) {
+      const parsed = parseIntelligentQuery(query);
+      assert.deepEqual(parsed.searchPlan.hardAnchors.filter((item) => item.kind === 'identifier').map((item) => item.value), ['ZX-2048'], query);
+    }
+  }
+  for (const code of ['ZX-2048Pro', 'ZX-2048Man', 'ZX-2048A', '모델123', 'RO2048', 'ZX-2048로봇']) {
+    const parsed = parseIntelligentQuery(`Please can you show me the latest details about ${code} alpha beta`);
+    assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.value === code), code);
+  }
+  assert.ok(parseIntelligentQuery('ticket 7로 찾아주세요').searchPlan.hardAnchors.some((item) => item.value === '7'));
 });

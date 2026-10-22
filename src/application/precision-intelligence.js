@@ -425,8 +425,9 @@ export class PrecisionIntelligenceService {
     const mailbox = this.ensureMailbox(mailboxUser);
     this.classifyStored(mailboxUser);
     const parsedQuery = parseIntelligentQuery(query, { now });
+    const callerLimit = boundedLimit(limit, 25, 100);
     const searchOptions = {
-      limit: boundedLimit(limit, 25, 100),
+      limit: Math.min(callerLimit, boundedLimit(parsedQuery.limitHint, callerLimit, 100)),
     };
     let evaluated = evaluateSemanticSearchResults(
       parsedQuery.originalQuery,

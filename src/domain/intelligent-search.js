@@ -5,9 +5,10 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix12';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix13';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
+export const MAX_DECOMPOSED_SEARCH_TOKENS = 10;
 
 const STATE_PHRASES = [
   { value: 'action_required', pattern: /(?:내가|우리가|우리\s*쪽이)\s*(?:해야|처리|답장|회신|보내)|해야\s*할\s*(?:일|메일)|액션\s*필요|action\s*required|to\s*do/i },
@@ -64,11 +65,45 @@ const DUE_PHRASES = [
 ];
 
 const WEAK_SEARCH_TOKENS = new Set(['업무', '관련', '필요', '메일', '문서', '확인', '검토', '자동', '생성', '하면', '하는', '해서', '되는', '되어', '될']);
-const CONTROL_PARTICLE_SUFFIXES = ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로'];
+// Remove question scaffolding, never unknown business terms or instructions.
+const QUESTION_SCAFFOLD_TOKENS = new Set([
+  'please', 'can', 'could', 'would', 'you', 'me', 'tell', 'show', 'find', 'give',
+  'what', 'which', 'where', 'when', 'how', 'is', 'are', 'was', 'were', 'has', 'have',
+  'been', 'the', 'a', 'an', 'of', 'for', 'to', 'in', 'on', 'about', 'with', 'and', 'by',
+  'mail', 'mails', 'email', 'emails', 'message', 'messages', 'from', 'mailbox',
+  'it', 'its', 'this', 'that', 'my', 'our', 'any', 'all', 'most', 'recent', 'latest',
+  'information', 'details', 'update', 'updates', 'status', 'question', 'regarding',
+  '지금', '현재', '최근', '최신', '어떤', '어떻게', '무엇을', '무슨', '있는', '있나요',
+  '있습니까', '인가요', '대해', '대해서', '관해', '관한', '상태를', '내용을', '내역을',
+  '상황을', '알려', '알려줘', '알려주세요', '찾아', '찾아서', '찾아줘', '찾아주세요',
+  '보여', '보여줘', '보여주세요', '부탁해', '부탁합니다', '좀', '요청', '질문',
+  '가장', '최근에', '관련해서', '메일에서', '무엇인가요', '무엇인지', '알고', '싶어요',
+  '정보가', '있는지', '내용이', '보여줄', '수',
+  '메시지', '메시지를', '메일함', '메일함에서',
+]);
+
+const SEARCH_WORD_PATTERN = /[\p{L}\p{M}\p{N}_-]+/gu;
+
+export function tokenizeIntelligentSearchText(value) {
+  return (String(value || '').normalize('NFKC').match(SEARCH_WORD_PATTERN) || [])
+    .filter((token) => /[\p{L}\p{N}]/u.test(token));
+}
+
+function decomposeQuestionTokens(tokens) {
+  return unique(tokens.flatMap(tokenizeIntelligentSearchText)
+    .map(normalizeQueryToken)
+    .filter((token) => (token.length >= 2 || /^\d+$/u.test(token))
+      && !QUESTION_SCAFFOLD_TOKENS.has(token.toLowerCase())
+      && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())));
+}
+
+const CONTROL_PARTICLE_SUFFIXES = ['에게', '에서', '으로', '만', '도', '을', '를', '이', '가', '은', '는', '과', '와', '에', '로', '의'];
+const IDENTIFIER_PARTICLE_PATTERN = new RegExp(`^(.*\\d)(?:${CONTROL_PARTICLE_SUFFIXES.join('|')})+$`, 'u');
 const CONTROL_AUXILIARY_SUFFIXES = ['하면', '하는', '해서', '되는', '되어', '될'];
 const CONTROL_AUXILIARY_BASES = new Set(['확인', '생성', '처리']);
 const DEADLINE_CUE_PATTERN = /(?:까지|by\b|제출|납기|마감|회신)/i;
 const ABSOLUTE_DATE_PATTERN = /\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b|(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일|\b(\d{1,2})[-/.](\d{1,2})\b|(\d{1,2})월\s*(\d{1,2})일/;
+const KOREAN_TEMPORAL_TOKEN_PATTERN = /^(?:\d+(?:년|개월|월|주일|주|일|분기))+(?:까지|부터|동안|간|이내|전|후)?$/u;
 const SECURITY_TERM_PATTERN = /보안|security/i;
 const OUTAGE_PATTERN = /장애|중단|outage/i;
 const REMOTE_SESSION_GROUP_PATTERN = /원격|remote|vpn|접속|session|access/i;
@@ -102,6 +137,10 @@ function normalizeControlToken(value = '') {
 
 function consumePattern(text, pattern) {
   return text.replace(pattern, ' ');
+}
+
+function normalizeQueryToken(value) {
+  return normalizeControlToken(value).replace(IDENTIFIER_PARTICLE_PATTERN, '$1');
 }
 
 function semanticIntentFor(query = '') {
@@ -178,7 +217,7 @@ export function dueRangeFor(filter, nowValue = new Date()) {
   return {};
 }
 
-function absoluteDueRangeFor(query, nowValue) {
+function absoluteDueFor(query, nowValue) {
   const datePattern = new RegExp(ABSOLUTE_DATE_PATTERN.source, 'g');
   const isClauseBoundary = (index) => {
     const character = query[index];
@@ -186,8 +225,15 @@ function absoluteDueRangeFor(query, nowValue) {
     return character === '.' && !/\d/.test(query[index - 1] || '') && !/\d/.test(query[index + 1] || '');
   };
   const candidates = [];
+  let invalidDate = false;
   let match;
   while ((match = datePattern.exec(query))) {
+    const suffix = query.slice(datePattern.lastIndex).match(/^\s*까지/u)?.[0] || '';
+    const expression = match[0] + suffix;
+    // Calendar-looking components inside a larger Unicode identifier are not
+    // deadline expressions, even when an unrelated "by" occurs in the clause.
+    if (/[\p{L}\p{M}\p{N}_-]$/u.test(query.slice(0, match.index))
+      || /^[\p{L}\p{M}\p{N}_-]/u.test(query.slice(match.index + expression.length))) continue;
     let clauseStart = match.index;
     let clauseEnd = datePattern.lastIndex;
     while (clauseStart > 0 && !isClauseBoundary(clauseStart - 1)) clauseStart -= 1;
@@ -200,10 +246,14 @@ function absoluteDueRangeFor(query, nowValue) {
     const month = Number(match[2] || match[5] || match[7] || match[9]);
     const day = Number(match[3] || match[6] || match[8] || match[10]);
     const candidate = new Date(Date.UTC(year, month - 1, day));
-    if (!month || !day || candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) continue;
+    if (!month || !day || candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) {
+      invalidDate = true;
+      continue;
+    }
     const dateOffset = match.index + (match[0].length / 2);
     candidates.push({
       candidate,
+      expression,
       distance: Math.min(...cueOffsets.map((cueOffset) => Math.abs(cueOffset - dateOffset))),
       index: match.index,
     });
@@ -212,14 +262,39 @@ function absoluteDueRangeFor(query, nowValue) {
   if (candidates.length) {
     const from = new Date(candidates[0].candidate.getTime() - (9 * 60 * 60 * 1000));
     const before = new Date(from.getTime() + (24 * 60 * 60 * 1000));
-    return { from: from.toISOString(), before: before.toISOString(), requiresDue: true };
+    return {
+      range: { from: from.toISOString(), before: before.toISOString(), requiresDue: true },
+      expression: candidates[0].expression,
+    };
   }
-  return {};
+  return { range: {}, invalidDate };
 }
 
-function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
+function isTemporalToken(token) {
+  const calendarToken = token.replace(/까지$/u, '');
+  return KOREAN_TEMPORAL_TOKEN_PATTERN.test(token)
+    || calendarToken.match(ABSOLUTE_DATE_PATTERN)?.[0] === calendarToken;
+}
+
+function identifierTokensFor(query, lexicalTokens) {
+  // Five digits retains the existing 49725 fixture. Shorter numbers require an
+  // explicit adjacent reference label, not merely an invoice somewhere nearby.
+  const referenceQuery = query.replace(SEARCH_WORD_PATTERN, normalizeQueryToken);
+  const references = new Set([...referenceQuery.matchAll(/(?:^|[^\p{L}\p{N}_-])(?:invoice|order|ticket|case|quote|quotation|reference|인보이스|주문|발주|티켓|견적|참조)(?:\s*(?:number|no\.?|번호|#|:|=))?\s*(\d+)(?=$|[^\p{L}\p{N}_-])/giu)]
+    .map((match) => match[1]));
+  const amounts = new Set([...query.matchAll(/(?:[$€¥₩£]\s*|(?:\b(?:usd|krw|eur|jpy|cny)|금액|가격|비용|amount|price|cost)\s*[:=]?\s*)\d[\d,.]*|\d[\d,.]*\s*(?:만원|억원|원|달러|(?:usd|krw|eur|jpy|cny)\b)|\d+\.\d+/giu)]
+    .flatMap((match) => tokenizeIntelligentSearchText(match[0])));
+  return lexicalTokens.filter((token) => {
+    if (isTemporalToken(token) || (amounts.has(token) && !references.has(token))) return false;
+    if (/^\d+$/u.test(token)) return token.length >= 5 || references.has(token);
+    return /[\p{L}]/u.test(token) && /\d/u.test(token);
+  });
+}
+
+function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange, identifiers, senderAddresses }) {
   const softTokens = unique(lexicalTokens).filter((token) => !WEAK_SEARCH_TOKENS.has(normalizeControlToken(token).toLowerCase()));
-  const hardAnchors = [];
+  const hardAnchors = identifiers.map((value) => ({ kind: 'identifier', value }));
+  for (const value of senderAddresses) hardAnchors.push({ kind: 'sender_address', value });
   if (absoluteDueRange.from) hardAnchors.push({ kind: 'due_date', range: absoluteDueRange });
   if (filters.nextActors.includes('external_party')) hardAnchors.push({ kind: 'external_actor' });
   if (filters.project) hardAnchors.push({ kind: 'project', value: filters.project });
@@ -248,6 +323,7 @@ function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
     || filters.reviewOnly
     || filters.lexicalIncidentSearch
     || filters.semanticIntent
+    || senderAddresses.length
   );
   const minimumCoverage = softTokenCount < 2
     ? null
@@ -267,6 +343,12 @@ function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange }) {
   };
 }
 
+function resultLimitFor(query) {
+  const source = query.replace(/"[^"]*"|'[^']*'/gu, (literal) => '\0'.repeat(literal.length));
+  const match = source.match(/\b(?:the\s+)?([+-]?\d+(?:\.\d+)?)\s+(?:most\s+recent|latest)\b|\b(?:most\s+recent|latest|top)\s+([+-]?\d+(?:\.\d+)?)\b|(?:최근|최신)\s*([+-]?\d+(?:\.\d+)?)\s*(?:건|개)/iu);
+  return match ? { expression: match[0], index: match.index, value: Number(match[1] || match[2] || match[3]) } : null;
+}
+
 export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const query = normalizeSpace(value);
   if (!query) throw new Error('Intelligent search query is required.');
@@ -274,38 +356,44 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     throw new Error(`Intelligent search query must be ${MAX_INTELLIGENT_QUERY_LENGTH} characters or fewer.`);
   }
 
-  const semanticIntent = semanticIntentFor(query);
-  let residual = query;
+  const senderExpressions = [...query.matchAll(/(?:\bfrom|발신자|보낸사람)\s*:?\s*<?([\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,})/giu)];
+  const senderAddresses = unique(senderExpressions.map((match) => match[1].toLowerCase()));
+  const intentQuery = normalizeSpace(senderExpressions.reduce((text, expression) => text.replace(expression[0], ' '), query));
+  const semanticIntent = semanticIntentFor(intentQuery);
+  const resultLimit = resultLimitFor(intentQuery);
+  let residual = resultLimit ? `${intentQuery.slice(0, resultLimit.index)} ${intentQuery.slice(resultLimit.index + resultLimit.expression.length)}` : intentQuery;
   const states = [];
   const actors = [];
   const priorities = [];
   const signals = [];
   const dueFilters = [];
   const recognized = [];
+  if (resultLimit) recognized.push({ type: 'resultLimit', value: String(resultLimit.value) });
+  for (const address of senderAddresses) recognized.push({ type: 'senderAddress', value: address });
 
-  const compoundCompletionSearch = /(?:계약|검수|발주|문서)완료/u.test(query);
+  const compoundCompletionSearch = /(?:계약|검수|발주|문서)완료/u.test(intentQuery);
   for (const item of STATE_PHRASES) {
-    if (!item.pattern.test(query)) continue;
+    if (!item.pattern.test(intentQuery)) continue;
     if (item.value === 'completed' && compoundCompletionSearch) continue;
     states.push(item.value);
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'workState', value: item.value });
   }
   for (const item of ACTOR_PHRASES) {
-    if (!item.pattern.test(query)) continue;
+    if (!item.pattern.test(intentQuery)) continue;
     actors.push(item.value);
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'nextActor', value: item.value });
   }
   for (const item of PRIORITY_PHRASES) {
-    if (!item.pattern.test(query)) continue;
+    if (!item.pattern.test(intentQuery)) continue;
     priorities.push(...item.values);
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'priority', value: item.values.join('|') });
   }
   const lexicalIncidentOnly = /^(?:장애|보안|security|incident|outage)$/i.test(query);
   for (const item of SIGNAL_PHRASES) {
-    if (!item.pattern.test(query)) continue;
+    if (!item.pattern.test(intentQuery)) continue;
     if (item.value === 'incident_security' && lexicalIncidentOnly) {
       recognized.push({ type: 'lexicalSignal', value: item.value });
       continue;
@@ -315,13 +403,13 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     recognized.push({ type: 'signal', value: item.value });
   }
   for (const item of DUE_PHRASES) {
-    if (!item.pattern.test(query)) continue;
+    if (!item.pattern.test(intentQuery)) continue;
     dueFilters.push(item.value);
     residual = consumePattern(residual, item.pattern);
     recognized.push({ type: 'due', value: item.value });
   }
 
-  const project = parseProjectExpression(query);
+  const project = parseProjectExpression(intentQuery);
   if (project) {
     residual = consumePattern(residual, project.pattern);
     recognized.push({ type: 'project', value: project.value });
@@ -375,28 +463,33 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const normalizedDue = unique(dueFilters);
   const dueFilter = normalizedDue[0] || '';
   const dueRange = dueRangeFor(dueFilter, now);
-  const absoluteDueRange = absoluteDueRangeFor(query, now);
+  const absoluteDue = absoluteDueFor(intentQuery, now);
+  const absoluteDueRange = absoluteDue.range;
   const effectiveDueRange = absoluteDueRange.from ? absoluteDueRange : dueRange;
+  const questionDecomposed = Boolean(resultLimit) || tokenizeIntelligentSearchText(query).length > MAX_DECOMPOSED_SEARCH_TOKENS;
+  // Only consume the selected, validated date. Unparsed periods remain lexical
+  // evidence rather than silently losing their temporal meaning.
+  if (questionDecomposed && absoluteDue.expression) residual = residual.replace(absoluteDue.expression, ' ');
   const residualStopWords = new Set([
     '메일', '찾아', '보여', '알려', '목록', '관련', '것', '건', '중',
     '에서', '대한', '할', '해야', '처리할', 'the', 'mail', 'email', 'show', 'find',
   ]);
-  const originalTokens = query.match(/[\p{L}\p{N}_-]+/gu) || [];
+  const originalTokens = tokenizeIntelligentSearchText(intentQuery);
   const preservedDomainTokens = unique(originalTokens
     .filter((token) => token.length >= 2 && PRESERVED_DOMAIN_TOKEN_PATTERN.test(token))
-    .map(normalizeControlToken));
-  const residualTokens = normalizeSpace(residual)
-    .split(/\s+/)
-    .map(normalizeControlToken)
+    .map(normalizeQueryToken));
+  const residualTokens = tokenizeIntelligentSearchText(residual)
+    .map(normalizeQueryToken)
     .filter((token) => token
-      && token.length >= 2
+      && (token.length >= 2 || /^\d+$/u.test(token))
       && !residualStopWords.has(token.toLowerCase())
       && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())
       && !preservedDomainTokens.some((domainToken) => domainToken !== token && domainToken.includes(token)));
   const incidentExpansion = lexicalIncidentOnly
     ? INCIDENT_LEXICAL_EXPANSIONS[query.toLowerCase()] || [query]
     : [];
-  const lexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
+  const rawLexicalTokens = unique([...residualTokens, ...preservedDomainTokens, ...incidentExpansion]);
+  const lexicalTokens = questionDecomposed ? decomposeQuestionTokens(rawLexicalTokens) : rawLexicalTokens;
   const residualText = lexicalTokens.join(' ');
   const residualOperator = lexicalIncidentOnly
     || (lexicalTokens.length > 1 && lexicalTokens.every((token) => PRESERVED_DOMAIN_TOKEN_PATTERN.test(token)))
@@ -416,7 +509,22 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     lexicalIncidentKind: lexicalIncidentOnly ? query.toLowerCase() : '',
     semanticIntent,
   };
-  const searchPlan = searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange });
+  const identifiers = identifierTokensFor(intentQuery, lexicalTokens);
+  const searchPlan = searchPlanFor({ query: intentQuery, lexicalTokens, filters, absoluteDueRange, identifiers, senderAddresses });
+  if (questionDecomposed) {
+    // Never truncate meaningful terms to fit the budget, or turn an empty question
+    // into a mailbox-wide query. Structured and security filters use the original.
+    const refused = absoluteDue.invalidDate || lexicalTokens.length > MAX_DECOMPOSED_SEARCH_TOKENS
+      || (lexicalTokens.length === 0 && !project?.value && recognized.length === 0);
+    if (refused) {
+      searchPlan.fallbackPolicy.allowed = false;
+      searchPlan.fallbackPolicy.failClosed = true;
+    }
+    // An unparsed period remains required lexical evidence, not an optional
+    // coverage term and not an invented metadata range.
+    if (lexicalTokens.some(isTemporalToken)) searchPlan.fallbackPolicy.allowed = false;
+    recognized.push({ type: 'queryDecomposition', value: refused ? 'refused' : 'keywords' });
+  }
   if (searchPlan.hardAnchors.some((anchor) => anchor.kind === 'security_remote_session')) {
     filters = {
       ...filters,
@@ -426,6 +534,7 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   return {
     version: INTELLIGENT_SEARCH_VERSION,
     originalQuery: query,
+    limitHint: resultLimit?.value ?? null,
     filters,
     residualText,
     residualOperator,
@@ -438,7 +547,8 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
       || normalizedSignals.length
       || dueFilter
       || project?.value
-      || semanticIntent,
+      || semanticIntent
+      || senderAddresses.length,
     ),
   };
 }
