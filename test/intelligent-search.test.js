@@ -1,6 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+test('MI95 removes only the selected deadline span, never an identical identifier substring', () => {
+  for (const query of [
+    'latest 2 EPO-2026-09-10 alpha by 2026-09-10',
+    'EPO-2026-09-10 alpha by 2026-09-10 latest 2',
+    'by 2026-09-10 latest 2 EPO-2026-09-10 alpha',
+    'latest 2 EPO-2026-09-10 alpha by 2026-09-10 from synthetic@example.test',
+  ]) {
+    const parsed = parseIntelligentQuery(query);
+    assert.equal(parsed.residualText, 'EPO-2026-09-10 alpha', query);
+    assert.ok(parsed.searchPlan.hardAnchors.some((anchor) => anchor.kind === 'identifier' && anchor.value === 'EPO-2026-09-10'));
+    assert.equal(parsed.filters.dueRange.from, '2026-09-09T15:00:00.000Z');
+  }
+});
+
+test('MI95 retains invalid deadline state alongside a valid selected deadline in either order', () => {
+  for (const dates of ['by 2026-02-30; by 2026-09-10', 'by 2026-09-10; by 2026-02-30']) {
+    const parsed = parseIntelligentQuery(`latest 2 alpha ${dates}`);
+    assert.equal(parsed.searchPlan.fallbackPolicy.failClosed, true, dates);
+    assert.equal(parsed.searchPlan.fallbackPolicy.allowed, false, dates);
+    assert.equal(parsed.recognized.find((item) => item.type === 'queryDecomposition').value, 'refused');
+  }
+});
+
+test('MI95 distinguishes chronological quantity hints from relevance and invalid counts', () => {
+  for (const phrase of ['latest 2', 'the 2 most recent', '최근 2건', '최신 2개']) {
+    assert.equal(parseIntelligentQuery(`${phrase} alpha`).sortOrder, 'date_desc', phrase);
+  }
+  for (const phrase of ['top 2', 'latest 0', 'latest -1', 'latest 1.5', 'alpha']) {
+    assert.equal(parseIntelligentQuery(`${phrase} alpha`).sortOrder, 'relevance', phrase);
+  }
+});
+
 import {
   dueRangeFor,
   explainIntelligentMatch,
@@ -288,7 +320,7 @@ test('incident lexical query preserves the requested kind for strict ranking', (
 
 test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다', () => {
   const completedSupport = parseIntelligentQuery('완료된 패치 티켓', { now });
-  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix13');
+  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix14');
   assert.equal(completedSupport.filters.semanticIntent, 'completed_support_ticket');
   assert.deepEqual(completedSupport.filters.workStates, ['completed']);
   assert.equal(completedSupport.residualText, '');
@@ -301,7 +333,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
   const completedSangfor = parseIntelligentQuery('완료된 Sangfor 지원 문의', { now });
-  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix13');
+  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix14');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
   assert.equal(completedSangfor.residualText, 'Sangfor');

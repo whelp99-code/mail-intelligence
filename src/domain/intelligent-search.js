@@ -5,7 +5,7 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix13';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix14';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
 export const MAX_DECOMPOSED_SEARCH_TOKENS = 10;
@@ -91,7 +91,7 @@ export function tokenizeIntelligentSearchText(value) {
 
 function decomposeQuestionTokens(tokens) {
   return unique(tokens.flatMap(tokenizeIntelligentSearchText)
-    .map(normalizeQueryToken)
+    .map(normalizeIntelligentSearchToken)
     .filter((token) => (token.length >= 2 || /^\d+$/u.test(token))
       && !QUESTION_SCAFFOLD_TOKENS.has(token.toLowerCase())
       && !WEAK_SEARCH_TOKENS.has(token.toLowerCase())));
@@ -139,7 +139,7 @@ function consumePattern(text, pattern) {
   return text.replace(pattern, ' ');
 }
 
-function normalizeQueryToken(value) {
+export function normalizeIntelligentSearchToken(value) {
   return normalizeControlToken(value).replace(IDENTIFIER_PARTICLE_PATTERN, '$1');
 }
 
@@ -265,6 +265,8 @@ function absoluteDueFor(query, nowValue) {
     return {
       range: { from: from.toISOString(), before: before.toISOString(), requiresDue: true },
       expression: candidates[0].expression,
+      index: candidates[0].index,
+      invalidDate,
     };
   }
   return { range: {}, invalidDate };
@@ -279,7 +281,7 @@ function isTemporalToken(token) {
 function identifierTokensFor(query, lexicalTokens) {
   // Five digits retains the existing 49725 fixture. Shorter numbers require an
   // explicit adjacent reference label, not merely an invoice somewhere nearby.
-  const referenceQuery = query.replace(SEARCH_WORD_PATTERN, normalizeQueryToken);
+  const referenceQuery = query.replace(SEARCH_WORD_PATTERN, normalizeIntelligentSearchToken);
   const references = new Set([...referenceQuery.matchAll(/(?:^|[^\p{L}\p{N}_-])(?:invoice|order|ticket|case|quote|quotation|reference|인보이스|주문|발주|티켓|견적|참조)(?:\s*(?:number|no\.?|번호|#|:|=))?\s*(\d+)(?=$|[^\p{L}\p{N}_-])/giu)]
     .map((match) => match[1]));
   const amounts = new Set([...query.matchAll(/(?:[$€¥₩£]\s*|(?:\b(?:usd|krw|eur|jpy|cny)|금액|가격|비용|amount|price|cost)\s*[:=]?\s*)\d[\d,.]*|\d[\d,.]*\s*(?:만원|억원|원|달러|(?:usd|krw|eur|jpy|cny)\b)|\d+\.\d+/giu)]
@@ -345,7 +347,7 @@ function searchPlanFor({ query, lexicalTokens, filters, absoluteDueRange, identi
 
 function resultLimitFor(query) {
   const source = query.replace(/"[^"]*"|'[^']*'/gu, (literal) => '\0'.repeat(literal.length));
-  const match = source.match(/\b(?:the\s+)?([+-]?\d+(?:\.\d+)?)\s+(?:most\s+recent|latest)\b|\b(?:most\s+recent|latest|top)\s+([+-]?\d+(?:\.\d+)?)\b|(?:최근|최신)\s*([+-]?\d+(?:\.\d+)?)\s*(?:건|개)/iu);
+  const match = source.match(/(?<![\p{L}\p{M}\p{N}_./-])(?:the\s+)?([+-]?\d+(?:\.\d+)?)\s+(?:most\s+recent|latest)\b|\b(?:most\s+recent|latest|top)\s+([+-]?\d+(?:\.\d+)?)\b|(?:최근|최신)\s*([+-]?\d+(?:\.\d+)?)\s*(?:건|개)/iu);
   return match ? { expression: match[0], index: match.index, value: Number(match[1] || match[2] || match[3]) } : null;
 }
 
@@ -361,7 +363,15 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const intentQuery = normalizeSpace(senderExpressions.reduce((text, expression) => text.replace(expression[0], ' '), query));
   const semanticIntent = semanticIntentFor(intentQuery);
   const resultLimit = resultLimitFor(intentQuery);
-  let residual = resultLimit ? `${intentQuery.slice(0, resultLimit.index)} ${intentQuery.slice(resultLimit.index + resultLimit.expression.length)}` : intentQuery;
+  const absoluteDue = absoluteDueFor(intentQuery, now);
+  const questionDecomposed = Boolean(resultLimit) || tokenizeIntelligentSearchText(query).length > MAX_DECOMPOSED_SEARCH_TOKENS;
+  let residual = intentQuery;
+  // Consume the selected span before any other replacements shift its offsets.
+  // Equal-length whitespace also preserves the quantity span's offsets.
+  if (questionDecomposed && absoluteDue.expression) {
+    residual = `${residual.slice(0, absoluteDue.index)}${' '.repeat(absoluteDue.expression.length)}${residual.slice(absoluteDue.index + absoluteDue.expression.length)}`;
+  }
+  if (resultLimit) residual = `${residual.slice(0, resultLimit.index)} ${residual.slice(resultLimit.index + resultLimit.expression.length)}`;
   const states = [];
   const actors = [];
   const priorities = [];
@@ -463,13 +473,8 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const normalizedDue = unique(dueFilters);
   const dueFilter = normalizedDue[0] || '';
   const dueRange = dueRangeFor(dueFilter, now);
-  const absoluteDue = absoluteDueFor(intentQuery, now);
   const absoluteDueRange = absoluteDue.range;
   const effectiveDueRange = absoluteDueRange.from ? absoluteDueRange : dueRange;
-  const questionDecomposed = Boolean(resultLimit) || tokenizeIntelligentSearchText(query).length > MAX_DECOMPOSED_SEARCH_TOKENS;
-  // Only consume the selected, validated date. Unparsed periods remain lexical
-  // evidence rather than silently losing their temporal meaning.
-  if (questionDecomposed && absoluteDue.expression) residual = residual.replace(absoluteDue.expression, ' ');
   const residualStopWords = new Set([
     '메일', '찾아', '보여', '알려', '목록', '관련', '것', '건', '중',
     '에서', '대한', '할', '해야', '처리할', 'the', 'mail', 'email', 'show', 'find',
@@ -477,9 +482,9 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
   const originalTokens = tokenizeIntelligentSearchText(intentQuery);
   const preservedDomainTokens = unique(originalTokens
     .filter((token) => token.length >= 2 && PRESERVED_DOMAIN_TOKEN_PATTERN.test(token))
-    .map(normalizeQueryToken));
+    .map(normalizeIntelligentSearchToken));
   const residualTokens = tokenizeIntelligentSearchText(residual)
-    .map(normalizeQueryToken)
+    .map(normalizeIntelligentSearchToken)
     .filter((token) => token
       && (token.length >= 2 || /^\d+$/u.test(token))
       && !residualStopWords.has(token.toLowerCase())
@@ -535,6 +540,8 @@ export function parseIntelligentQuery(value, { now = new Date() } = {}) {
     version: INTELLIGENT_SEARCH_VERSION,
     originalQuery: query,
     limitHint: resultLimit?.value ?? null,
+    sortOrder: resultLimit && Number.isInteger(resultLimit.value) && resultLimit.value > 0
+      && !/^top\b/i.test(resultLimit.expression) ? 'date_desc' : 'relevance',
     filters,
     residualText,
     residualOperator,

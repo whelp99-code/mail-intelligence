@@ -429,9 +429,11 @@ export class PrecisionIntelligenceService {
     const searchOptions = {
       limit: Math.min(callerLimit, boundedLimit(parsedQuery.limitHint, callerLimit, 100)),
     };
+    const evaluationOptions = { preserveOrder: parsedQuery.sortOrder === 'date_desc' };
     let evaluated = evaluateSemanticSearchResults(
       parsedQuery.originalQuery,
       this.store.intelligentSearch(mailbox.id, parsedQuery, searchOptions),
+      evaluationOptions,
     );
     let results = evaluated.results;
     let effectiveParsedQuery = parsedQuery;
@@ -444,6 +446,7 @@ export class PrecisionIntelligenceService {
       evaluated = evaluateSemanticSearchResults(
         parsedQuery.originalQuery,
         this.store.intelligentSearch(mailbox.id, effectiveParsedQuery, searchOptions),
+        evaluationOptions,
       );
       results = evaluated.results;
       fallbackApplied = true;

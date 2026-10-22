@@ -151,7 +151,7 @@ function semanticScore(intent, result) {
   return { qualifies, score, reasons };
 }
 
-export function rerankSemanticSearchResults(query, results = []) {
+export function rerankSemanticSearchResults(query, results = [], { preserveOrder = false } = {}) {
   if (!Array.isArray(results) || results.length === 0) return results;
   const intent = queryIntent(query);
   if (!intent.completedPatchTicket
@@ -172,7 +172,7 @@ export function rerankSemanticSearchResults(query, results = []) {
   if (qualifying.length === 0) return [];
 
   return qualifying
-    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .sort((a, b) => preserveOrder ? a.index - b.index : b.score - a.score || a.index - b.index)
     .map((item) => ({
       ...item.result,
       semanticRank: {
@@ -182,9 +182,9 @@ export function rerankSemanticSearchResults(query, results = []) {
     }));
 }
 
-export function evaluateSemanticSearchResults(query, results = []) {
+export function evaluateSemanticSearchResults(query, results = [], options = {}) {
   const intent = queryIntent(query);
-  const evaluatedResults = intent.security ? results : rerankSemanticSearchResults(query, results);
+  const evaluatedResults = intent.security ? results : rerankSemanticSearchResults(query, results, options);
   const answerable = evaluatedResults.length > 0;
   return {
     results: evaluatedResults,
