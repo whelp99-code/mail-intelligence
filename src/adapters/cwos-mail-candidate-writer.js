@@ -3,8 +3,8 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { mailSourceDigest } from './cwos-mail-command.js';
 import { normalizeCwosPrincipalId, resolveCwosCredentialFile } from './cwos-credential-identity.js';
 
-function fail(code, statusCode = 502) {
-  throw Object.assign(new Error(code), { code, statusCode });
+function fail(code, statusCode = 502, deliveryOutcome = 'unknown') {
+  throw Object.assign(new Error(code), { code, statusCode, deliveryOutcome });
 }
 
 function bounded(value, max) {
@@ -82,7 +82,7 @@ export class CwosMailCandidateWriter {
     this.fetchImpl = fetchImpl;
   }
 
-  async create({ workspaceId, source, message, expectedVersion, assertCurrent }) {
+  async create({ workspaceId, source, message, expectedVersion, assertCurrent, beforeDispatch }) {
     if (workspaceId !== this.workspaceId) fail('CWOS_WORKSPACE_NOT_BOUND', 403);
     if (typeof assertCurrent !== 'function') fail('CWOS_SOURCE_CHECK_REQUIRED', 403);
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0
@@ -98,6 +98,11 @@ export class CwosMailCandidateWriter {
     };
     const idempotencyKey = `mail-candidate:${occurrence}`;
     assertCurrent();
+    // Commit the caller's uncertainty fence before transport can produce an effect.
+    if (beforeDispatch) beforeDispatch({
+      idempotencyKey, providerEventId: payload.providerEventId,
+      principalId: this.principalId, mailbox: this.mailbox,
+    });
     let response;
     try {
       response = await this.fetchImpl(new URL('/api/cwos/v2/mail-candidates', this.origin), {
@@ -114,11 +119,12 @@ export class CwosMailCandidateWriter {
     if (response.url && new URL(response.url).origin !== this.origin) fail('CWOS_CREDENTIAL_REDIRECT');
     if (response.status === 409) {
       const confirmed = await this.lookupConfirmedCandidate(payload, expectedVersion);
-      if (!confirmed) fail('CWOS_CANDIDATE_CONFLICT');
+      if (!confirmed) fail('CWOS_CANDIDATE_CONFLICT', 502, 'rejected');
       assertCurrent();
       return confirmed;
     }
-    if (response.status !== 201) fail('CWOS_CANDIDATE_DENIED');
+    if (response.status !== 201) fail('CWOS_CANDIDATE_DENIED', 502,
+      [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status) ? 'rejected' : 'unknown');
     let result;
     try { result = await response.json(); } catch { fail('CWOS_CANDIDATE_RESPONSE_INVALID'); }
     const item = result?.candidate;
