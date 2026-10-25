@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -345,6 +346,153 @@ test('unchanged mail is ingested once across repeated sync', async (t) => {
   assert.equal(store.db.prepare('SELECT count(*) AS n FROM mail_company_memory_outbox').get().n, 1);
   assert.equal(store.db.prepare('SELECT count(*) AS n FROM messages').get().n, 1);
   assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events WHERE event_type=\'mail.crm_candidate.delivered\'').get().n, 1);
+});
+
+test('unknown POST outcome blocks later sync and restart without a delivery receipt', async (t) => {
+  const { store, binding, run } = await fixture(t);
+  const calls = [];
+  binding.candidateWriter.fetchImpl = async (_url, options) => {
+    calls.push(options.method);
+    throw new TypeError('Synthetic response loss after remote commit');
+  };
+  const first = await run();
+  assert.equal(first.failures[0].code, 'CWOS_CANDIDATE_UNAVAILABLE');
+  const second = await run();
+  assert.deepEqual(calls, ['POST']);
+  assert.equal(second.failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+  assert.equal(second.deliveredCandidates.length, 0);
+  const databasePath = store.databasePath;
+  store.close();
+  const restartedProcess = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { SQLiteMailStore } from ${JSON.stringify(new URL('../src/storage/sqlite-store.js', import.meta.url).href)};
+    import { createProductionIntakeBinding, ingestAfterCommittedSync } from ${JSON.stringify(new URL('../src/application/sync-work-intake.js', import.meta.url).href)};
+    import { CwosMailCandidateWriter } from ${JSON.stringify(new URL('../src/adapters/cwos-mail-candidate-writer.js', import.meta.url).href)};
+    const store = new SQLiteMailStore({ databasePath: process.argv[1] });
+    try {
+      let requests = 0;
+      const binding = createProductionIntakeBinding({
+        db: store.db, mailboxUser: 'me', workspaceId: 'fixture-workspace',
+        readMasters: async () => ({ workspaceId: 'fixture-workspace',
+          items: [{ objectType: 'engagement', externalId: 'project', name: 'Example Project' }],
+          provenance: { runtimeVersion: 4 } }),
+        candidateWriter: new CwosMailCandidateWriter({
+          baseUrl: 'http://127.0.0.1', apiKey: 'fixture-writer-key-0123456789abcdef',
+          workspaceId: 'fixture-workspace', principalId: 'writer', mailbox: 'delegate@example.invalid',
+          fetchImpl: async () => { requests += 1; throw new Error('unexpected transport'); },
+        }),
+      });
+      const result = await ingestAfterCommittedSync({ store, ...binding,
+        mailboxUser: 'me', workspaceId: 'fixture-workspace', messageIds: ['mail'] });
+      assert.equal(result.failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+      assert.equal(result.deliveredCandidates.length, 0);
+      assert.equal(requests, 0);
+      console.log('durable-fence-pass');
+    } finally { store.close(); }
+  `, databasePath], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
+  assert.equal(restartedProcess.trim(), 'durable-fence-pass');
+  const reopened = new SQLiteMailStore({ databasePath });
+  t.after(() => reopened.close());
+  const restarted = createProductionIntakeBinding({
+    db: reopened.db, mailboxUser: 'me', workspaceId: 'fixture-workspace',
+    readMasters: async () => ({
+      workspaceId: 'fixture-workspace',
+      items: [{ objectType: 'engagement', externalId: 'project', name: 'Example Project' }],
+      provenance: { runtimeVersion: 4 },
+    }),
+    candidateWriter: binding.candidateWriter,
+  });
+  // A new revision must not bypass the unresolved outcome for this source.
+  reopened.db.prepare('UPDATE messages SET change_key=\'v2\' WHERE graph_id=\'mail\'').run();
+  const afterRestart = await ingestAfterCommittedSync({
+    store: reopened, ...restarted, mailboxUser: 'me', workspaceId: 'fixture-workspace', messageIds: ['mail'],
+  });
+  assert.equal(afterRestart.failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+  assert.deepEqual(calls, ['POST']);
+  assert.equal(afterRestart.deliveredCandidates.length, 0);
+  assert.equal(reopened.latestAuditEvent('mail.crm_candidate.delivered', {
+    entityType: 'message', entityId: 'mail',
+  }), null);
+});
+
+for (const [name, respond, code] of [
+  ['server failure', () => new Response('', { status: 500 }), 'CWOS_CANDIDATE_DENIED'],
+  ['unexpected success', () => new Response('', { status: 202 }), 'CWOS_CANDIDATE_DENIED'],
+  ['malformed receipt', () => new Response('{', { status: 201 }), 'CWOS_CANDIDATE_RESPONSE_INVALID'],
+  ['mismatched receipt', () => Response.json({ candidate: {} }, { status: 201 }), 'CWOS_CANDIDATE_RECEIPT_MISMATCH'],
+]) {
+  test(`${name} remains unknown and cannot trigger another POST`, async (t) => {
+    const { store, binding, run } = await fixture(t);
+    let calls = 0;
+    binding.candidateWriter.fetchImpl = async () => { calls += 1; return respond(); };
+    assert.equal((await run()).failures[0].code, code);
+    assert.equal((await run()).failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+    assert.equal(calls, 1);
+    assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
+  });
+}
+
+test('a known permission denial does not become an unknown outcome', async (t) => {
+  const { binding, run, posts } = await fixture(t);
+  const acceptedTransport = binding.candidateWriter.fetchImpl;
+  binding.candidateWriter.fetchImpl = async () => new Response('', { status: 403 });
+  assert.equal((await run()).failures[0].code, 'CWOS_CANDIDATE_DENIED');
+  binding.candidateWriter.fetchImpl = acceptedTransport;
+  const allowed = await run();
+  assert.deepEqual(allowed.failures, []);
+  assert.equal(allowed.deliveredCandidates.length, 1);
+  assert.equal(posts.length, 1);
+});
+
+test('a concurrent sync cannot pass an in-flight durable dispatch fence', { timeout: 5000 }, async (t) => {
+  const { binding, run } = await fixture(t);
+  let enter;
+  let release;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  binding.candidateWriter.fetchImpl = async () => {
+    calls += 1;
+    enter();
+    await pending;
+    throw new TypeError('Synthetic response loss');
+  };
+  const first = run();
+  await entered;
+  try {
+    assert.equal((await run()).failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+    assert.equal(calls, 1);
+  } finally {
+    release();
+    assert.equal((await first).failures[0].code, 'CWOS_CANDIDATE_UNAVAILABLE');
+  }
+});
+
+test('failed durable reservation refuses transport before any POST', async (t) => {
+  const { store, run, posts } = await fixture(t);
+  const audit = store.audit.bind(store);
+  store.audit = (event, detail) => {
+    if (event === 'mail.crm_candidate.dispatch_started') throw Object.assign(new Error('fixture persistence failure'), { code: 'FIXTURE_PERSISTENCE_FAILED' });
+    return audit(event, detail);
+  };
+  assert.equal((await run()).failures[0].code, 'FIXTURE_PERSISTENCE_FAILED');
+  assert.equal(posts.length, 0);
+});
+
+test('failure to persist an accepted receipt keeps the outcome unknown', async (t) => {
+  const { store, run, posts } = await fixture(t);
+  const audit = store.audit.bind(store);
+  store.audit = (event, detail) => {
+    if (event === 'mail.crm_candidate.delivered') throw Object.assign(new Error('fixture receipt failure'), { code: 'FIXTURE_RECEIPT_FAILED' });
+    return audit(event, detail);
+  };
+  const first = await run();
+  assert.equal(first.failures[0].code, 'FIXTURE_RECEIPT_FAILED');
+  assert.equal(first.deliveredCandidates.length, 0);
+  store.audit = audit;
+  assert.equal((await run()).failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+  assert.equal(posts.length, 1);
+  assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
 });
 
 test('a changed source revision delivers once more and a repeat of that revision does not', async (t) => {
