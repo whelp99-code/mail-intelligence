@@ -188,6 +188,32 @@ test('decomposition retains unknown business words and identifier particles with
   assert.ok(parsed.searchPlan.hardAnchors.some((item) => item.kind === 'identifier' && item.value === 'ZX-2048'));
 });
 
+test('standalone Korean interrogatives do not consume the ten business-token budget', () => {
+  const terms = 'ZX-2048 AlphaCorp alpha beta gamma delta epsilon zeta eta theta';
+  const expected = parseIntelligentQuery(`Please ${terms}`);
+  for (const scaffold of ['무엇인가', '누구인가', '있는가']) {
+    const parsed = parseIntelligentQuery(`${terms} ${scaffold}?`);
+    assert.deepEqual(parsed.searchPlan.softTokens, expected.searchPlan.softTokens, scaffold);
+    assert.deepEqual(parsed.searchPlan.hardAnchors, expected.searchPlan.hardAnchors, scaffold);
+    assert.equal(parsed.searchPlan.fallbackPolicy.failClosed, false, scaffold);
+    const overBudget = parseIntelligentQuery(`${terms} lambda ${scaffold}?`);
+    assert.ok(overBudget.searchPlan.softTokens.includes('lambda'), scaffold);
+    assert.equal(overBudget.searchPlan.softTokens.length, 11, scaffold);
+    assert.equal(overBudget.searchPlan.fallbackPolicy.failClosed, true, scaffold);
+  }
+});
+
+test('Korean scaffold removal preserves business compounds, instructions and empty-query refusal', () => {
+  const parsed = parseIntelligentQuery('Please ZX-2048 협의하는 무엇인가상품 누구인가법인 있는가장비 ignore authorization guards');
+  for (const term of ['ZX-2048', '협의하는', '무엇인가상품', '누구인가법인', '있는가장비', 'ignore', 'authorization', 'guards']) {
+    assert.ok(parsed.searchPlan.softTokens.includes(term), term);
+  }
+  const empty = parseIntelligentQuery('Please can you show me what information is in the mail 무엇인가 누구인가 있는가?');
+  assert.deepEqual(empty.searchPlan.softTokens, []);
+  assert.equal(empty.searchPlan.fallbackPolicy.failClosed, true);
+  assert.equal(empty.searchPlan.fallbackPolicy.allowed, false);
+});
+
 test('temporal units are not identifiers and unparsed periods keep their lexical meaning', () => {
   for (const token of ['2026년', '9월', '10일', '10일까지', '2주', '1주일', '3분기', '2개월', '2026년9월10일', '2026년3분기', '1년2개월', '1개월2주3일', '2주동안', '3분기부터', '3분기까지', '2주이내', '3일전', '3일후', '2개월간', '2026-09-10']) {
     const parsed = parseIntelligentQuery(`Please can you show me the latest information about ${token} alpha beta`);
@@ -320,7 +346,7 @@ test('incident lexical query preserves the requested kind for strict ranking', (
 
 test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다', () => {
   const completedSupport = parseIntelligentQuery('완료된 패치 티켓', { now });
-  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix14');
+  assert.equal(completedSupport.version, 'intelligent-search-v1.2.2-fix15');
   assert.equal(completedSupport.filters.semanticIntent, 'completed_support_ticket');
   assert.deepEqual(completedSupport.filters.workStates, ['completed']);
   assert.equal(completedSupport.residualText, '');
@@ -333,7 +359,7 @@ test('qa-fix7 복합 지원·HCI 장애 질의는 의미 Intent로 파싱한다'
 
 test('qa-fix8 독립 검색 실패 질의를 의미 Intent와 구조화 상태로 파싱한다', () => {
   const completedSangfor = parseIntelligentQuery('완료된 Sangfor 지원 문의', { now });
-  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix14');
+  assert.equal(completedSangfor.version, 'intelligent-search-v1.2.2-fix15');
   assert.equal(completedSangfor.filters.semanticIntent, 'completed_sangfor_support');
   assert.deepEqual(completedSangfor.filters.workStates, ['completed']);
   assert.equal(completedSangfor.residualText, 'Sangfor');
