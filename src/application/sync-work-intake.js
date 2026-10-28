@@ -41,6 +41,12 @@ function settleCandidateDispatch(store, entityId, attemptId, outcome) {
   });
 }
 
+function commitCandidateSettlement(store, operation) {
+  if (store.txDepth) throw Object.assign(new Error('CWOS_CANDIDATE_TRANSACTION_OPEN'), {
+    code: 'CWOS_CANDIDATE_TRANSACTION_OPEN',
+  });
+  store.transaction(operation);
+}
 function readProviderIdentity(authorization) {
   if (typeof authorization?.identityProvenance !== 'function') return null;
   const identity = authorization.identityProvenance();
@@ -200,7 +206,7 @@ export async function ingestAfterCommittedSync({
                 }
               },
             });
-            store.transaction(() => {
+            commitCandidateSettlement(store, () => {
               store.audit('mail.crm_candidate.delivered', {
                 entityType: 'message', entityId: messageId,
                 payload: {
@@ -215,7 +221,9 @@ export async function ingestAfterCommittedSync({
           }
         } catch (error) {
           if (attemptId !== null && error?.deliveryOutcome === 'rejected') {
-            settleCandidateDispatch(store, dispatchEntityId, attemptId, 'rejected');
+            commitCandidateSettlement(store, () => {
+              settleCandidateDispatch(store, dispatchEntityId, attemptId, 'rejected');
+            });
           }
           candidateFailure = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
           failures.push(candidateFailure);

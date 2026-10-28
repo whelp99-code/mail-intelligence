@@ -100,8 +100,9 @@ Before a candidate POST, committed local audit records reserve its mailbox,
 workspace and source message. The reservation records source digest, writer,
 provider event and idempotency key, without body or credentials. A verified
 delivery settles that reservation atomically with the delivery audit. Explicit
-request rejection (including unresolved POST 409) settles as rejected, not
-delivered. Transport loss, server errors, unexpected success or invalid receipts
+request rejection (including unresolved POST 409) settles as rejected in its own
+committed transaction, not delivered. A failed settlement commit leaves the
+reservation unresolved. Transport loss, server errors, unexpected success or invalid receipts
 leave the outcome unknown. Later automatic syncs, concurrent callers and process
 restarts refuse another POST with `CWOS_CANDIDATE_OUTCOME_UNKNOWN`; changing the
 source revision does not clear an unresolved reservation. No automatic retry,
