@@ -495,6 +495,35 @@ test('failure to persist an accepted receipt keeps the outcome unknown', async (
   assert.equal(store.latestAuditEvent('mail.crm_candidate.delivered', { entityType: 'message', entityId: 'mail' }), null);
 });
 
+
+test('rejection settlement commit failure blocks a later POST', async (t) => {
+  const { store, binding, run, posts } = await fixture(t);
+  const acceptedTransport = binding.candidateWriter.fetchImpl;
+  binding.candidateWriter.fetchImpl = async () => new Response('', { status: 403 });
+  const exec = store.db.exec.bind(store.db);
+  let failNextCommit = false;
+  store.db.exec = (sql) => {
+    if (failNextCommit && String(sql).includes('COMMIT')) {
+      failNextCommit = false;
+      throw Object.assign(new Error('fixture rejection settlement failure'), { code: 'FIXTURE_REJECTION_SETTLEMENT_FAILED' });
+    }
+    return exec(sql);
+  };
+  const audit = store.audit.bind(store);
+  store.audit = (event, detail) => {
+    if (event === 'mail.crm_candidate.dispatch_settled') failNextCommit = true;
+    return audit(event, detail);
+  };
+  const first = await run();
+  assert.deepEqual(first.failures.map(item => item.code), ['FIXTURE_REJECTION_SETTLEMENT_FAILED']);
+  assert.equal(posts.length, 0);
+  store.db.exec = exec;
+  store.audit = audit;
+  binding.candidateWriter.fetchImpl = acceptedTransport;
+  assert.equal((await run()).failures[0].code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+  assert.equal(posts.length, 0);
+});
+
 test('a changed source revision delivers once more and a repeat of that revision does not', async (t) => {
   const workspaceId = '44444444-4444-4444-8444-444444444444';
   const { store, binding, run, posts } = await fixture(t, { workspaceId });
