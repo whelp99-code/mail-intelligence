@@ -40,8 +40,11 @@ test('status reads share one check and do not wait on the request', async () => 
   assert.equal(jarvisReaderStatus(integrity, counts).ready, true);
   assert.equal(integrity.started(), 1);
   now += SHARED_INTEGRITY_MAX_AGE_MS;
-  const stale = jarvisReaderStatus(integrity, counts);
-  assert.equal(stale.ready, true);
+  const expired = jarvisReaderStatus(integrity, counts);
+  assert.equal(expired.ready, false);
+  assert.equal(integrity.started(), 2);
+  await integrity.settled();
+  assert.equal(jarvisReaderStatus(integrity, counts).ready, true);
   assert.equal(integrity.started(), 2);
 });
 
@@ -80,4 +83,54 @@ test('a check rejection is refused and a readonly worker reports a real database
     await check.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+test('an unfinished recheck is expired but not rejected before its deadline', async () => {
+  const first = deferred();
+  const second = deferred();
+  const checks = [first, second];
+  let now = 1_000;
+  const integrity = createSharedIntegrity({
+    check: () => checks.shift().promise,
+    now: () => now,
+    maxAgeMs: SHARED_INTEGRITY_MAX_AGE_MS,
+  });
+  integrity.read();
+  first.resolve({ ok: true });
+  await integrity.settled();
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, true);
+  now += SHARED_INTEGRITY_MAX_AGE_MS;
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  assert.equal(integrity.started(), 2);
+  now += SHARED_INTEGRITY_MAX_AGE_MS - 1;
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  assert.equal(integrity.started(), 2);
+  second.resolve({ ok: true });
+  await integrity.settled();
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, true);
+  assert.equal(integrity.started(), 2);
+});
+
+test('a recheck that misses its deadline stays refused after a late success', async () => {
+  const first = deferred();
+  const second = deferred();
+  const checks = [first, second];
+  let now = 1_000;
+  const integrity = createSharedIntegrity({
+    check: () => checks.shift().promise,
+    now: () => now,
+    maxAgeMs: SHARED_INTEGRITY_MAX_AGE_MS,
+  });
+  integrity.read();
+  first.resolve({ ok: true });
+  await integrity.settled();
+  now += SHARED_INTEGRITY_MAX_AGE_MS;
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  now += SHARED_INTEGRITY_MAX_AGE_MS;
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  assert.equal(integrity.started(), 2);
+  second.resolve({ ok: true });
+  await integrity.settled();
+  await Promise.resolve();
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  assert.equal(integrity.started(), 2);
 });

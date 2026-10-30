@@ -1,8 +1,10 @@
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 
-// Same cadence as the existing company-memory tick. A status read shares that
-// generation instead of starting another full scan on the request thread.
+// A completed result stays usable only while now-at < maxAgeMs. At that age a
+// previous success is not ready and one shared recheck starts. An unfinished
+// recheck is not a rejection until it has also run for maxAgeMs. A late result
+// from a rejected recheck cannot restore ready.
 export const SHARED_INTEGRITY_MAX_AGE_MS = 30_000;
 
 export function createSharedIntegrity({ check, now = () => Date.now(), maxAgeMs = SHARED_INTEGRITY_MAX_AGE_MS } = {}) {
@@ -11,24 +13,36 @@ export function createSharedIntegrity({ check, now = () => Date.now(), maxAgeMs 
   let completed = null;
   let inflight = null;
   let started = 0;
+  let generation = 0;
+  let inflightStartedAt = 0;
   function start() {
     if (inflight) return inflight;
+    const current = ++generation;
     started += 1;
+    inflightStartedAt = now();
     inflight = Promise.resolve().then(() => check()).then((result) => {
+      if (current !== generation) return completed;
       completed = { ok: result?.ok === true, at: now() };
       return completed;
     }, () => {
+      if (current !== generation) return completed;
       completed = { ok: false, at: now() };
       return completed;
     }).finally(() => {
-      inflight = null;
+      if (current === generation) inflight = null;
     });
     return inflight;
   }
   return {
     read() {
+      if (inflight !== null && now() - inflightStartedAt >= maxAgeMs) {
+        generation += 1;
+        inflight = null;
+        completed = { ok: false, at: now() };
+      }
       const fresh = completed !== null && now() - completed.at < maxAgeMs;
       if (!fresh) start();
+      if (completed === null || now() - completed.at >= maxAgeMs) return null;
       return completed;
     },
     started: () => started,
