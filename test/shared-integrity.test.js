@@ -134,3 +134,28 @@ test('a recheck that misses its deadline stays refused after a late success', as
   assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
   assert.equal(integrity.started(), 2);
 });
+
+test('a late success without an intervening status read is refused', async () => {
+  const first = deferred();
+  const second = deferred();
+  const checks = [first, second];
+  let now = 1_000;
+  const integrity = createSharedIntegrity({
+    check: () => checks.shift().promise,
+    now: () => now,
+    maxAgeMs: SHARED_INTEGRITY_MAX_AGE_MS,
+  });
+  integrity.read();
+  first.resolve({ ok: true });
+  await integrity.settled();
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, true);
+  now = 1_000 + SHARED_INTEGRITY_MAX_AGE_MS;
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  assert.equal(integrity.started(), 2);
+  now = 1_000 + (SHARED_INTEGRITY_MAX_AGE_MS * 2) + 1;
+  second.resolve({ ok: true });
+  await integrity.settled();
+  await Promise.resolve();
+  assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
+  assert.equal(integrity.started(), 2);
+});

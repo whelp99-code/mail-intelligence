@@ -3,8 +3,9 @@ import { fileURLToPath } from 'node:url';
 
 // A completed result stays usable only while now-at < maxAgeMs. At that age a
 // previous success is not ready and one shared recheck starts. An unfinished
-// recheck is not a rejection until it has also run for maxAgeMs. A late result
-// from a rejected recheck cannot restore ready.
+// recheck is not a rejection until it has also run for maxAgeMs. Completion
+// itself refuses that generation, even with no intervening status read. A late
+// result from a refused generation cannot restore ready.
 export const SHARED_INTEGRITY_MAX_AGE_MS = 30_000;
 
 export function createSharedIntegrity({ check, now = () => Date.now(), maxAgeMs = SHARED_INTEGRITY_MAX_AGE_MS } = {}) {
@@ -15,20 +16,26 @@ export function createSharedIntegrity({ check, now = () => Date.now(), maxAgeMs 
   let started = 0;
   let generation = 0;
   let inflightStartedAt = 0;
+  function finish(current, startedAt, ok) {
+    if (current !== generation) return completed;
+    if (now() - startedAt >= maxAgeMs) {
+      generation += 1;
+      inflight = null;
+      completed = { ok: false, at: now() };
+      return completed;
+    }
+    completed = { ok, at: now() };
+    return completed;
+  }
   function start() {
     if (inflight) return inflight;
     const current = ++generation;
+    const startedAt = now();
     started += 1;
-    inflightStartedAt = now();
+    inflightStartedAt = startedAt;
     inflight = Promise.resolve().then(() => check()).then((result) => {
-      if (current !== generation) return completed;
-      completed = { ok: result?.ok === true, at: now() };
-      return completed;
-    }, () => {
-      if (current !== generation) return completed;
-      completed = { ok: false, at: now() };
-      return completed;
-    }).finally(() => {
+      return finish(current, startedAt, result?.ok === true);
+    }, () => finish(current, startedAt, false)).finally(() => {
       if (current === generation) inflight = null;
     });
     return inflight;
