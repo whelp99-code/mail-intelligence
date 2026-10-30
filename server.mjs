@@ -28,6 +28,7 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
+import { createReadonlyIntegrityCheck, createSharedIntegrity, jarvisReaderStatus } from './src/storage/shared-integrity.js';
 import { annotateReplyGaps, replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
@@ -2984,9 +2985,13 @@ const server = createServer(async (req, res) => {
   try {
     assertAllowedHost(req);
     if (authorizeJarvisMailReader(req, jarvisMailReader)) {
-      // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox.
-      const { ready, counts } = requireMailMemory().store.storageStatus();
-      return json(res, 200, { ready, counts: { messages: counts.messages, threads: counts.threads } });
+      // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox and its
+      // integrity scan must not run again on this request thread.
+      const store = requireMailMemory().store;
+      return json(res, 200, jarvisReaderStatus(sharedJarvisIntegrity(store.databasePath), () => ({
+        messages: store.db.prepare('SELECT COUNT(*) AS count FROM messages').get().count,
+        threads: store.db.prepare('SELECT COUNT(*) AS count FROM threads').get().count,
+      })));
     }
   } catch (error) {
     json(res, error.statusCode || 403, {
@@ -3142,6 +3147,15 @@ mailMemory = new PersistentMailMemoryRuntime({
   ),
 });
 const mailMemoryInitialization = await mailMemory.initialize();
+let sharedIntegrity = null;
+function sharedJarvisIntegrity(databasePath) {
+  if (!sharedIntegrity) {
+    sharedIntegrity = createSharedIntegrity({ check: createReadonlyIntegrityCheck(databasePath) });
+    sharedIntegrity.read();
+  }
+  return sharedIntegrity;
+}
+sharedJarvisIntegrity(mailMemory.store.databasePath);
 await loadPersistedSessions();
 async function readPrivateToken(envValue, fileEnv, label) {
   const filePath = String(process.env[fileEnv] || '');
