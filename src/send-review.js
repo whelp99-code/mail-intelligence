@@ -46,7 +46,7 @@ export function composeSaveBlocked(items) {
   return items.some((item) => item.state !== 'ready');
 }
 
-export function initializeSendReview(apiFetch) {
+export function initializeSendReview(apiFetch, getRole = () => 'operator') {
   const panel = document.querySelector('#sendDraftReview');
   if (!panel) return;
   const list = panel.querySelector('#sendDraftList');
@@ -267,6 +267,10 @@ export function initializeSendReview(apiFetch) {
     if (draft.failure_reason) detail.append(node('p', `결과: ${draft.failure_reason}`, 'send-draft-warning'));
     if (draft.status === 'needs_clarification') detail.append(node('p', '수신자·제목·본문을 확인해 새 초안을 작성하세요. 이 초안은 발송할 수 없습니다.', 'send-draft-warning'));
     if (!sendEnabled) detail.append(node('p', '발송 기본 OFF · 검토와 취소만 가능합니다.', 'send-draft-warning'));
+    if (getRole() === 'viewer') {
+      detail.append(node('p', '보기 전용입니다. 발송·초안 변경·동기화·읽음·설정 저장은 서버가 거절합니다.', 'send-draft-warning'));
+      return;
+    }
     const controls = node('div', '', 'send-review-controls');
     if (draft.status === 'needs_approval' || draft.status === 'approved') {
       const outside = externalRecipientAddresses(draft, companyDomains);

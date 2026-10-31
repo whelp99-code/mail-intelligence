@@ -66,6 +66,7 @@ export function createMailAttachmentApi({
   getMailbox,
   getSession,
   serviceToken = '',
+  rejectViewerWrite = () => {},
   attachmentsEnabled = false,
   getAttachmentKey,
   scanner = createUnavailableScanner(),
@@ -88,6 +89,7 @@ export function createMailAttachmentApi({
       } else {
         session = getSession(req);
         if (!session) fail(401, 'AUTH_REQUIRED');
+        if (req.method !== 'GET' && req.method !== 'HEAD') rejectViewerWrite(session, req);
         if (req.method === 'POST') {
           if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
           if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');

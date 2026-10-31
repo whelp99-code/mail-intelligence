@@ -14,6 +14,7 @@ import {
 
 let serverCapabilities = { sendMail: false, markRead: false, dataPlane: false };
 let localSessionPromise = null;
+let sessionRole = 'operator';
 
 const loadOutlook = document.querySelector('#loadOutlook');
 const mailLimit = document.querySelector('#mailLimit');
@@ -301,6 +302,8 @@ async function ensureLocalSession() {
         throw new Error(payload.message || '로컬 보안 세션을 만들지 못했습니다.');
       }
       serverCapabilities = { ...serverCapabilities, ...(payload.capabilities || {}) };
+      sessionRole = payload.role === 'viewer' ? 'viewer' : 'operator';
+      applyViewerChrome();
       return payload;
     }).catch((error) => {
       localSessionPromise = null;
@@ -308,6 +311,31 @@ async function ensureLocalSession() {
     });
   }
   return localSessionPromise;
+}
+
+function applyViewerChrome() {
+  if (sessionRole !== 'viewer') return;
+  for (const id of [
+    'syncPersistentMail',
+    'backupPersistentMail',
+    'saveConfig',
+    'clearConfig',
+    'loginOutlook',
+    'createProject',
+    'reclassifyPrecision',
+    'testOauthProvider',
+    'saveAssistantPersonality',
+    'sendDraftForm',
+  ]) {
+    const control = document.querySelector(`#${id}`);
+    if (control) control.hidden = true;
+  }
+}
+
+function viewerWriteBlocked(url, method) {
+  if (sessionRole !== 'viewer' || method === 'GET' || method === 'HEAD') return false;
+  const path = String(url).split('?')[0];
+  return !(method === 'DELETE' && path === '/api/session');
 }
 
 async function readApiPayload(response) {
@@ -332,6 +360,12 @@ async function apiFetch(url, options = {}) {
   const requiresSession = !String(url).startsWith('/api/session')
     && !String(url).startsWith('/api/outlook/status');
   const session = requiresSession ? await ensureLocalSession() : null;
+  if (viewerWriteBlocked(url, method)) {
+    return new Response(JSON.stringify({
+      code: 'VIEWER_WRITE_FORBIDDEN',
+      message: 'Viewer sessions cannot change mail state.',
+    }), { status: 403, headers: { 'content-type': 'application/json' } });
+  }
   if (!['GET', 'HEAD'].includes(method)) {
     headers.set('X-CSRF-Token', session.csrfToken);
     headers.set('X-Mail-Intelligence-Request', '1');
@@ -2273,4 +2307,4 @@ loadAssistantPersonality();
   });
 })();
 
-initializeSendReview(apiFetch);
+initializeSendReview(apiFetch, () => sessionRole);

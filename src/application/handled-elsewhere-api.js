@@ -42,6 +42,7 @@ export function createHandledElsewhereApi({
   getMailbox,
   getSession,
   readBody,
+  rejectViewerWrite = () => {},
   accessKeyRequired = false,
 }) {
   return async function handledElsewhereApi(req, url) {
@@ -50,6 +51,7 @@ export function createHandledElsewhereApi({
     if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     const session = getSession(req);
     if (!session?.token || !session.csrfToken) fail(401, 'SESSION_REQUIRED', 'A browser session is required.');
+    rejectViewerWrite(session, req);
     if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED', 'A valid CSRF token is required.');
     if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED', 'Cross-origin state changes are not allowed.');
     if (accessKeyRequired && String(req.headers['x-mail-intelligence-request'] || '') !== '1') {

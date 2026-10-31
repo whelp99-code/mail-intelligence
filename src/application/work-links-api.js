@@ -12,6 +12,7 @@ export function createWorkLinksApi({
   getStore,
   getMailboxUser,
   getSession,
+  rejectViewerWrite = () => {},
   snapshotPath = '',
   getCwosWorkSystem,
   getIntakeAuthorization,
@@ -23,6 +24,7 @@ export function createWorkLinksApi({
     const session = getSession(req);
     if (!session) fail(401, 'SESSION_REQUIRED', 'Session required.');
     if (req.method === 'POST') {
+      rejectViewerWrite(session, req);
       if (String(req.headers['x-csrf-token'] || '') !== String(session.csrfToken || '')) {
         fail(403, 'CSRF_REQUIRED', 'CSRF token required.');
       }

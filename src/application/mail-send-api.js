@@ -19,6 +19,7 @@ function equal(value, expected) {
 export function createMailSendApi({
   getStore, getMailbox, getSession, readBody, getAccessToken,
   serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
+  rejectViewerWrite = () => {}, viewerAccessKey = '',
   recipientAllowlist = null,
   companyDomains = null,
   companyMemory = null,
@@ -41,6 +42,7 @@ export function createMailSendApi({
     let agentSource = null;
     if (bot) {
       const presented = authorization.slice(7);
+      if (viewerAccessKey && equal(presented, viewerAccessKey)) fail(401, 'DRAFT_TOKEN_REQUIRED');
       for (const source of ['grok-bot', 'jarvis']) {
         const token = String(tokens[source] || '');
         if (token.length >= 32 && equal(presented, token)) {
@@ -55,6 +57,7 @@ export function createMailSendApi({
     } else {
       session = getSession(req);
       if (!session) fail(401, 'SESSION_REQUIRED');
+      if (req.method !== 'GET' && req.method !== 'HEAD') rejectViewerWrite(session, req);
       if (req.method === 'POST') {
         if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
         if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');

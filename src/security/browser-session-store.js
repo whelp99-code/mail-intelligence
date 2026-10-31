@@ -4,34 +4,43 @@ import { DatabaseSync } from 'node:sqlite';
 export function openBrowserSessionStore(databasePath) {
   const db = new DatabaseSync(databasePath);
   db.exec('PRAGMA busy_timeout = 5000;');
-  const removeStale = db.prepare(
-    'DELETE FROM browser_sessions WHERE access_key_binding != ? OR created_at < ?',
-  );
+  const deleteBinding = db.prepare('DELETE FROM browser_sessions WHERE access_key_binding = ?');
+  const deleteExpired = db.prepare('DELETE FROM browser_sessions WHERE access_key_binding = ? AND created_at < ?');
   const selectActive = db.prepare(`
-    SELECT token_hash, csrf_token, created_at
+    SELECT token_hash, csrf_token, created_at, role, access_key_binding
     FROM browser_sessions
     WHERE access_key_binding = ? AND created_at >= ?
   `);
   const insertSession = db.prepare(`
-    INSERT INTO browser_sessions(token_hash, csrf_token, created_at, access_key_binding)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO browser_sessions(token_hash, csrf_token, created_at, access_key_binding, role)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(token_hash) DO NOTHING
   `);
-  const deleteAll = db.prepare('DELETE FROM browser_sessions');
 
   return {
-    loadActive(binding, now, ttlMs) {
+    loadActive(bindings, now, ttlMs) {
+      const current = (Array.isArray(bindings) ? bindings : [bindings]).filter(Boolean);
       const oldestKept = now - ttlMs;
-      removeStale.run(binding, oldestKept);
-      return selectActive.all(binding, oldestKept);
+      if (current.length === 0) return [];
+      const kept = new Set(current);
+      for (const row of db.prepare('SELECT DISTINCT access_key_binding FROM browser_sessions').all()) {
+        if (!kept.has(row.access_key_binding)) deleteBinding.run(row.access_key_binding);
+      }
+      const loaded = [];
+      for (const binding of current) {
+        deleteExpired.run(binding, oldestKept);
+        loaded.push(...selectActive.all(binding, oldestKept));
+      }
+      return loaded;
     },
 
     replaceAll(binding, sessions) {
       db.exec('BEGIN IMMEDIATE');
       try {
-        deleteAll.run();
+        deleteBinding.run(binding);
         for (const session of sessions) {
-          insertSession.run(session.tokenHash, session.csrfToken, session.createdAt, binding);
+          const role = session.role === 'viewer' ? 'viewer' : 'operator';
+          insertSession.run(session.tokenHash, session.csrfToken, session.createdAt, binding, role);
         }
         db.exec('COMMIT');
       } catch (error) {
@@ -60,7 +69,8 @@ export function openBrowserSessionStore(databasePath) {
       try {
         for (const item of stored.sessions) {
           if (typeof item?.tokenHash !== 'string' || typeof item.csrfToken !== 'string' || !Number.isFinite(item.createdAt)) continue;
-          imported += insertSession.run(item.tokenHash, item.csrfToken, item.createdAt, binding).changes;
+          const role = item.role === 'viewer' ? 'viewer' : 'operator';
+          imported += insertSession.run(item.tokenHash, item.csrfToken, item.createdAt, binding, role).changes;
         }
         db.exec('COMMIT');
       } catch (error) {
