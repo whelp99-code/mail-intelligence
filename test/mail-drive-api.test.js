@@ -247,6 +247,7 @@ test('Google Docs export is allowlisted and source-version change blocks approva
     getAccessToken: async () => `fixture.${Buffer.from(JSON.stringify({ scp: 'Mail.Read Mail.Send', exp: Date.now() / 1000 + 3600 })).toString('base64url')}.fixture`,
     allowSend: true,
     accessKeyRequired: true,
+    companyDomains: ['example.com'],
     getAttachmentKey: async () => KEY,
     recheckDrive: async (draft) => {
       for (const item of draft.attachments) await f.connections.recheckAsset(1, item);

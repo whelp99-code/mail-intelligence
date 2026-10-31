@@ -64,7 +64,7 @@ for (const allowSend of [false, true]) {
     const human = { Cookie, Origin: base, 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken };
     const rejected = await fetch(url, { method: 'POST', headers: human, body: JSON.stringify(approval) });
     assert.equal(rejected.status, 403);
-    assert.equal((await rejected.json()).code, allowSend ? 'MAIL_SEND_SCOPE_REQUIRED' : 'MAIL_SEND_DISABLED');
+    assert.equal((await rejected.json()).code, allowSend ? 'EXTERNAL_RECIPIENT_CONFIRMATION_REQUIRED' : 'MAIL_SEND_DISABLED');
     const missingCsrf = await fetch(url, { method: 'POST', headers: { ...human, 'X-CSRF-Token': '' }, body: JSON.stringify(approval) });
     assert.equal(missingCsrf.status, 403);
     const state = await (await fetch(base + '/api/mail/send-drafts/' + draft.draft_id, { headers })).json();

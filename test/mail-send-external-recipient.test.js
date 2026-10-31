@@ -250,3 +250,35 @@ test('send review warns only for a recipient outside the company domain', async 
   assert.equal(document.querySelector('#confirmExternalRecipient'), null);
   assert.match(document.querySelector('#sendDraftDetail').textContent, /ops@blro.example/);
 });
+test('unset company domains warn for every recipient', async (t) => {
+  const recipients = { to: ['ops@blro.example'], cc: ['finance@blro.example'] };
+  assert.deepEqual(externalRecipientAddresses(recipients, null), ['ops@blro.example', 'finance@blro.example']);
+  assert.deepEqual(externalRecipientAddresses(recipients, []), ['ops@blro.example', 'finance@blro.example']);
+  const f = fixture(t, { companyDomains: null });
+  const item = await draft(f, ['ops@blro.example'], ['finance@blro.example']);
+  await assert.rejects(
+    f.call('POST', `/${item.draft_id}/approve`, { confirm: true, payload_digest: item.payload_digest }),
+    { code: 'EXTERNAL_RECIPIENT_CONFIRMATION_REQUIRED' },
+  );
+  assert.equal(f.sends(), 0);
+
+  const document = reviewDocument();
+  globalThis.document = document;
+  const shown = {
+    draft_id: 'cccccccc-dddd-4eee-8fff-000000000001',
+    status: 'needs_approval', source: 'ui', to: ['ops@blro.example'], cc: [],
+    subject: '미설정', body_text: 'synthetic', payload_digest: 'unset-digest',
+  };
+  initializeSendReview(async (url) => {
+    if (String(url).endsWith(shown.draft_id)) {
+      return { ok: true, json: async () => ({ draft: shown, send_enabled: true, company_domains: [] }) };
+    }
+    return { ok: true, json: async () => ({ drafts: [shown], send_enabled: true, company_domains: [] }) };
+  });
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  const button = document.querySelector('#sendDraftList').children.find((node) => node.tagName === 'button');
+  button.listeners.click[0]();
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  assert.match(document.querySelector('#externalRecipientWarning').textContent, /ops@blro.example/);
+  assert.equal(document.querySelector('#approveSendDraft').disabled, true);
+});

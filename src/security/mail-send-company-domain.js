@@ -21,9 +21,10 @@ export function companyDomainsFromEnvironment(env = process.env) {
 }
 
 export function externalRecipientAddresses({ to = [], cc = [] } = {}, companyDomains) {
-  if (companyDomains == null) return [];
+  const recipients = [...to, ...cc].map((address) => String(address).trim()).filter(Boolean);
+  if (companyDomains == null || companyDomains.length === 0) return recipients;
   const allowed = new Set(companyDomains);
-  return [...to, ...cc].map((address) => String(address).trim()).filter((address) => {
+  return recipients.filter((address) => {
     const at = address.lastIndexOf('@');
     if (at <= 0 || at !== address.indexOf('@') || at === address.length - 1) return true;
     return !allowed.has(address.slice(at + 1).toLowerCase());

@@ -343,7 +343,7 @@ export function initializeSendReview(apiFetch) {
       const result = await request('/' + id);
       if (selected !== id) return;
       sendEnabled = result.send_enabled;
-      if (Array.isArray(result.company_domains)) companyDomains = result.company_domains.length ? result.company_domains : null;
+      if (Array.isArray(result.company_domains)) companyDomains = result.company_domains;
       show(result.draft);
     } catch (error) { status.textContent = error.message; }
   }
@@ -353,7 +353,7 @@ export function initializeSendReview(apiFetch) {
       const result = await request();
       if (version !== refreshVersion) return;
       sendEnabled = result.send_enabled;
-      if (Array.isArray(result.company_domains)) companyDomains = result.company_domains.length ? result.company_domains : null;
+      if (Array.isArray(result.company_domains)) companyDomains = result.company_domains;
       list.replaceChildren();
       for (const draft of result.drafts) {
         const button = node('button', `${statuses[draft.status] || draft.status} · ${draft.subject || '제목 없음'}`);
