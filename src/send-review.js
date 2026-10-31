@@ -1,4 +1,5 @@
 import { DRIVE_LINK_WARNING, parseDriveLink } from './application/drive-links.js';
+import { externalRecipientAddresses } from './security/mail-send-company-domain.js';
 
 const statuses = {
   needs_approval: '승인 대기', needs_clarification: '정보 확인 필요', approved: '승인됨',
@@ -25,6 +26,7 @@ const errors = {
   DRIVE_SOURCE_CHANGED: 'Drive 원본이 변경되어 다시 가져와야 합니다.',
   DRIVE_RECHECK_UNAVAILABLE: 'Drive 연결을 사용할 수 없습니다.',
   EXPORT_UNSUPPORTED: '지원하지 않는 Drive 변환 형식입니다.',
+  EXTERNAL_RECIPIENT_CONFIRMATION_REQUIRED: '회사 도메인이 아닌 수신자가 있습니다. 확인을 한 번 더 해야 발송할 수 있습니다.',
 };
 
 export function encodeBrowserFileName(name) {
@@ -67,6 +69,7 @@ export function initializeSendReview(apiFetch) {
   let pickerToken = '';
   let selected = null;
   let sendEnabled = false;
+  let companyDomains = null;
   let busy = false;
   let requestId = null;
   let refreshVersion = 0;
@@ -266,6 +269,20 @@ export function initializeSendReview(apiFetch) {
     if (!sendEnabled) detail.append(node('p', '발송 기본 OFF · 검토와 취소만 가능합니다.', 'send-draft-warning'));
     const controls = node('div', '', 'send-review-controls');
     if (draft.status === 'needs_approval' || draft.status === 'approved') {
+      const outside = externalRecipientAddresses(draft, companyDomains);
+      let externalAck = null;
+      if (outside.length) {
+        const warning = node('p', `회사 도메인이 아닌 수신자가 있습니다: ${outside.join(', ')}. 발송하려면 아래 확인을 한 번 더 해야 합니다.`, 'send-draft-warning');
+        warning.id = 'externalRecipientWarning';
+        detail.append(warning);
+        const ackLabel = node('label', '');
+        externalAck = document.createElement('input');
+        externalAck.type = 'checkbox';
+        externalAck.id = 'confirmExternalRecipient';
+        externalAck.disabled = !sendEnabled || busy;
+        ackLabel.append(externalAck, document.createTextNode('회사 밖 수신자에게 보내는 것을 확인했습니다.'));
+        detail.append(ackLabel);
+      }
       const label = node('label', '');
       const confirmed = document.createElement('input');
       confirmed.type = 'checkbox'; confirmed.id = 'confirmSendDraft'; confirmed.disabled = !sendEnabled || busy;
@@ -273,8 +290,16 @@ export function initializeSendReview(apiFetch) {
       detail.append(label);
       const approve = node('button', '검토한 초안 승인 후 발송');
       approve.id = 'approveSendDraft'; approve.type = 'button'; approve.disabled = true;
-      confirmed.addEventListener('change', () => { approve.disabled = !confirmed.checked || !sendEnabled || busy; });
-      approve.addEventListener('click', () => act(draft, 'approve', { payload_digest: draft.payload_digest, confirm: true }));
+      const syncApprove = () => {
+        approve.disabled = !confirmed.checked || !sendEnabled || busy || Boolean(externalAck && !externalAck.checked);
+      };
+      confirmed.addEventListener('change', syncApprove);
+      externalAck?.addEventListener('change', syncApprove);
+      approve.addEventListener('click', () => act(draft, 'approve', {
+        payload_digest: draft.payload_digest,
+        confirm: true,
+        ...(externalAck ? { external_recipient_confirmed: true } : {}),
+      }));
       controls.append(approve);
     }
     if (['needs_approval', 'needs_clarification', 'approved'].includes(draft.status)) {
@@ -318,6 +343,7 @@ export function initializeSendReview(apiFetch) {
       const result = await request('/' + id);
       if (selected !== id) return;
       sendEnabled = result.send_enabled;
+      if (Array.isArray(result.company_domains)) companyDomains = result.company_domains.length ? result.company_domains : null;
       show(result.draft);
     } catch (error) { status.textContent = error.message; }
   }
@@ -327,6 +353,7 @@ export function initializeSendReview(apiFetch) {
       const result = await request();
       if (version !== refreshVersion) return;
       sendEnabled = result.send_enabled;
+      if (Array.isArray(result.company_domains)) companyDomains = result.company_domains.length ? result.company_domains : null;
       list.replaceChildren();
       for (const draft of result.drafts) {
         const button = node('button', `${statuses[draft.status] || draft.status} · ${draft.subject || '제목 없음'}`);

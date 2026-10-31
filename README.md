@@ -172,6 +172,7 @@ openid profile offline_access User.Read Mail.Read
 - `POST /api/mail/send-drafts`: 초안 저장. 세션 또는 제한된 Grok 서비스 토큰.
 - `GET /api/mail/send-drafts/:id`: 초안/영수증 조회. Grok 토큰은 Grok 출처 초안만 조회.
 - `POST /api/mail/send-drafts/:id/approve`: 사람 세션만, 정확한 payload digest 및 명시적 확인 필요.
+- 회사 도메인은 `MAIL_INTELLIGENCE_COMPANY_DOMAINS`다. 없거나 비어 있으면 추가 경고를 만들지 않는다. 값이 있으면 그 도메인이 아닌 수신자·참조는 발송 확인 화면에 경고와 추가 체크를 띄우고, 화면을 건너뛴 승인에도 `external_recipient_confirmed: true`가 없으면 Graph `sendMail` 전에 `EXTERNAL_RECIPIENT_CONFIRMATION_REQUIRED`로 거절한다.
 - `POST /api/mail/send-drafts/:id/cancel`: 사람 세션만. 이미 발송 중이거나 발송된 초안은 취소할 수 없음.
 
 Grok Gateway에는 초안 생성·조회만 연결합니다. MI 운영자 접근키 대신 별도 `MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE`(0600)을 사용합니다. Grok은 승인·발송·취소 API를 호출하지 않습니다.

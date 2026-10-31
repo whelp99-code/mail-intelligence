@@ -9,6 +9,7 @@ import { openBrowserSessionStore } from './src/security/browser-session-store.js
 import { resolveStaticFile } from './src/security/static-path.js';
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
 import { mailSendRecipientAllowlistFromEnvironment } from './src/security/mail-send-recipient-policy.js';
+import { companyDomainsFromEnvironment } from './src/security/mail-send-company-domain.js';
 import {
   AI_PIPELINE_VERSION,
   buildAnalysisCacheKey,
@@ -119,6 +120,7 @@ const graphBaseUrl = String(process.env.MAIL_INTELLIGENCE_GRAPH_BASE_URL || 'htt
 const safetyPolicy = getSafetyPolicy(process.env);
 const delegatedScopes = delegatedScopesForSafety(safetyPolicy);
 const mailSendRecipientAllowlist = mailSendRecipientAllowlistFromEnvironment(process.env);
+const mailSendCompanyDomains = companyDomainsFromEnvironment(process.env);
 const configuredAccessKey = String(process.env.MAIL_INTELLIGENCE_ACCESS_KEY || '').trim();
 const accessKeyRequired = configuredAccessKey.length > 0;
 const AI_OPT_IN_VERSION = 'ai-oauth-opt-in-v1.2.2';
@@ -3191,6 +3193,7 @@ const mailSendApi = createMailSendApi({
   allowSend: safetyPolicy.capabilities.mailSend,
   accessKeyRequired,
   recipientAllowlist: mailSendRecipientAllowlist,
+  companyDomains: mailSendCompanyDomains,
   companyMemory,
   getAttachmentKey: async () => {
     if (!attachmentKey) {
