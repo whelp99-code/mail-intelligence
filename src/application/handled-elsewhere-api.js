@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { browserOriginAllowed } from '../security/request-origin.js';
 import { annotateReplyGaps } from './reply-draft-pipeline.js';
 import { markHandledElsewhere, undoHandledElsewhere, resolveHandledMessage } from './handled-elsewhere.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 function fail(statusCode, code, message) {
   throw Object.assign(new Error(message || code), { statusCode, code });
@@ -42,7 +43,7 @@ export function createHandledElsewhereApi({
   getMailbox,
   getSession,
   readBody,
-  rejectViewerWrite = () => {},
+  rejectViewerWrite = defaultRejectViewerWrite,
   accessKeyRequired = false,
 }) {
   return async function handledElsewhereApi(req, url) {

@@ -8,6 +8,7 @@ import {
   mimeForAttachmentName,
   normalizeAttachmentFileName,
 } from './mail-attachment-assets.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 const MESSAGES = {
   AUTH_REQUIRED: '인증이 필요합니다.',
@@ -62,7 +63,7 @@ export function createMailDriveApi({
   getMailbox,
   getSession,
   readBody,
-  rejectViewerWrite = () => {},
+  rejectViewerWrite = defaultRejectViewerWrite,
   serviceToken = '',
   attachmentsEnabled = false,
   driveEnabled = false,

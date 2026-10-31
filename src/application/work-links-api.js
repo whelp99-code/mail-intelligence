@@ -3,6 +3,7 @@ import { createNotionWorkSystem } from '../adapters/notion-work-system.js';
 import { createIntakeAuthorization } from './intake-authorization.js';
 import { WorkLinkService } from './work-links.js';
 import { MailWorkIntakeService } from './mail-work-intake.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 function fail(statusCode, code, message) {
   throw Object.assign(new Error(message || code), { statusCode, code });
@@ -12,7 +13,7 @@ export function createWorkLinksApi({
   getStore,
   getMailboxUser,
   getSession,
-  rejectViewerWrite = () => {},
+  rejectViewerWrite = defaultRejectViewerWrite,
   snapshotPath = '',
   getCwosWorkSystem,
   getIntakeAuthorization,

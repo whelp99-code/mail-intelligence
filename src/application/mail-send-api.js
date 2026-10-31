@@ -5,6 +5,7 @@ import { GraphSendClient, hasMailSendScope } from '../adapters/microsoft-graph-s
 import { assertExternalRecipientConfirmed } from '../security/mail-send-company-domain.js';
 import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
 import { consumeReceiptItem, ensureReceiptUseTable, matchingMailItem, verifyJarvisCommand, verifyJarvisReceipt } from './jarvis-receipt-gate.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 function fail(statusCode, code) {
   throw Object.assign(new Error(code), { statusCode, code });
@@ -19,7 +20,7 @@ function equal(value, expected) {
 export function createMailSendApi({
   getStore, getMailbox, getSession, readBody, getAccessToken,
   serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
-  rejectViewerWrite = () => {}, viewerAccessKey = '',
+  rejectViewerWrite = defaultRejectViewerWrite, viewerAccessKey = '',
   recipientAllowlist = null,
   companyDomains = null,
   companyMemory = null,

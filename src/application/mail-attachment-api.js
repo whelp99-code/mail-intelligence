@@ -4,6 +4,7 @@ import {
   createAttachmentAssetService,
   createUnavailableScanner,
 } from './mail-attachment-assets.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 const MESSAGES = {
   ATTACHMENTS_DISABLED: '첨부 기능이 비활성화되어 있습니다.',
@@ -66,7 +67,7 @@ export function createMailAttachmentApi({
   getMailbox,
   getSession,
   serviceToken = '',
-  rejectViewerWrite = () => {},
+  rejectViewerWrite = defaultRejectViewerWrite,
   attachmentsEnabled = false,
   getAttachmentKey,
   scanner = createUnavailableScanner(),

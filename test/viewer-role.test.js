@@ -9,6 +9,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
 import { createMailSendApi } from '../src/application/mail-send-api.js';
+import { createMailAttachmentApi } from '../src/application/mail-attachment-api.js';
+import { createMailDriveApi } from '../src/application/mail-drive-api.js';
+import { createWorkLinksApi } from '../src/application/work-links-api.js';
+import { createHandledElsewhereApi } from '../src/application/handled-elsewhere-api.js';
 
 const operatorKey = 'viewer-role-operator-key-0123456789abcd';
 const viewerKey = 'viewer-role-viewer-key-0123456789abcdef';
@@ -282,4 +286,71 @@ test('viewer session is read-only and does not call Graph send', async (t) => {
   assert.equal(restored.status, 200);
   assert.equal((await restored.json()).role, 'operator');
   assert.equal(rows('SELECT role FROM browser_sessions').some((row) => row.role === 'operator'), true);
+});
+
+test('omitted rejectViewerWrite still blocks a viewer write before the body is read', async () => {
+  let reads = 0;
+  const readBody = async () => {
+    reads += 1;
+    return {};
+  };
+  const session = { token: 'viewer-token', csrfToken: 'csrf', role: 'viewer' };
+  const getSession = () => session;
+  const blocked = { code: 'VIEWER_WRITE_FORBIDDEN', statusCode: 403 };
+  const send = createMailSendApi({
+    getStore: () => { throw new Error('store'); },
+    getMailbox: () => { throw new Error('mailbox'); },
+    getSession,
+    readBody,
+    getAccessToken: async () => { throw new Error('token'); },
+    clientFactory: () => ({ sendOnce: async () => { throw new Error('send'); } }),
+  });
+  await assert.rejects(send(
+    { method: 'POST', url: '/api/mail/send-drafts', headers: { cookie: 'viewer' } },
+    new URL('http://127.0.0.1:3010/api/mail/send-drafts'),
+  ), blocked);
+  await assert.rejects(send(
+    { method: 'GET', url: '/api/mail/send-drafts/00000000-0000-4000-8000-000000000001', headers: { cookie: 'viewer' } },
+    new URL('http://127.0.0.1:3010/api/mail/send-drafts/00000000-0000-4000-8000-000000000001'),
+  ), { message: 'store' });
+  const attachment = createMailAttachmentApi({
+    getStore: () => { throw new Error('store'); },
+    getMailbox: () => { throw new Error('mailbox'); },
+    getSession,
+  });
+  await assert.rejects(attachment(
+    { method: 'POST', url: '/api/mail/attachment-assets', headers: {} },
+    new URL('http://127.0.0.1:3010/api/mail/attachment-assets'),
+  ), blocked);
+  const drive = createMailDriveApi({
+    getStore: () => { throw new Error('store'); },
+    getMailbox: () => { throw new Error('mailbox'); },
+    getSession,
+    readBody,
+  });
+  await assert.rejects(drive(
+    { method: 'POST', url: '/api/mail/drive/connect', headers: {} },
+    new URL('http://127.0.0.1:3010/api/mail/drive/connect'),
+  ), blocked);
+  const links = createWorkLinksApi({
+    getStore: () => { throw new Error('store'); },
+    getMailboxUser: () => { throw new Error('mailbox'); },
+    getSession,
+    readBody,
+  });
+  await assert.rejects(links(
+    { method: 'POST', url: '/api/work-links', headers: { 'x-csrf-token': 'csrf' } },
+    new URL('http://127.0.0.1:3010/api/work-links'),
+  ), blocked);
+  const handled = createHandledElsewhereApi({
+    getStore: () => { throw new Error('store'); },
+    getMailbox: () => { throw new Error('mailbox'); },
+    getSession,
+    readBody,
+  });
+  await assert.rejects(handled(
+    { method: 'POST', url: '/api/messages/handled-elsewhere', headers: {} },
+    new URL('http://127.0.0.1:3010/api/messages/handled-elsewhere'),
+  ), blocked);
+  assert.equal(reads, 0);
 });
