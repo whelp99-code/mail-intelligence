@@ -89,6 +89,13 @@ test('release setup preserves bound config/secrets and disables external effects
   assert(dropIn.includes(`ExecStart=\nExecStart=/usr/bin/node ${input.codeRoot}/server.mjs\n`));
   assert.deepEqual(dropIn.split('\n').filter(line => line.startsWith('EnvironmentFile=')),
     ['EnvironmentFile=', `EnvironmentFile=${input.dataDir}/runtime.env`]);
+  for (const path of [
+    '/home/jm/.config/second-brain/company-memory/mail-ms',
+    '/home/jm/.local/share/second-brain-company/mail-ms',
+  ]) {
+    assert(unit.includes(path));
+    assert(dropIn.includes(path));
+  }
   assert.deepEqual(unit.split('\n').filter(line => line.startsWith('EnvironmentFile=')),
     input.environmentFiles.map(file => `EnvironmentFile=${file.path}`));
   const context = mergedFixture(input);
