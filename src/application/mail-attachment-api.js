@@ -4,6 +4,7 @@ import {
   createAttachmentAssetService,
   createUnavailableScanner,
 } from './mail-attachment-assets.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 const MESSAGES = {
   ATTACHMENTS_DISABLED: '첨부 기능이 비활성화되어 있습니다.',
@@ -66,6 +67,7 @@ export function createMailAttachmentApi({
   getMailbox,
   getSession,
   serviceToken = '',
+  rejectViewerWrite = defaultRejectViewerWrite,
   attachmentsEnabled = false,
   getAttachmentKey,
   scanner = createUnavailableScanner(),
@@ -88,6 +90,7 @@ export function createMailAttachmentApi({
       } else {
         session = getSession(req);
         if (!session) fail(401, 'AUTH_REQUIRED');
+        if (req.method !== 'GET' && req.method !== 'HEAD') rejectViewerWrite(session, req);
         if (req.method === 'POST') {
           if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
           if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');

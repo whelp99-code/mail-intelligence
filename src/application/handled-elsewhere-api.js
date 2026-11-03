@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { browserOriginAllowed } from '../security/request-origin.js';
 import { annotateReplyGaps } from './reply-draft-pipeline.js';
 import { markHandledElsewhere, undoHandledElsewhere, resolveHandledMessage } from './handled-elsewhere.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 function fail(statusCode, code, message) {
   throw Object.assign(new Error(message || code), { statusCode, code });
@@ -42,6 +43,7 @@ export function createHandledElsewhereApi({
   getMailbox,
   getSession,
   readBody,
+  rejectViewerWrite = defaultRejectViewerWrite,
   accessKeyRequired = false,
 }) {
   return async function handledElsewhereApi(req, url) {
@@ -50,6 +52,7 @@ export function createHandledElsewhereApi({
     if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     const session = getSession(req);
     if (!session?.token || !session.csrfToken) fail(401, 'SESSION_REQUIRED', 'A browser session is required.');
+    rejectViewerWrite(session, req);
     if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED', 'A valid CSRF token is required.');
     if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED', 'Cross-origin state changes are not allowed.');
     if (accessKeyRequired && String(req.headers['x-mail-intelligence-request'] || '') !== '1') {

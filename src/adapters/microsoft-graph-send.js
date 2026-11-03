@@ -2,6 +2,7 @@ import {
   assertMailSendRecipientsAllowed,
   normalizeMailSendRecipientAllowlist,
 } from '../security/mail-send-recipient-policy.js';
+import { assertExternalRecipientConfirmed } from '../security/mail-send-company-domain.js';
 import { createHash } from 'node:crypto';
 import {
   draftNeedsClarification,
@@ -64,6 +65,7 @@ export class GraphSendClient {
   constructor({
     accessToken, mailboxUser = 'me', fetchImpl = globalThis.fetch, timeoutMs = 20000, maxPages = 20,
     recipientAllowlist = null,
+    companyDomains = null,
   }) {
     this.accessToken = accessToken;
     this.path = mailboxPath(mailboxUser);
@@ -71,6 +73,7 @@ export class GraphSendClient {
     this.timeoutMs = Math.max(10, Math.min(Number(timeoutMs) || 20000, 60000));
     this.maxPages = Math.max(1, Math.min(Number(maxPages) || 20, 100));
     this.recipientAllowlist = normalizeMailSendRecipientAllowlist(recipientAllowlist);
+    this.companyDomains = companyDomains;
   }
 
   async request(url, { method = 'GET', body, maxBytes = MESSAGE_READ_LIMIT, binary = false } = {}) {
@@ -111,7 +114,7 @@ export class GraphSendClient {
     }
   }
 
-  async sendOnce(draft, { allowSend = false, attachments = [] } = {}) {
+  async sendOnce(draft, { allowSend = false, attachments = [], externalRecipientConfirmed = false } = {}) {
     if (allowSend !== true) fail('MAIL_SEND_DISABLED');
     if (!hasMailSendScope(this.accessToken)) fail('MAIL_SEND_SCOPE_REQUIRED');
     if (draft.status !== 'sending' || !draft.approved_at || !acceptedSendActor(draft.approved_by)) fail('HUMAN_APPROVAL_REQUIRED');
@@ -136,6 +139,7 @@ export class GraphSendClient {
         contentBytes: Buffer.from(item.bytes).toString('base64'),
       }));
     }
+    assertExternalRecipientConfirmed(draft, this.companyDomains, externalRecipientConfirmed);
     let response;
     try {
       response = await this.request(`${GRAPH_ROOT}${this.path}/sendMail`, { method: 'POST', body: { message, saveToSentItems: true } });

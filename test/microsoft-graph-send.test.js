@@ -52,6 +52,7 @@ test('a verified jarvis receipt is a send approval and any other actor is not', 
   let posts = 0;
   const client = new GraphSendClient({
     accessToken: token(),
+    companyDomains: ['example.com'],
     fetchImpl: async (_url, options) => {
       if (options.method === 'POST') posts += 1;
       return options.method === 'POST' ? new Response(null, { status: 202 }) : json({ value: [] });
@@ -67,7 +68,7 @@ test('a verified jarvis receipt is a send approval and any other actor is not', 
 
 test('one approved POST then matching Sent Items receipt', async () => {
   const calls = [];
-  const client = new GraphSendClient({ accessToken: token(), fetchImpl: async (url, options) => {
+  const client = new GraphSendClient({ accessToken: token(), companyDomains: ['example.com'], fetchImpl: async (url, options) => {
     calls.push({ url, ...options });
     return options.method === 'POST' ? new Response(null, { status: 202 }) : json({ value: [sent()] });
   } });
@@ -83,7 +84,7 @@ test('one approved POST then matching Sent Items receipt', async () => {
 
 test('202 without receipt remains pending, never fabricates a graph ID', async () => {
   let posts = 0;
-  const client = new GraphSendClient({ accessToken: token(), fetchImpl: async (_url, options) => {
+  const client = new GraphSendClient({ accessToken: token(), companyDomains: ['example.com'], fetchImpl: async (_url, options) => {
     if (options.method === 'POST') { posts++; return new Response(null, { status: 202 }); }
     return json({ value: [] });
   } });
@@ -95,7 +96,7 @@ test('202 without receipt remains pending, never fabricates a graph ID', async (
 
 test('POST network failure returns unknown with no retry or sensitive error', async () => {
   let calls = 0;
-  const client = new GraphSendClient({ accessToken: token(), fetchImpl: async () => { calls++; throw new Error('secret-token-and-private-body'); } });
+  const client = new GraphSendClient({ accessToken: token(), companyDomains: ['example.com'], fetchImpl: async () => { calls++; throw new Error('secret-token-and-private-body'); } });
   assert.deepEqual(await client.sendOnce(draft, { allowSend: true }), { uncertain: true, failureCode: 'GRAPH_ACCEPTANCE_UNKNOWN' });
   assert.equal(calls, 1);
 });
@@ -103,7 +104,7 @@ test('POST network failure returns unknown with no retry or sensitive error', as
 test('HTTP rejection and server failure do not retry', async () => {
   for (const status of [400, 401, 403, 429, 500, 503]) {
     let calls = 0;
-    const client = new GraphSendClient({ accessToken: token(), fetchImpl: async () => { calls++; return json({ secret: 'never returned' }, status); } });
+    const client = new GraphSendClient({ accessToken: token(), companyDomains: ['example.com'], fetchImpl: async () => { calls++; return json({ secret: 'never returned' }, status); } });
     const result = await client.sendOnce(draft, { allowSend: true });
     assert.equal(result.uncertain, status >= 500);
     assert.equal(calls, 1);

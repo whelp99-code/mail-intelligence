@@ -30,6 +30,7 @@ function fixture(t, options = {}, onSend = async () => {}) {
     readBody: async (req) => req.body,
     getAccessToken: async () => `fixture.${claims}.fixture`,
     serviceToken: secret, allowSend: true, accessKeyRequired: true,
+    companyDomains: ['example.com'],
     getAttachmentKey: async () => ATTACH_KEY,
     clientFactory: () => ({
       sendOnce: async (_draft, sendOptions = {}) => {

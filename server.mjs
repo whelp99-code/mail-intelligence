@@ -3,12 +3,14 @@ import { randomBytes, createHash, createCipheriv, createDecipheriv, timingSafeEq
 import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { basicAccessGranted } from './src/security/access-user.js';
+import { accessRoleForBasic, basicAccessGranted } from './src/security/access-user.js';
 import { expectedRequestOrigin } from './src/security/request-origin.js';
 import { openBrowserSessionStore } from './src/security/browser-session-store.js';
+import { rejectViewerWrite as rejectStoredViewerWrite } from './src/security/viewer-write.js';
 import { resolveStaticFile } from './src/security/static-path.js';
 import { parseTailnetAllowedHosts } from './src/security/tcp-allowlist-proxy.js';
 import { mailSendRecipientAllowlistFromEnvironment } from './src/security/mail-send-recipient-policy.js';
+import { companyDomainsFromEnvironment } from './src/security/mail-send-company-domain.js';
 import {
   AI_PIPELINE_VERSION,
   buildAnalysisCacheKey,
@@ -28,6 +30,7 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
+import { createReadonlyIntegrityCheck, createSharedIntegrity, jarvisReaderStatus } from './src/storage/shared-integrity.js';
 import { annotateReplyGaps, replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
@@ -124,8 +127,14 @@ const graphBaseUrl = String(process.env.MAIL_INTELLIGENCE_GRAPH_BASE_URL || 'htt
 const safetyPolicy = getSafetyPolicy(process.env);
 const delegatedScopes = delegatedScopesForSafety(safetyPolicy);
 const mailSendRecipientAllowlist = mailSendRecipientAllowlistFromEnvironment(process.env);
+const mailSendCompanyDomains = companyDomainsFromEnvironment(process.env);
 const configuredAccessKey = String(process.env.MAIL_INTELLIGENCE_ACCESS_KEY || '').trim();
 const accessKeyRequired = configuredAccessKey.length > 0;
+const configuredViewerKey = String(process.env.MAIL_INTELLIGENCE_VIEWER_ACCESS_KEY || '').trim();
+if (configuredViewerKey && (!configuredAccessKey || constantTimeEquals(configuredViewerKey, configuredAccessKey))) {
+  console.error('MAIL_VIEWER_KEY_NOT_DISTINCT');
+  process.exit(1);
+}
 const AI_OPT_IN_VERSION = 'ai-oauth-opt-in-v1.2.2';
 const AI_PROMPT_VERSION = 'mail-intelligence-v1.2.2-oauth-prompt-1';
 const MAX_JSON_BODY_BYTES = 256 * 1024;
@@ -673,8 +682,15 @@ function sessionTokenHash(token) {
 }
 
 // Binds persisted sessions to the current access key: rotating the key logs every browser out.
-function sessionStoreBinding() {
-  return createHash('sha256').update(`mail-intelligence-session-store:${configuredAccessKey}`).digest('hex');
+function sessionStoreBinding(role = 'operator') {
+  const key = role === 'viewer' ? configuredViewerKey : configuredAccessKey;
+  return createHash('sha256').update(`mail-intelligence-session-store:${key}`).digest('hex');
+}
+
+function activeSessionBindings() {
+  const bindings = [sessionStoreBinding('operator')];
+  if (configuredViewerKey) bindings.push(sessionStoreBinding('viewer'));
+  return bindings;
 }
 
 let browserSessions = null;
@@ -684,9 +700,13 @@ async function loadPersistedSessions() {
   browserSessions = openBrowserSessionStore(databasePath);
   const imported = await browserSessions.importLegacyJson(sessionStorePath, sessionStoreBinding());
   if (imported?.warning) console.warn(`[session] Ignoring unreadable legacy session store: ${imported.warning}`);
-  const rows = browserSessions.loadActive(sessionStoreBinding(), Date.now(), SESSION_TTL_MS);
+  const rows = browserSessions.loadActive(activeSessionBindings(), Date.now(), SESSION_TTL_MS);
   for (const row of rows) {
-    localSessions.set(row.token_hash, { csrfToken: row.csrf_token, createdAt: row.created_at });
+    localSessions.set(row.token_hash, {
+      csrfToken: row.csrf_token,
+      createdAt: row.created_at,
+      role: row.role === 'viewer' ? 'viewer' : 'operator',
+    });
   }
   pruneLocalSessions();
   trimOldestEntry(localSessions, MAX_LOCAL_SESSIONS + 1);
@@ -695,11 +715,19 @@ async function loadPersistedSessions() {
 
 function persistLocalSessions() {
   if (!accessKeyRequired || !browserSessions) return;
-  browserSessions.replaceAll(sessionStoreBinding(), [...localSessions].map(([tokenHash, session]) => ({
-    tokenHash,
-    csrfToken: session.csrfToken,
-    createdAt: session.createdAt,
-  })));
+  const groups = new Map(activeSessionBindings().map((binding) => [binding, []]));
+  for (const [tokenHash, session] of localSessions) {
+    const role = session.role === 'viewer' ? 'viewer' : 'operator';
+    const binding = sessionStoreBinding(role);
+    if (!groups.has(binding)) groups.set(binding, []);
+    groups.get(binding).push({
+      tokenHash,
+      csrfToken: session.csrfToken,
+      createdAt: session.createdAt,
+      role,
+    });
+  }
+  for (const [binding, sessions] of groups) browserSessions.replaceAll(binding, sessions);
 }
 
 function sessionCookieSecure(req) {
@@ -720,14 +748,15 @@ function sessionCookieHeader(req, token, maxAgeSeconds) {
   return parts.join('; ');
 }
 
-function createLocalSession(req, res) {
+function createLocalSession(req, res, role = 'operator') {
   pruneLocalSessions();
   trimOldestEntry(localSessions, MAX_LOCAL_SESSIONS);
   const token = base64Url(randomBytes(32));
   const session = {
     token,
     csrfToken: base64Url(randomBytes(24)),
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    role: role === 'viewer' ? 'viewer' : 'operator',
   };
   const tokenHash = sessionTokenHash(token);
   localSessions.set(tokenHash, session);
@@ -759,21 +788,29 @@ function sessionForRequest(req) {
   return session;
 }
 
-function validBasicAccess(req) {
-  if (!accessKeyRequired) return true;
+function basicAccessRole(username, password) {
+  if (basicAccessGranted(username, password, configuredAccessKey, constantTimeEquals)) return 'operator';
+  return accessRoleForBasic(username, password, configuredAccessKey, configuredViewerKey, constantTimeEquals);
+}
+
+function presentedBasicRole(req) {
+  if (!accessKeyRequired) return 'operator';
   const authorization = String(req.headers.authorization || '');
-  if (!authorization.startsWith('Basic ')) return false;
+  if (!authorization.startsWith('Basic ')) return null;
   let decoded;
   try {
     decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8');
   } catch {
-    return false;
+    return null;
   }
   const separator = decoded.indexOf(':');
-  if (separator < 0) return false;
-  const username = decoded.slice(0, separator);
-  const password = decoded.slice(separator + 1);
-  return basicAccessGranted(username, password, configuredAccessKey, constantTimeEquals);
+  if (separator < 0) return null;
+  return basicAccessRole(decoded.slice(0, separator), decoded.slice(separator + 1));
+}
+
+function validBasicAccess(req) {
+  if (!accessKeyRequired) return true;
+  return presentedBasicRole(req) !== null;
 }
 
 function writeBasicChallenge(res) {
@@ -794,7 +831,7 @@ function requirePageAccess(req, res) {
     writeBasicChallenge(res);
     return false;
   }
-  createLocalSession(req, res);
+  createLocalSession(req, res, presentedBasicRole(req) || 'operator');
   return true;
 }
 
@@ -828,15 +865,17 @@ function publicCapabilities() {
 function issueLocalSession(req, res) {
   let session = sessionForRequest(req);
   if (!session) {
-    if (accessKeyRequired && !validBasicAccess(req)) {
+    const role = presentedBasicRole(req);
+    if (accessKeyRequired && !role) {
       throw new HttpError(401, 'ACCESS_REQUIRED', 'Mail Intelligence access is required.');
     }
-    session = createLocalSession(req, res);
+    session = createLocalSession(req, res, role || 'operator');
   }
   json(res, 200, {
     csrfToken: session.csrfToken,
     expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000),
-    capabilities: sessionCapabilities()
+    capabilities: sessionCapabilities(),
+    role: session.role === 'viewer' ? 'viewer' : 'operator',
   });
 }
 
@@ -859,6 +898,10 @@ function assertAllowedHost(req) {
   }
 }
 
+function rejectViewerWrite(session, req) {
+  rejectStoredViewerWrite(session, req);
+}
+
 function requireStateChange(req) {
   const session = requireSessionCookie(req);
   const origin = String(req.headers.origin || '').trim();
@@ -873,6 +916,7 @@ function requireStateChange(req) {
       throw new HttpError(403, 'ORIGIN_REJECTED', 'Cross-origin state changes are not allowed.');
     }
   }
+  rejectViewerWrite(session, req);
 
   if (accessKeyRequired) {
     if (String(req.headers['x-mail-intelligence-request'] || '') !== '1') {
@@ -2995,9 +3039,13 @@ const server = createServer(async (req, res) => {
   try {
     assertAllowedHost(req);
     if (authorizeJarvisMailReader(req, jarvisMailReader)) {
-      // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox.
-      const { ready, counts } = requireMailMemory().store.storageStatus();
-      return json(res, 200, { ready, counts: { messages: counts.messages, threads: counts.threads } });
+      // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox and its
+      // integrity scan must not run again on this request thread.
+      const store = requireMailMemory().store;
+      return json(res, 200, jarvisReaderStatus(sharedJarvisIntegrity(store.databasePath), () => ({
+        messages: store.db.prepare('SELECT COUNT(*) AS count FROM messages').get().count,
+        threads: store.db.prepare('SELECT COUNT(*) AS count FROM threads').get().count,
+      })));
     }
   } catch (error) {
     json(res, error.statusCode || 403, {
@@ -3153,6 +3201,15 @@ mailMemory = new PersistentMailMemoryRuntime({
   ),
 });
 const mailMemoryInitialization = await mailMemory.initialize();
+let sharedIntegrity = null;
+function sharedJarvisIntegrity(databasePath) {
+  if (!sharedIntegrity) {
+    sharedIntegrity = createSharedIntegrity({ check: createReadonlyIntegrityCheck(databasePath) });
+    sharedIntegrity.read();
+  }
+  return sharedIntegrity;
+}
+sharedJarvisIntegrity(mailMemory.store.databasePath);
 await loadPersistedSessions();
 async function readPrivateToken(envValue, fileEnv, label) {
   const filePath = String(process.env[fileEnv] || '');
@@ -3168,7 +3225,7 @@ async function readPrivateToken(envValue, fileEnv, label) {
 const draftServiceToken = await readPrivateToken('MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_GROK_DRAFT_TOKEN_FILE', 'Grok draft');
 const jarvisDraftToken = await readPrivateToken('MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN', 'MAIL_INTELLIGENCE_JARVIS_DRAFT_TOKEN_FILE', 'JARVIS draft');
 const jarvisMailReader = await loadJarvisMailReader(process.env, {
-  forbiddenCredentials: [configuredAccessKey, draftServiceToken, jarvisDraftToken],
+  forbiddenCredentials: [configuredAccessKey, configuredViewerKey, draftServiceToken, jarvisDraftToken].filter(Boolean),
 });
 const companyMemoryDonorBind = loadCompanyMemoryDonorBind(process.env);
 const companyMemory = companyMemoryDonorBind.enabled
@@ -3182,12 +3239,15 @@ const mailSendApi = createMailSendApi({
   },
   getSession: sessionForRequest,
   readBody: readJsonBody,
+  rejectViewerWrite,
+  viewerAccessKey: configuredViewerKey,
   getAccessToken: getGraphAccessToken,
   serviceToken: draftServiceToken,
   agentTokens: { 'grok-bot': draftServiceToken, jarvis: jarvisDraftToken },
   allowSend: safetyPolicy.capabilities.mailSend,
   accessKeyRequired,
   recipientAllowlist: mailSendRecipientAllowlist,
+  companyDomains: mailSendCompanyDomains,
   companyMemory,
   getAttachmentKey: async () => {
     if (!attachmentKey) {
@@ -3213,6 +3273,7 @@ const mailAttachmentApi = createMailAttachmentApi({
     return { id: mailbox.id, graphUser: currentMailboxUser() || 'me' };
   },
   getSession: sessionForRequest,
+  rejectViewerWrite,
   serviceToken: draftServiceToken,
   attachmentsEnabled,
   getAttachmentKey: async () => {
@@ -3251,6 +3312,7 @@ const mailDriveApi = createMailDriveApi({
   },
   getSession: sessionForRequest,
   readBody: readJsonBody,
+  rejectViewerWrite,
   serviceToken: draftServiceToken,
   attachmentsEnabled,
   driveEnabled,
@@ -3276,6 +3338,7 @@ const handledElsewhereApi = createHandledElsewhereApi({
   },
   getSession: sessionForRequest,
   readBody: readJsonBody,
+  rejectViewerWrite,
   accessKeyRequired,
 });
 const intakeWorkspaceId = intakeWorkspaceFromEnv(process.env);
@@ -3360,6 +3423,7 @@ const workLinksApi = createWorkLinksApi({
   getStore: () => requireMailMemory().store,
   getMailboxUser: () => currentMailboxUser() || 'me',
   getSession: sessionForRequest,
+  rejectViewerWrite,
   snapshotPath: workLinksSnapshotPath,
   getCwosWorkSystem: () => currentIntakeBinding().workSystem,
   getIntakeAuthorization: () => currentIntakeBinding().authorization,

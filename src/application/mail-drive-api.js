@@ -8,6 +8,7 @@ import {
   mimeForAttachmentName,
   normalizeAttachmentFileName,
 } from './mail-attachment-assets.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 const MESSAGES = {
   AUTH_REQUIRED: '인증이 필요합니다.',
@@ -62,6 +63,7 @@ export function createMailDriveApi({
   getMailbox,
   getSession,
   readBody,
+  rejectViewerWrite = defaultRejectViewerWrite,
   serviceToken = '',
   attachmentsEnabled = false,
   driveEnabled = false,
@@ -87,6 +89,7 @@ export function createMailDriveApi({
       } else {
         session = getSession(req);
         if (!session) fail(401, 'AUTH_REQUIRED');
+        if (req.method !== 'GET' && req.method !== 'HEAD') rejectViewerWrite(session, req);
         if (req.method === 'POST') {
           if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
           if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');
