@@ -3040,9 +3040,12 @@ const server = createServer(async (req, res) => {
     assertAllowedHost(req);
     if (authorizeJarvisMailReader(req, jarvisMailReader)) {
       // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox and its
-      // integrity scan must not run again on this request thread.
+      // integrity scan must not run again on this request thread. Wait for the
+      // shared worker that already started; an unfinished check is not a failure.
       const store = requireMailMemory().store;
-      return json(res, 200, jarvisReaderStatus(sharedJarvisIntegrity(store.databasePath), () => ({
+      const integrity = sharedJarvisIntegrity(store.databasePath);
+      await integrity.settled();
+      return json(res, 200, jarvisReaderStatus(integrity, () => ({
         messages: store.db.prepare('SELECT COUNT(*) AS count FROM messages').get().count,
         threads: store.db.prepare('SELECT COUNT(*) AS count FROM threads').get().count,
       })));
