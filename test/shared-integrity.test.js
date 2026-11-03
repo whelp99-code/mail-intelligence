@@ -9,6 +9,8 @@ import {
   createReadonlyIntegrityCheck,
   createSharedIntegrity,
   jarvisReaderStatus,
+  jarvisReaderStatusWithin,
+  JARVIS_READER_INTEGRITY_WAIT_MS,
 } from '../src/storage/shared-integrity.js';
 
 function deferred() {
@@ -158,4 +160,34 @@ test('a late success without an intervening status read is refused', async () =>
   await Promise.resolve();
   assert.equal(jarvisReaderStatus(integrity, () => ({ messages: 1, threads: 1 })).ready, false);
   assert.equal(integrity.started(), 2);
+});
+
+test('an unfinished integrity check is pending within the reader wait', async () => {
+  const started = Date.now();
+  const status = await jarvisReaderStatusWithin(
+    { settled: () => new Promise(() => {}) },
+    () => ({ messages: 2, threads: 1 }),
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < JARVIS_READER_INTEGRITY_WAIT_MS + 500);
+  assert.ok(elapsed >= JARVIS_READER_INTEGRITY_WAIT_MS - 500);
+  assert.deepEqual(status, {
+    ready: false,
+    integrity: 'pending',
+    counts: { messages: 2, threads: 1 },
+  });
+});
+
+test('a rejected integrity check is a failed reader status and does not throw', async () => {
+  const started = Date.now();
+  const status = await jarvisReaderStatusWithin(
+    { settled: () => Promise.reject(new Error('integrity worker failed')) },
+    () => ({ messages: 2, threads: 1 }),
+  );
+  assert.ok(Date.now() - started < 1_000);
+  assert.deepEqual(status, {
+    ready: false,
+    integrity: 'failed',
+    counts: { messages: 2, threads: 1 },
+  });
 });

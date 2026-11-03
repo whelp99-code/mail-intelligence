@@ -30,7 +30,7 @@ import {
 } from './src/ai/oauth-cli-provider.js';
 import { analyzeMessages } from './src/analyzer.js';
 import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-memory.js';
-import { createReadonlyIntegrityCheck, createSharedIntegrity, jarvisReaderStatus } from './src/storage/shared-integrity.js';
+import { createReadonlyIntegrityCheck, createSharedIntegrity, jarvisReaderStatusWithin } from './src/storage/shared-integrity.js';
 import { annotateReplyGaps, replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
@@ -3040,12 +3040,10 @@ const server = createServer(async (req, res) => {
     assertAllowedHost(req);
     if (authorizeJarvisMailReader(req, jarvisMailReader)) {
       // Avoid runtime.storageStatus(): its syncStatus() upserts a mailbox and its
-      // integrity scan must not run again on this request thread. Wait for the
-      // shared worker that already started; an unfinished check is not a failure.
+      // integrity scan must not run again on this request thread. The shared
+      // worker has a 3s wait. Pending and rejection stay 200, not an exception.
       const store = requireMailMemory().store;
-      const integrity = sharedJarvisIntegrity(store.databasePath);
-      await integrity.settled();
-      return json(res, 200, jarvisReaderStatus(integrity, () => ({
+      return json(res, 200, await jarvisReaderStatusWithin(sharedJarvisIntegrity(store.databasePath), () => ({
         messages: store.db.prepare('SELECT COUNT(*) AS count FROM messages').get().count,
         threads: store.db.prepare('SELECT COUNT(*) AS count FROM threads').get().count,
       })));

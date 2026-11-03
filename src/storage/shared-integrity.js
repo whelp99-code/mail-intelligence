@@ -68,6 +68,40 @@ export function jarvisReaderStatus(integrity, countRows) {
     },
   };
 }
+export const JARVIS_READER_INTEGRITY_WAIT_MS = 3_000;
+
+function readerCounts(countRows) {
+  const counts = countRows() ?? {};
+  return {
+    messages: Number(counts.messages ?? 0),
+    threads: Number(counts.threads ?? 0),
+  };
+}
+
+export async function jarvisReaderStatusWithin(integrity, countRows, waitMs = JARVIS_READER_INTEGRITY_WAIT_MS) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), waitMs);
+  });
+  let settled;
+  try {
+    settled = await Promise.race([
+      Promise.resolve()
+        .then(() => integrity.settled())
+        .then((value) => ({ value }), () => ({ failed: true })),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (settled.timedOut) {
+    return { ready: false, integrity: 'pending', counts: readerCounts(countRows) };
+  }
+  if (settled.failed) {
+    return { ready: false, integrity: 'failed', counts: readerCounts(countRows) };
+  }
+  return jarvisReaderStatus(integrity, countRows);
+}
 
 export function createReadonlyIntegrityCheck(databasePath) {
   let worker = null;
