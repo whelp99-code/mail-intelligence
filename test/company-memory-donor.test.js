@@ -327,7 +327,7 @@ test('SQLiteMailStore applies the company-memory outbox migration', async () => 
 test('a missing source is skipped once and a transport failure stays pending', async () => {
   const { signer } = createSigner();
   const db = openOutboxDb();
-  db.exec(readFileSync(new URL('../migrations/017_mail_company_memory_outbox_skipped.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/018_mail_company_memory_outbox_skipped.sql', import.meta.url), 'utf8'));
   const missing = seedOutbox(db);
   const transient = seedOutbox(db, { ...SOURCE, sourceLocator: 'graph/msg-2', sourceEventId: 'event-2' });
   const transport = capturingTransport({ exitCode: 1 });

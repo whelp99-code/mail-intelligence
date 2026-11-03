@@ -161,7 +161,7 @@ function completeEnv(dir) {
 function openOutboxDb() {
   const db = new DatabaseSync(':memory:');
   db.exec(MIGRATION);
-  db.exec(readFileSync(new URL('../migrations/017_mail_company_memory_outbox_skipped.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/018_mail_company_memory_outbox_skipped.sql', import.meta.url), 'utf8'));
   return db;
 }
 
