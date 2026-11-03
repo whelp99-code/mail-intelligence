@@ -129,6 +129,7 @@ test('tailnet proxy Host forgery cannot read the calendar', async (t) => {
   const serverSource = readFileSync(fileURLToPath(new URL('../server.mjs', import.meta.url)), 'utf8');
   assert.equal(serverSource.includes('assertLoopbackHost'), false);
   assert.match(serverSource, /pathname === '\/api\/calendar\/today'[\s\S]{0,180}refuseCalendarOnTcp\(\)/);
+  assert.match(serverSource, /\[calendar\] socket not opened: \$\{error\?\.code \|\| 'LISTEN_FAILED'\}/);
 });
 
 test('calendar socket is mode 600 and the cli does not open a secret store', async () => {

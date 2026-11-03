@@ -3453,10 +3453,16 @@ const calendarSocket = createCalendarSocketServer({
 async function openCalendarSocket() {
   try {
     const info = await stat(calendarSocketPath);
-    if (!info.isSocket()) return;
+    if (!info.isSocket()) {
+      console.error('[calendar] socket not opened: NOT_A_SOCKET');
+      return;
+    }
     await unlink(calendarSocketPath);
   } catch (error) {
-    if (error?.code !== 'ENOENT') return;
+    if (error?.code !== 'ENOENT') {
+      console.error(`[calendar] socket not opened: ${error?.code || 'STAT_FAILED'}`);
+      return;
+    }
   }
   try {
     await new Promise((resolve, reject) => {
@@ -3467,8 +3473,9 @@ async function openCalendarSocket() {
       });
     });
     await chmod(calendarSocketPath, 0o600);
-  } catch {
-    calendarSocket.close();
+  } catch (error) {
+    console.error(`[calendar] socket not opened: ${error?.code || 'LISTEN_FAILED'}`);
+    calendarSocket.close(() => {});
   }
 }
 
