@@ -44,6 +44,12 @@ import {
   publishRefreshedAccessToken,
 } from './src/application/intake-authorization.js';
 import {
+  assertLoopbackHost,
+  CalendarTodayError,
+  readCalendarToday,
+  seoulToday,
+} from './src/calendar-today.js';
+import {
   atomicWritePinnedBinding,
   captureVerifiedIntakeSync,
   classifyIdentityFailure,
@@ -2267,6 +2273,38 @@ async function handleApi(req, res) {
     if (url.pathname === '/api/health') {
       if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
       return json(res, 200, publicHealthStatus());
+    }
+
+    if (url.pathname === '/api/calendar/today') {
+      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      try {
+        assertLoopbackHost(req.headers.host || '');
+      } catch {
+        throw new HttpError(403, 'CALENDAR_HOST_REJECTED', 'Calendar read is loopback-only.');
+      }
+      if (accessKeyRequired && !sessionForRequest(req) && !validBasicAccess(req)) {
+        throw new HttpError(401, 'ACCESS_REQUIRED', 'Mail Intelligence access is required.');
+      }
+      const day = url.searchParams.get('day') || seoulToday();
+      let token = null;
+      try {
+        token = await getGraphAccessToken();
+      } catch {
+        throw new HttpError(502, 'CALENDAR_TOKEN_FAILED', 'Calendar token refresh failed.');
+      }
+      try {
+        return json(res, 200, await readCalendarToday({
+          day,
+          token,
+          scopes: delegatedScopes.split(/\s+/),
+          graphBaseUrl,
+        }));
+      } catch (error) {
+        if (error instanceof CalendarTodayError && error.code === 'CONSENT_REQUIRED') {
+          return json(res, 403, { code: 'CONSENT_REQUIRED', message: '동의 필요' });
+        }
+        throw new HttpError(502, 'CALENDAR_READ_FAILED', 'Calendar read failed.');
+      }
     }
 
     if (url.pathname === '/api/session') {
