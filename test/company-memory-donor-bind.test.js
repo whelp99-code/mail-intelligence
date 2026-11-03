@@ -161,6 +161,7 @@ function completeEnv(dir) {
 function openOutboxDb() {
   const db = new DatabaseSync(':memory:');
   db.exec(MIGRATION);
+  db.exec(readFileSync(new URL('../migrations/018_mail_company_memory_outbox_skipped.sql', import.meta.url), 'utf8'));
   return db;
 }
 
@@ -398,7 +399,7 @@ test('keeps an empty outbox when donor env is complete and Mail db is absent', a
     const ran = await runBoundCompanyMemoryDonorTick(env, { now: NOW });
     assert.equal(ran.skipped, false);
     if (ran.skipped) throw new Error('expected donor tick');
-    assert.deepEqual(ran.result, { attempted: 0, emitted: [], pending: [], rejected: [] });
+    assert.deepEqual(ran.result, { attempted: 0, emitted: [], pending: [], rejected: [], skipped: [] });
     assert.equal(existsSync(join(dir, 'invoked.json')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -459,8 +460,10 @@ test('resolves authenticated Mail source from sqlite and does not invoke without
     assert.equal(pending.skipped, false);
     if (pending.skipped) throw new Error('expected donor tick');
     assert.deepEqual(pending.result.emitted, []);
-    assert.deepEqual(pending.result.pending, [pendingRow.id]);
-    assert.equal(pendingDb.prepare('SELECT status FROM mail_company_memory_outbox').get().status, 'PENDING');
+    assert.deepEqual(pending.result.skipped, [pendingRow.id]);
+    assert.deepEqual(pending.result.pending, []);
+    assert.equal(pendingDb.prepare('SELECT status, skip_reason FROM mail_company_memory_outbox').get().status, 'SKIPPED');
+    assert.equal(pendingDb.prepare('SELECT skip_reason FROM mail_company_memory_outbox').get().skip_reason, 'COMPANY_SOURCE_REQUIRED');
     assert.equal(existsSync(join(dir, 'invoked.json')), false);
 
     const db = openOutboxDb();
