@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-/** Write today's graph-calendar JSON from the loopback Mail endpoint. Does not read the secret store. */
+/** Write today's graph-calendar JSON from the Mail process socket. Does not open TCP or the secret store. */
+import http from 'node:http';
 import { writeFileSync } from 'node:fs';
 import { CalendarTodayError, CONSENT_MESSAGE, seoulToday } from '../src/calendar-today.js';
 
@@ -8,25 +9,40 @@ function arg(name) {
   return index === -1 ? '' : process.argv[index + 1] || '';
 }
 
+function requestSocket(socketPath, day) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      socketPath,
+      path: `/api/calendar/today?day=${encodeURIComponent(day)}`,
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    }, async (res) => {
+      const chunks = [];
+      for await (const chunk of res) chunks.push(chunk);
+      resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 export async function exportCalendarFile({
   out,
   day = seoulToday(),
-  baseUrl = 'http://127.0.0.1:3010',
-  fetchImpl = globalThis.fetch,
-  accessUser = process.env.MAIL_INTELLIGENCE_ACCESS_USER || 'mailintelligence',
-  accessKey = process.env.MAIL_INTELLIGENCE_ACCESS_KEY || '',
+  socketPath = process.env.MAIL_INTELLIGENCE_CALENDAR_SOCKET || '',
+  requestImpl = requestSocket,
 }) {
   if (!out) throw new CalendarTodayError('CALENDAR_OUT_REQUIRED');
-  const headers = { Accept: 'application/json', Host: '127.0.0.1:3010' };
-  if (accessKey) headers.Authorization = `Basic ${Buffer.from(`${accessUser}:${accessKey}`).toString('base64')}`;
-  const response = await fetchImpl(`${baseUrl}/api/calendar/today?day=${encodeURIComponent(day)}`, { headers });
-  const body = await response.json();
-  if (response.status === 403 && body?.code === 'CONSENT_REQUIRED') {
+  if (!socketPath) throw new CalendarTodayError('CALENDAR_SOCKET_REQUIRED');
+  const response = await requestImpl(socketPath, day);
+  if (response.status === 403 && response.body?.code === 'CONSENT_REQUIRED') {
     return { code: 2, message: CONSENT_MESSAGE };
   }
-  if (!response.ok || !Array.isArray(body?.value)) throw new CalendarTodayError('CALENDAR_EXPORT_INVALID');
-  writeFileSync(out, `${JSON.stringify(body)}\n`, { mode: 0o600 });
-  return { code: 0, events: body.value.length, out };
+  if (response.status !== 200 || !Array.isArray(response.body?.value)) {
+    throw new CalendarTodayError('CALENDAR_EXPORT_INVALID');
+  }
+  writeFileSync(out, `${JSON.stringify(response.body)}\n`, { mode: 0o600 });
+  return { code: 0, events: response.body.value.length, out };
 }
 
 if (process.argv[1] && process.argv[1].endsWith('calendar-today.mjs')) {

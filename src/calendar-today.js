@@ -1,8 +1,9 @@
+import { createServer } from 'node:http';
+
 /** Today's Outlook calendar as graph-calendar JSON. No secret printing. */
 
 export const CONSENT_MESSAGE = '동의 필요';
 export const CALENDAR_READ = 'Calendars.Read';
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 export class CalendarTodayError extends Error {
   constructor(code) {
@@ -41,14 +42,31 @@ export function calendarViewUrl(day, graphBaseUrl = 'https://graph.microsoft.com
   return url;
 }
 
-export function assertLoopbackHost(host) {
-  let hostname = '';
-  try {
-    hostname = new URL(`http://${host}`).hostname;
-  } catch {
-    throw new CalendarTodayError('CALENDAR_HOST_REJECTED');
-  }
-  if (!LOOPBACK_HOSTS.has(hostname)) throw new CalendarTodayError('CALENDAR_HOST_REJECTED');
+export function refuseCalendarOnTcp() {
+  return { status: 404, body: { code: 'NOT_FOUND', message: 'Not found.' } };
+}
+
+export function createCalendarSocketServer({ readToday }) {
+  return createServer(async (req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    if (url.pathname !== '/api/calendar/today' || req.method !== 'GET') {
+      const denied = refuseCalendarOnTcp();
+      res.writeHead(denied.status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(denied.body));
+      return;
+    }
+    try {
+      const body = await readToday(url.searchParams.get('day') || seoulToday());
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    } catch (error) {
+      const consent = error instanceof CalendarTodayError && error.code === 'CONSENT_REQUIRED';
+      res.writeHead(consent ? 403 : 502, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(consent
+        ? { code: 'CONSENT_REQUIRED', message: CONSENT_MESSAGE }
+        : { code: error instanceof CalendarTodayError ? error.code : 'CALENDAR_READ_FAILED' }));
+    }
+  });
 }
 
 export function requireCalendarRead({ token, scopes }) {

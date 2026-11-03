@@ -1,14 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import http from 'node:http';
+import { once } from 'node:events';
+import { chmod, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
+import { createAllowlistedTcpProxy, parseIpv4Cidr } from '../src/security/tcp-allowlist-proxy.js';
 import {
   CalendarTodayError,
-  assertLoopbackHost,
   calendarViewUrl,
+  createCalendarSocketServer,
   readCalendarToday,
+  refuseCalendarOnTcp,
   requireCalendarRead,
 } from '../src/calendar-today.js';
 import { exportCalendarFile } from '../scripts/calendar-today.mjs';
@@ -19,12 +24,20 @@ function event(id, start) {
   return { id, subject: id, start: { dateTime: start, timeZone: 'Asia/Seoul' }, end: { dateTime: start, timeZone: 'Asia/Seoul' } };
 }
 
-test('calendar view uses the Seoul day and rejects a non-loopback host', () => {
+function listen(server) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve(server.address());
+    });
+  });
+}
+
+test('calendar view uses the Seoul day', () => {
   const url = calendarViewUrl(DAY);
   assert.equal(url.searchParams.get('startDateTime'), '2026-11-03T00:00:00+09:00');
   assert.equal(url.searchParams.get('endDateTime'), '2026-11-04T00:00:00+09:00');
-  assert.equal(assertLoopbackHost('127.0.0.1:3010'), undefined);
-  assert.throws(() => assertLoopbackHost('100.64.0.2:3010'), /CALENDAR_HOST_REJECTED/);
 });
 
 test('fake calendar pages keep zero, one, and many events', async () => {
@@ -69,22 +82,78 @@ test('missing token or scope does not call Graph', async () => {
   assert.throws(() => requireCalendarRead({ token: 'synthetic-access', scopes: ['Calendars.Read', 'Calendars.ReadWrite'] }), /CALENDAR_WRITE_SCOPE/);
 });
 
-test('cli writes the endpoint file and prints consent without a secret store', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calendar-today-'));
-  const out = join(dir, 'calendar.json');
-  const written = await exportCalendarFile({
-    out,
-    day: DAY,
-    accessKey: '',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ value: [event('one', '2026-11-03T09:00:00+09:00')] }) }),
+test('tailnet proxy Host forgery cannot read the calendar', async (t) => {
+  let graphCalled = false;
+  const seen = [];
+  const backend = http.createServer((req, res) => {
+    seen.push({ host: req.headers.host, remoteAddress: req.socket.remoteAddress });
+    const denied = refuseCalendarOnTcp();
+    res.writeHead(denied.status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(denied.body));
   });
+  const backendAddress = await listen(backend);
+  t.after(() => backend.close());
+  const proxy = createAllowlistedTcpProxy({
+    bindHost: '127.0.0.1',
+    bindPort: 0,
+    targetHost: '127.0.0.1',
+    targetPort: backendAddress.port,
+    allowedCidrs: [parseIpv4Cidr('127.0.0.0/8')],
+    maxConnections: 4,
+    idleTimeoutMs: 5_000,
+  });
+  const proxyAddress = await proxy.listen();
+  t.after(() => proxy.close());
+
+  const response = await new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port: proxyAddress.port,
+      path: '/api/calendar/today',
+      headers: { Host: '127.0.0.1:3010', Accept: 'application/json' },
+    }, async (res) => {
+      const chunks = [];
+      for await (const chunk of res) chunks.push(chunk);
+      resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
+  assert.equal(seen[0].host, '127.0.0.1:3010');
+  assert.match(String(seen[0].remoteAddress), /127\.0\.0\.1/);
+  assert.equal(response.status, 404);
+  assert.equal(response.body.code, 'NOT_FOUND');
+  assert.equal(response.body.value, undefined);
+  assert.equal(graphCalled, false);
+  const serverSource = readFileSync(fileURLToPath(new URL('../server.mjs', import.meta.url)), 'utf8');
+  assert.equal(serverSource.includes('assertLoopbackHost'), false);
+  assert.match(serverSource, /pathname === '\/api\/calendar\/today'[\s\S]{0,180}refuseCalendarOnTcp\(\)/);
+});
+
+test('calendar socket is mode 600 and the cli does not open a secret store', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'calendar-today-'));
+  const socketPath = join(dir, 'calendar.sock');
+  const out = join(dir, 'calendar.json');
+  const socketServer = createCalendarSocketServer({
+    readToday: async () => ({ value: [event('one', '2026-11-03T09:00:00+09:00')] }),
+  });
+  const listening = once(socketServer, 'listening');
+  socketServer.listen(socketPath);
+  await listening;
+  await new Promise((resolve, reject) => chmod(socketPath, 0o600, (error) => error ? reject(error) : resolve()));
+  assert.equal(statSync(socketPath).mode & 0o777, 0o600);
+  const written = await exportCalendarFile({ out, day: DAY, socketPath });
   assert.equal(written.events, 1);
   assert.equal(JSON.parse(readFileSync(out, 'utf8')).value[0].subject, 'one');
   const consent = await exportCalendarFile({
     out,
     day: DAY,
-    fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({ code: 'CONSENT_REQUIRED' }) }),
+    socketPath,
+    requestImpl: async () => ({ status: 403, body: { code: 'CONSENT_REQUIRED' } }),
   });
   assert.equal(consent.code, 2);
   assert.equal(consent.message, '동의 필요');
+  socketServer.close();
+  rmSync(dir, { recursive: true, force: true });
 });

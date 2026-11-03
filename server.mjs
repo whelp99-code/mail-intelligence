@@ -44,9 +44,9 @@ import {
   publishRefreshedAccessToken,
 } from './src/application/intake-authorization.js';
 import {
-  assertLoopbackHost,
-  CalendarTodayError,
+  createCalendarSocketServer,
   readCalendarToday,
+  refuseCalendarOnTcp,
   seoulToday,
 } from './src/calendar-today.js';
 import {
@@ -2276,35 +2276,8 @@ async function handleApi(req, res) {
     }
 
     if (url.pathname === '/api/calendar/today') {
-      if (req.method !== 'GET') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
-      try {
-        assertLoopbackHost(req.headers.host || '');
-      } catch {
-        throw new HttpError(403, 'CALENDAR_HOST_REJECTED', 'Calendar read is loopback-only.');
-      }
-      if (accessKeyRequired && !sessionForRequest(req) && !validBasicAccess(req)) {
-        throw new HttpError(401, 'ACCESS_REQUIRED', 'Mail Intelligence access is required.');
-      }
-      const day = url.searchParams.get('day') || seoulToday();
-      let token = null;
-      try {
-        token = await getGraphAccessToken();
-      } catch {
-        throw new HttpError(502, 'CALENDAR_TOKEN_FAILED', 'Calendar token refresh failed.');
-      }
-      try {
-        return json(res, 200, await readCalendarToday({
-          day,
-          token,
-          scopes: delegatedScopes.split(/\s+/),
-          graphBaseUrl,
-        }));
-      } catch (error) {
-        if (error instanceof CalendarTodayError && error.code === 'CONSENT_REQUIRED') {
-          return json(res, 403, { code: 'CONSENT_REQUIRED', message: '동의 필요' });
-        }
-        throw new HttpError(502, 'CALENDAR_READ_FAILED', 'Calendar read failed.');
-      }
+      const denied = refuseCalendarOnTcp();
+      return json(res, denied.status, denied.body);
     }
 
     if (url.pathname === '/api/session') {
@@ -3467,6 +3440,38 @@ if (companyMemoryDonorBind.enabled) {
   companyMemoryDonorInterval.unref();
 }
 
+const calendarSocketPath = join(dataRoot, 'calendar-today.sock');
+const calendarSocket = createCalendarSocketServer({
+  readToday: async (day) => readCalendarToday({
+    day: day || seoulToday(),
+    token: await getGraphAccessToken(),
+    scopes: delegatedScopes.split(/\s+/),
+    graphBaseUrl,
+  }),
+});
+
+async function openCalendarSocket() {
+  try {
+    const info = await stat(calendarSocketPath);
+    if (!info.isSocket()) return;
+    await unlink(calendarSocketPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return;
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      calendarSocket.once('error', reject);
+      calendarSocket.listen(calendarSocketPath, () => {
+        calendarSocket.off('error', reject);
+        resolve();
+      });
+    });
+    await chmod(calendarSocketPath, 0o600);
+  } catch {
+    calendarSocket.close();
+  }
+}
+
 let shutdownStarted = false;
 function closePersistentMailMemory() {
   clearInterval(reconciliationInterval);
@@ -3479,9 +3484,11 @@ function closePersistentMailMemory() {
 function gracefulShutdown(signal) {
   if (shutdownStarted) return;
   shutdownStarted = true;
-  server.close(() => {
-    closePersistentMailMemory();
-    process.exit(0);
+  calendarSocket.close(() => {
+    server.close(() => {
+      closePersistentMailMemory();
+      process.exit(0);
+    });
   });
   setTimeout(() => {
     closePersistentMailMemory();
@@ -3499,6 +3506,7 @@ server.listen(port, host, () => {
   console.log(`Mail Intelligence ${APP_VERSION} app running at ${runningUrl}`);
   console.log(`[storage] SQLite schema v${mailMemoryInitialization.storage.schemaVersion} ready.`);
 });
+  void openCalendarSocket();
 
 // --- AI Helper Functions ---
 
