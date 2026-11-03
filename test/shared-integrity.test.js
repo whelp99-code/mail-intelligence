@@ -191,3 +191,63 @@ test('a rejected integrity check is a failed reader status and does not throw', 
     counts: { messages: 2, threads: 1 },
   });
 });
+
+test('a failing readonly worker is failed without an injected settled rejection', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mail-integrity-fail-'));
+  const check = createReadonlyIntegrityCheck(join(root, 'missing.sqlite'));
+  const integrity = createSharedIntegrity({ check });
+  try {
+    const started = Date.now();
+    const status = await jarvisReaderStatusWithin(integrity, () => ({ messages: 0, threads: 0 }));
+    assert.ok(Date.now() - started < 1_000);
+    assert.equal(status.ready, false);
+    assert.equal(status.integrity, 'failed');
+    assert.deepEqual(status.counts, { messages: 0, threads: 0 });
+  } finally {
+    await check.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the first reader request after expiry takes the new check or pending', async () => {
+  const first = deferred();
+  const second = deferred();
+  const gates = [first, second];
+  let calls = 0;
+  let now = 1_000;
+  const integrity = createSharedIntegrity({
+    check: () => {
+      const gate = gates[calls];
+      calls += 1;
+      return gate === undefined ? new Promise(() => {}) : gate.promise;
+    },
+    now: () => now,
+    maxAgeMs: SHARED_INTEGRITY_MAX_AGE_MS,
+  });
+  const counts = () => ({ messages: 3, threads: 1 });
+  integrity.read();
+  first.resolve({ ok: true });
+  await integrity.settled();
+  now += SHARED_INTEGRITY_MAX_AGE_MS;
+  const started = Date.now();
+  const statusPromise = jarvisReaderStatusWithin(integrity, counts);
+  await Promise.resolve();
+  assert.equal(integrity.started(), 2);
+  second.resolve({ ok: true });
+  const status = await statusPromise;
+  assert.ok(Date.now() - started < 1_000);
+  assert.deepEqual(status, { ready: true, counts: { messages: 3, threads: 1 } });
+  assert.equal('integrity' in status, false);
+
+  now += SHARED_INTEGRITY_MAX_AGE_MS;
+  const pendingStarted = Date.now();
+  const pending = await jarvisReaderStatusWithin(integrity, counts);
+  const elapsed = Date.now() - pendingStarted;
+  assert.ok(elapsed >= JARVIS_READER_INTEGRITY_WAIT_MS - 500);
+  assert.ok(elapsed < JARVIS_READER_INTEGRITY_WAIT_MS + 500);
+  assert.deepEqual(pending, {
+    ready: false,
+    integrity: 'pending',
+    counts: { messages: 3, threads: 1 },
+  });
+});

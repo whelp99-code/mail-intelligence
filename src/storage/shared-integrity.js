@@ -33,11 +33,13 @@ export function createSharedIntegrity({ check, now = () => Date.now(), maxAgeMs 
     const startedAt = now();
     started += 1;
     inflightStartedAt = startedAt;
-    inflight = Promise.resolve().then(() => check()).then((result) => {
+    const task = Promise.resolve().then(() => check()).then((result) => {
       return finish(current, startedAt, result?.ok === true);
-    }, () => finish(current, startedAt, false)).finally(() => {
+    });
+    inflight = task.finally(() => {
       if (current === generation) inflight = null;
     });
+    inflight.catch(() => {});
     return inflight;
   }
   return {
@@ -79,6 +81,7 @@ function readerCounts(countRows) {
 }
 
 export async function jarvisReaderStatusWithin(integrity, countRows, waitMs = JARVIS_READER_INTEGRITY_WAIT_MS) {
+  if (typeof integrity.read === 'function') integrity.read();
   let timer;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => resolve({ timedOut: true }), waitMs);
