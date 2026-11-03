@@ -31,6 +31,8 @@ const delegatedScopes = delegatedScopesForSafety().split(/\s+/).filter(Boolean);
 assert.ok(delegatedScopes.includes('Mail.Read'), 'Mail.Read must be present');
 assert.equal(delegatedScopes.includes('Mail.Send'), false, 'Mail.Send must not be requested');
 assert.equal(delegatedScopes.includes('Mail.ReadWrite'), false, 'Mail.ReadWrite must not be requested');
+assert.ok(delegatedScopes.includes('Calendars.Read'), 'Calendars.Read must be present');
+assert.equal(delegatedScopes.includes('Calendars.ReadWrite'), false, 'Calendars.ReadWrite must not be requested');
 
 assert.equal(normalizeLoopbackHost('127.0.0.1'), '127.0.0.1');
 assert.equal(normalizeLoopbackHost('localhost'), 'localhost');

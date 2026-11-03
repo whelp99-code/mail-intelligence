@@ -26,17 +26,20 @@ test('Graph delegated consent contains read scope and excludes mutation scopes',
   assert.ok(!scopes.includes('Mail.Send'));
   assert.ok(!scopes.includes('Mail.ReadWrite'));
   assert.equal(scopes.includes('Calendars.ReadBasic'), false);
+  assert.ok(scopes.includes('Calendars.Read'));
+  assert.ok(!scopes.includes('Calendars.ReadWrite'));
 });
 
-test('calendar reader flag adds only delegated Calendars.ReadBasic', () => {
+test('calendar reader flag adds delegated Calendars.ReadBasic without write scopes', () => {
   const policy = getSafetyPolicy({});
   const enabled = delegatedScopesForSafety(policy, { MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED: '1' }).split(/\s+/);
   assert.ok(enabled.includes('Calendars.ReadBasic'));
-  assert.equal(enabled.includes('Calendars.Read'), false);
+  assert.ok(enabled.includes('Calendars.Read'));
   assert.equal(enabled.includes('Calendars.ReadWrite'), false);
   assert.equal(enabled.includes('Calendars.ReadBasic.All'), false);
   const ignored = delegatedScopesForSafety(policy, { MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED: 'true' });
   assert.equal(ignored.includes('Calendars.ReadBasic'), false);
+  assert.ok(ignored.includes('Calendars.Read'));
   assert.equal(
     delegatedScopesForSafety(policy).includes('Calendars.ReadBasic'),
     String(process.env.MAIL_INTELLIGENCE_JARVIS_CALENDAR_READER_ENABLED || '') === '1',

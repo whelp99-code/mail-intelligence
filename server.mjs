@@ -44,6 +44,12 @@ import {
   publishRefreshedAccessToken,
 } from './src/application/intake-authorization.js';
 import {
+  createCalendarSocketServer,
+  readCalendarToday,
+  refuseCalendarOnTcp,
+  seoulToday,
+} from './src/calendar-today.js';
+import {
   atomicWritePinnedBinding,
   captureVerifiedIntakeSync,
   classifyIdentityFailure,
@@ -2269,6 +2275,11 @@ async function handleApi(req, res) {
       return json(res, 200, publicHealthStatus());
     }
 
+    if (url.pathname === '/api/calendar/today') {
+      const denied = refuseCalendarOnTcp();
+      return json(res, denied.status, denied.body);
+    }
+
     if (url.pathname === '/api/session') {
       if (req.method === 'DELETE') {
         revokeLocalSession(req, res);
@@ -3429,6 +3440,45 @@ if (companyMemoryDonorBind.enabled) {
   companyMemoryDonorInterval.unref();
 }
 
+const calendarSocketPath = join(dataRoot, 'calendar-today.sock');
+const calendarSocket = createCalendarSocketServer({
+  readToday: async (day) => readCalendarToday({
+    day: day || seoulToday(),
+    token: await getGraphAccessToken(),
+    scopes: delegatedScopes.split(/\s+/),
+    graphBaseUrl,
+  }),
+});
+
+async function openCalendarSocket() {
+  try {
+    const info = await stat(calendarSocketPath);
+    if (!info.isSocket()) {
+      console.error('[calendar] socket not opened: NOT_A_SOCKET');
+      return;
+    }
+    await unlink(calendarSocketPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error(`[calendar] socket not opened: ${error?.code || 'STAT_FAILED'}`);
+      return;
+    }
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      calendarSocket.once('error', reject);
+      calendarSocket.listen(calendarSocketPath, () => {
+        calendarSocket.off('error', reject);
+        resolve();
+      });
+    });
+    await chmod(calendarSocketPath, 0o600);
+  } catch (error) {
+    console.error(`[calendar] socket not opened: ${error?.code || 'LISTEN_FAILED'}`);
+    calendarSocket.close(() => {});
+  }
+}
+
 let shutdownStarted = false;
 function closePersistentMailMemory() {
   clearInterval(reconciliationInterval);
@@ -3441,9 +3491,11 @@ function closePersistentMailMemory() {
 function gracefulShutdown(signal) {
   if (shutdownStarted) return;
   shutdownStarted = true;
-  server.close(() => {
-    closePersistentMailMemory();
-    process.exit(0);
+  calendarSocket.close(() => {
+    server.close(() => {
+      closePersistentMailMemory();
+      process.exit(0);
+    });
   });
   setTimeout(() => {
     closePersistentMailMemory();
@@ -3461,6 +3513,7 @@ server.listen(port, host, () => {
   console.log(`Mail Intelligence ${APP_VERSION} app running at ${runningUrl}`);
   console.log(`[storage] SQLite schema v${mailMemoryInitialization.storage.schemaVersion} ready.`);
 });
+  void openCalendarSocket();
 
 // --- AI Helper Functions ---
 
