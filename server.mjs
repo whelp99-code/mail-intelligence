@@ -3420,12 +3420,13 @@ if (companyMemoryDonorBind.enabled) {
   const runDonor = () => {
     const db = mailMemory?.store?.db;
     runBoundCompanyMemoryDonorTick(process.env, db ? { db } : {}).then((donor) => {
-      if (!donor.skipped) {
+      if (!donor.skipped && donor.result.attempted > 0) {
         console.log('[mail-company-memory] donor tick', JSON.stringify({
           attempted: donor.result.attempted,
           emitted: donor.result.emitted.length,
           pending: donor.result.pending.length,
           rejected: donor.result.rejected.length,
+          skipped: donor.result.skipped.length,
         }));
       }
     }).catch((error) => {

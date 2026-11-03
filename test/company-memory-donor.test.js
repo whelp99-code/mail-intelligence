@@ -324,3 +324,41 @@ test('SQLiteMailStore applies the company-memory outbox migration', async () => 
     await rm(directory, { recursive: true, force: true });
   }
 });
+test('a missing source is skipped once and a transport failure stays pending', async () => {
+  const { signer } = createSigner();
+  const db = openOutboxDb();
+  db.exec(readFileSync(new URL('../migrations/017_mail_company_memory_outbox_skipped.sql', import.meta.url), 'utf8'));
+  const missing = seedOutbox(db);
+  const transient = seedOutbox(db, { ...SOURCE, sourceLocator: 'graph/msg-2', sourceEventId: 'event-2' });
+  const transport = capturingTransport({ exitCode: 1 });
+  const outbox = createMailProductDonorPort({
+    db,
+    resolveSource: (event) => (event.id === transient.id ? { ...SOURCE, sourceLocator: event.sourceLocator, sourceEventId: event.sourceEventId } : null),
+  });
+  const first = await publishCompanyMemoryDonor({
+    context: CONTEXT,
+    signer,
+    transport,
+    outbox,
+    now: NOW,
+  });
+  assert.deepEqual(first.skipped, [missing.id]);
+  assert.deepEqual(first.pending, [transient.id]);
+  assert.equal(first.rejected[0].code, 'COMPANY_RECEIPT_REQUIRED');
+  assert.equal(transport.requests.length, 1);
+  const skipped = db.prepare('SELECT status, skip_reason FROM mail_company_memory_outbox WHERE id=?').get(missing.id);
+  assert.equal(skipped.status, 'SKIPPED');
+  assert.equal(skipped.skip_reason, 'COMPANY_SOURCE_REQUIRED');
+  assert.equal(db.prepare('SELECT status FROM mail_company_memory_outbox WHERE id=?').get(transient.id).status, 'PENDING');
+
+  const second = await publishCompanyMemoryDonor({
+    context: CONTEXT,
+    signer,
+    transport,
+    outbox,
+    now: NOW,
+  });
+  assert.deepEqual(second.skipped, []);
+  assert.deepEqual(second.pending, [transient.id]);
+  assert.equal(transport.requests.length, 2);
+});
