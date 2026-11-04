@@ -171,7 +171,7 @@ assert.equal(proxyUnitSource.includes('User=root'), false);
 
 assert.equal(/\|\|\s*true/.test(ciSource), false, 'CI must not ignore verification failures');
 assert.equal(packageJson.engines?.node, '>=22', 'Node.js 22+ is required for node:sqlite verification');
-assert.match(ciSource, /node-version:\s*['"]22['"]/);
+assert.match(ciSource, /node-version:\s*['"]22(?:\.23\.3)?['"]/);
 assert.match(releaseSource, /workflow_dispatch/);
 assert.equal(/^\s*push:/m.test(releaseSource), false, 'release packaging must not run on push');
 assert.match(releaseSource, /NODE_VERSION:\s*['"]22['"]/);
