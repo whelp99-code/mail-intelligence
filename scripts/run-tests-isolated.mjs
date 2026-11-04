@@ -16,8 +16,9 @@ chmodSync(runDirectory, 0o700);
 try {
   const preflight = join(runDirectory, '.write-preflight');
   writeFileSync(preflight, 'ok\n', { mode: 0o600, flag: 'wx' });
-  const tests = process.argv.slice(2);
-  const child = spawnSync(process.execPath, ['--test', ...(tests.length ? tests : ['test/*.test.js'])], {
+  const forwarded = process.argv.slice(2).filter((arg) => arg.startsWith('--test-'));
+  const tests = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
+  const child = spawnSync(process.execPath, ['--test', ...forwarded, ...(tests.length ? tests : ['test/*.test.js'])], {
     cwd: root,
     env: { ...process.env, TMPDIR: runDirectory, TMP: runDirectory, TEMP: runDirectory },
     stdio: 'inherit',
