@@ -5,7 +5,7 @@ import {
   WORK_STATES,
 } from './precision-classifier.js';
 
-export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix14';
+export const INTELLIGENT_SEARCH_VERSION = 'intelligent-search-v1.2.2-fix15';
 export const MAX_INTELLIGENT_QUERY_LENGTH = 500;
 export const MAX_INTELLIGENT_SEARCH_RESULTS = 100;
 export const MAX_DECOMPOSED_SEARCH_TOKENS = 10;
@@ -80,6 +80,7 @@ const QUESTION_SCAFFOLD_TOKENS = new Set([
   '가장', '최근에', '관련해서', '메일에서', '무엇인가요', '무엇인지', '알고', '싶어요',
   '정보가', '있는지', '내용이', '보여줄', '수',
   '메시지', '메시지를', '메일함', '메일함에서',
+  '무엇인가', '누구인가', '있는가',
 ]);
 
 const SEARCH_WORD_PATTERN = /[\p{L}\p{M}\p{N}_-]+/gu;
