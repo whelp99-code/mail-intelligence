@@ -96,6 +96,21 @@ still match. Missing or malformed required fields, denied/absent records and
 content mismatches remain visible conflicts, never accepted deliveries. Source
 and grant guards run again before accepting a verified replay.
 
+Before a candidate POST, committed local audit records reserve its mailbox,
+workspace and source message. The reservation records source digest, writer,
+provider event and idempotency key, without body or credentials. A verified
+delivery settles that reservation atomically with the delivery audit. Explicit
+request rejection (including unresolved POST 409) settles as rejected in its own
+committed transaction, not delivered. A failed settlement commit leaves the
+reservation unresolved. Transport loss, server errors, unexpected success or invalid receipts
+leave the outcome unknown. Later automatic syncs, concurrent callers and process
+restarts refuse another POST with `CWOS_CANDIDATE_OUTCOME_UNKNOWN`; changing the
+source revision does not clear an unresolved reservation. No automatic retry,
+reconciliation GET or operator-clear endpoint is introduced. Existing uncertain
+attempts predating this reservation cannot be reconstructed from missing audits;
+they require existing evidence reconciliation, not replay. Disabling the writer
+does not delete these audit records. No schema migration is required.
+
 This contract is pinned to CRM merge
 `a9122f11fe43b15587a244fb7105bce8ee6e8481` (PR68), specifically
 `apps/api/src/app.ts`'s profile allowlist and
