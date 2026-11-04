@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import { chmod, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -133,28 +132,33 @@ test('tailnet proxy Host forgery cannot read the calendar', async (t) => {
 });
 
 test('calendar socket is mode 600 and the cli does not open a secret store', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calendar-today-'));
+  // GitHub's workspace makes tmpdir() longer than the 108-byte unix socket limit.
+  // Node still emits listening, then chmod sees ENOENT. Keep this path short.
+  const dir = mkdtempSync(join('/tmp', 'cal-'));
   const socketPath = join(dir, 'calendar.sock');
   const out = join(dir, 'calendar.json');
   const socketServer = createCalendarSocketServer({
     readToday: async () => ({ value: [event('one', '2026-11-03T09:00:00+09:00')] }),
   });
-  const listening = once(socketServer, 'listening');
-  socketServer.listen(socketPath);
-  await listening;
-  await new Promise((resolve, reject) => chmod(socketPath, 0o600, (error) => error ? reject(error) : resolve()));
-  assert.equal(statSync(socketPath).mode & 0o777, 0o600);
-  const written = await exportCalendarFile({ out, day: DAY, socketPath });
-  assert.equal(written.events, 1);
-  assert.equal(JSON.parse(readFileSync(out, 'utf8')).value[0].subject, 'one');
-  const consent = await exportCalendarFile({
-    out,
-    day: DAY,
-    socketPath,
-    requestImpl: async () => ({ status: 403, body: { code: 'CONSENT_REQUIRED' } }),
-  });
-  assert.equal(consent.code, 2);
-  assert.equal(consent.message, '동의 필요');
-  socketServer.close();
-  rmSync(dir, { recursive: true, force: true });
+  try {
+    const listening = once(socketServer, 'listening');
+    socketServer.listen(socketPath);
+    await listening;
+    await new Promise((resolve, reject) => chmod(socketPath, 0o600, (error) => error ? reject(error) : resolve()));
+    assert.equal(statSync(socketPath).mode & 0o777, 0o600);
+    const written = await exportCalendarFile({ out, day: DAY, socketPath });
+    assert.equal(written.events, 1);
+    assert.equal(JSON.parse(readFileSync(out, 'utf8')).value[0].subject, 'one');
+    const consent = await exportCalendarFile({
+      out,
+      day: DAY,
+      socketPath,
+      requestImpl: async () => ({ status: 403, body: { code: 'CONSENT_REQUIRED' } }),
+    });
+    assert.equal(consent.code, 2);
+    assert.equal(consent.message, '동의 필요');
+  } finally {
+    await new Promise((resolve) => socketServer.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
