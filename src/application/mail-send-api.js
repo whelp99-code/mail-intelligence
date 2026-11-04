@@ -2,8 +2,10 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { browserOriginAllowed } from '../security/request-origin.js';
 import { MailSendDrafts } from './mail-send-drafts.js';
 import { GraphSendClient, hasMailSendScope } from '../adapters/microsoft-graph-send.js';
+import { assertExternalRecipientConfirmed } from '../security/mail-send-company-domain.js';
 import { suggestReplyAttachments } from './reply-attachment-suggestions.js';
 import { consumeReceiptItem, ensureReceiptUseTable, matchingMailItem, verifyJarvisCommand, verifyJarvisReceipt } from './jarvis-receipt-gate.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 function fail(statusCode, code) {
   throw Object.assign(new Error(code), { statusCode, code });
@@ -18,7 +20,9 @@ function equal(value, expected) {
 export function createMailSendApi({
   getStore, getMailbox, getSession, readBody, getAccessToken,
   serviceToken = '', agentTokens = {}, allowSend = false, accessKeyRequired = false,
+  rejectViewerWrite = defaultRejectViewerWrite, viewerAccessKey = '',
   recipientAllowlist = null,
+  companyDomains = null,
   companyMemory = null,
   getAttachmentKey, recheckDrive = async () => {},
   clientFactory = (options) => new GraphSendClient(options),
@@ -39,6 +43,7 @@ export function createMailSendApi({
     let agentSource = null;
     if (bot) {
       const presented = authorization.slice(7);
+      if (viewerAccessKey && equal(presented, viewerAccessKey)) fail(401, 'DRAFT_TOKEN_REQUIRED');
       for (const source of ['grok-bot', 'jarvis']) {
         const token = String(tokens[source] || '');
         if (token.length >= 32 && equal(presented, token)) {
@@ -53,6 +58,7 @@ export function createMailSendApi({
     } else {
       session = getSession(req);
       if (!session) fail(401, 'SESSION_REQUIRED');
+      if (req.method !== 'GET' && req.method !== 'HEAD') rejectViewerWrite(session, req);
       if (req.method === 'POST') {
         if (!equal(req.headers['x-csrf-token'], session.csrfToken)) fail(403, 'CSRF_REQUIRED');
         if (!browserOriginAllowed(req, url)) fail(403, 'ORIGIN_REJECTED');
@@ -79,7 +85,7 @@ export function createMailSendApi({
       const result = drafts.create(mailbox.id, bot ? agentSource : 'ui', await readBody(req));
       return { status: result.replay ? 200 : 201, body: { draft: decorate(result.draft), replay: result.replay } };
     }
-    if (!id && req.method === 'GET') return { status: 200, body: { drafts: drafts.list(mailbox.id).map(decorate), send_enabled: allowSend } };
+    if (!id && req.method === 'GET') return { status: 200, body: { drafts: drafts.list(mailbox.id).map(decorate), send_enabled: allowSend, company_domains: companyDomains ? [...companyDomains] : [] } };
     if (!id) fail(405, 'METHOD_NOT_ALLOWED');
     let draft = drafts.get(mailbox.id, id);
     if (bot && draft.owner_principal !== `agent:${agentSource}`) fail(404, 'DRAFT_NOT_FOUND');
@@ -100,7 +106,7 @@ export function createMailSendApi({
     };
     if (!action && req.method === 'GET') {
       if (draft.status === 'sending') draft = await reconcile();
-      return { status: 200, body: { draft: decorate(draft), send_enabled: allowSend } };
+      return { status: 200, body: { draft: decorate(draft), send_enabled: allowSend, company_domains: companyDomains ? [...companyDomains] : [] } };
     }
     if (req.method !== 'POST' || !action) fail(405, 'METHOD_NOT_ALLOWED');
     const body = await readBody(req);
@@ -135,8 +141,11 @@ export function createMailSendApi({
     }
     if (!allowSend) fail(403, 'MAIL_SEND_DISABLED');
     if (!accessKeyRequired) fail(403, 'AUTHENTICATED_OPERATOR_REQUIRED');
-    const allowed = bot && jarvisReceiptGate ? ['payload_digest', 'confirm', 'receipt', 'command'] : ['payload_digest', 'confirm'];
+    const allowed = bot && jarvisReceiptGate
+      ? ['payload_digest', 'confirm', 'receipt', 'command', 'external_recipient_confirmed']
+      : ['payload_digest', 'confirm', 'external_recipient_confirmed'];
     if (Object.keys(body).some((key) => !allowed.includes(key)) || body.confirm !== true) fail(400, 'EXPLICIT_CONFIRMATION_REQUIRED');
+    assertExternalRecipientConfirmed(draft, companyDomains, body.external_recipient_confirmed === true);
     drafts.assertRecipientsAllowed(draft);
     const token = await getAccessToken();
     const verified = await drafts.verifySendBuffers(mailbox.id, id, {
@@ -158,11 +167,18 @@ export function createMailSendApi({
       return drafts.claim(mailbox.id, id);
     });
     if (claimed) {
-      const client = clientFactory({ accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist });
+      const client = clientFactory({
+        accessToken: token, mailboxUser: mailbox.graphUser, recipientAllowlist, companyDomains,
+      });
       let outcome;
       try {
-        outcome = await client.sendOnce(drafts.get(mailbox.id, id), { allowSend, attachments: verified });
-      } catch {
+        outcome = await client.sendOnce(drafts.get(mailbox.id, id), {
+          allowSend,
+          attachments: verified,
+          externalRecipientConfirmed: body.external_recipient_confirmed === true,
+        });
+      } catch (error) {
+        if (error?.code === 'EXTERNAL_RECIPIENT_CONFIRMATION_REQUIRED') throw error;
         outcome = { uncertain: true, failureCode: 'GRAPH_ACCEPTANCE_UNKNOWN' };
       }
       draft = drafts.recordOutcome(mailbox.id, id, outcome);

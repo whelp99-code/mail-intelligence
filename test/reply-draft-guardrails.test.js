@@ -106,6 +106,7 @@ test('send client posts body_text line breaks unchanged and blocks partner names
   let posted = '';
   const client = new GraphSendClient({
     accessToken: token,
+    companyDomains: ['gsenc.com'],
     fetchImpl: async (_url, options) => {
       if (options.method === 'POST') {
         posted = options.body;

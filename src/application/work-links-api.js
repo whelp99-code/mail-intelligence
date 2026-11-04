@@ -3,6 +3,7 @@ import { createNotionWorkSystem } from '../adapters/notion-work-system.js';
 import { createIntakeAuthorization } from './intake-authorization.js';
 import { WorkLinkService } from './work-links.js';
 import { MailWorkIntakeService } from './mail-work-intake.js';
+import { rejectViewerWrite as defaultRejectViewerWrite } from '../security/viewer-write.js';
 
 function fail(statusCode, code, message) {
   throw Object.assign(new Error(message || code), { statusCode, code });
@@ -12,6 +13,7 @@ export function createWorkLinksApi({
   getStore,
   getMailboxUser,
   getSession,
+  rejectViewerWrite = defaultRejectViewerWrite,
   snapshotPath = '',
   getCwosWorkSystem,
   getIntakeAuthorization,
@@ -23,6 +25,7 @@ export function createWorkLinksApi({
     const session = getSession(req);
     if (!session) fail(401, 'SESSION_REQUIRED', 'Session required.');
     if (req.method === 'POST') {
+      rejectViewerWrite(session, req);
       if (String(req.headers['x-csrf-token'] || '') !== String(session.csrfToken || '')) {
         fail(403, 'CSRF_REQUIRED', 'CSRF token required.');
       }

@@ -19,6 +19,7 @@ const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]
 const CLOSED_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const OUTBOX_KINDS = new Set(['INBOX_RECEIVED', 'WORK_LINKED', 'WORK_LINK_CORRECTED']);
+const TERMINAL_OUTBOX_CODES = new Set(['COMPANY_SOURCE_REQUIRED']);
 
 export const MAIL_COMPANY_MEMORY_ADAPTER_STATUS = 'outbox_ready';
 
@@ -62,6 +63,9 @@ export function createMailProductDonorPort(options) {
     },
     markEmitted(workspaceId, id) {
       markMailCompanyMemoryEmitted(options.db, workspaceId, id);
+    },
+    markSkipped(workspaceId, id, reason) {
+      markMailCompanyMemorySkipped(options.db, workspaceId, id, reason);
     },
   };
 }
@@ -136,6 +140,7 @@ export async function publishCompanyMemoryDonor(input) {
   const emitted = [];
   const pending = [];
   const rejected = [];
+  const skipped = [];
 
   for (const row of pendingRows) {
     const outcome = await publishOne({
@@ -149,13 +154,16 @@ export async function publishCompanyMemoryDonor(input) {
     });
     if (outcome.status === 'emitted') {
       emitted.push(row.event.id);
+    } else if (outcome.status === 'skipped') {
+      input.outbox.markSkipped(row.event.workspaceId, row.event.id, outcome.code);
+      skipped.push(row.event.id);
     } else {
       pending.push(row.event.id);
       rejected.push({ id: row.event.id, code: outcome.code });
     }
   }
 
-  return { attempted: pendingRows.length, emitted, pending, rejected };
+  return { attempted: pendingRows.length, emitted, pending, rejected, skipped };
 }
 
 function canonicalize(value) {
@@ -383,6 +391,27 @@ function markMailCompanyMemoryEmitted(db, workspaceId, id) {
   const next = db.prepare('SELECT * FROM mail_company_memory_outbox WHERE id = ?').get(item.id);
   return mapOutboxRow(next);
 }
+function markMailCompanyMemorySkipped(db, workspaceId, id, reason) {
+  const workspace = canonicalWorkspaceId(workspaceId);
+  const code = requiredText(reason, 'skip_reason');
+  if (!TERMINAL_OUTBOX_CODES.has(code)) {
+    throw new CompanyMemoryDonorError('INVALID_INPUT', 'skip reason is not terminal');
+  }
+  const item = db.prepare('SELECT * FROM mail_company_memory_outbox WHERE id = ?').get(requiredText(id, 'outbox.id'));
+  if (!item) {
+    throw new CompanyMemoryDonorError('OUTBOX_NOT_FOUND', 'mail company-memory outbox event not found');
+  }
+  if (canonicalWorkspaceId(item.workspace_id) !== workspace) {
+    throw new CompanyMemoryDonorError('COMPANY_WORKSPACE_MISMATCH', 'outbox workspace does not match');
+  }
+  if (item.status === 'SKIPPED') return mapOutboxRow(item);
+  db.prepare(
+    `UPDATE mail_company_memory_outbox
+     SET status = 'SKIPPED', skip_reason = ?, version = version + 1, updated_at = ?
+     WHERE id = ? AND workspace_id = ? AND status = 'PENDING'`,
+  ).run(code, new Date().toISOString(), item.id, workspace);
+  return mapOutboxRow(db.prepare('SELECT * FROM mail_company_memory_outbox WHERE id = ?').get(item.id));
+}
 
 function signedRequest(input) {
   const argumentsValue = input.argumentsValue;
@@ -455,7 +484,7 @@ async function publishOne(input) {
 
   const workspace = workspaceDecision(input.context.workspaceId, event.workspaceId, input.row.source?.workspaceId);
   if (!workspace.ok) return { status: 'pending', code: workspace.code };
-  if (!input.row.source) return { status: 'pending', code: 'COMPANY_SOURCE_REQUIRED' };
+  if (!input.row.source) return { status: 'skipped', code: 'COMPANY_SOURCE_REQUIRED' };
 
   let request;
   let digest;

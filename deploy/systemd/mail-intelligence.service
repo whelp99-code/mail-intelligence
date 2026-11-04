@@ -26,7 +26,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/jm/orca/projects/mail-intelligence/data -/home/jm/.codex -/home/jm/.grok
+ReadWritePaths=/home/jm/orca/projects/mail-intelligence/data -/home/jm/.codex -/home/jm/.grok /home/jm/.config/second-brain/company-memory/mail-ms /home/jm/.local/share/second-brain-company/mail-ms
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]

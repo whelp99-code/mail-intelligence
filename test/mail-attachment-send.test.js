@@ -41,7 +41,7 @@ const json = (payload, status = 200) => new Response(JSON.stringify(payload), { 
 const binary = (payload, status = 200) => new Response(payload, { status, headers: { 'Content-Type': 'application/octet-stream' } });
 
 function clientWith(handler) {
-  return new GraphSendClient({ accessToken: token(), fetchImpl: handler });
+  return new GraphSendClient({ accessToken: token(), companyDomains: ['example.com'], fetchImpl: handler });
 }
 
 test('sendOnce posts fileAttachment bytes and confirms receipt hashes', async () => {

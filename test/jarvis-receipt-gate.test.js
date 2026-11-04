@@ -38,6 +38,7 @@ function fixture(t, options = {}) {
     readBody: async (req) => req.body,
     getAccessToken: async () => `fixture.${claims}.fixture`,
     serviceToken: secret, allowSend: true, accessKeyRequired: true,
+    companyDomains: ['example.com'],
     agentTokens: { jarvis: jarvisSecret },
     jarvisReceiptGate: true,
     jarvisDecisionPublicKey: publicPem,

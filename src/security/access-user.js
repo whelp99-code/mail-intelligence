@@ -11,6 +11,12 @@ export function basicAccessGranted(username, password, accessKey, equals, env = 
   return username === configuredAccessUsername(env) && equals(password, accessKey);
 }
 
+export function accessRoleForBasic(username, password, operatorKey, viewerKey, equals, env = process.env) {
+  if (basicAccessGranted(username, password, operatorKey, equals, env)) return 'operator';
+  if (viewerKey && basicAccessGranted(username, password, viewerKey, equals, env)) return 'viewer';
+  return null;
+}
+
 export function accessAuthorizationHeader(accessKey, env = process.env) {
   const username = configuredAccessUsername(env);
   return `Basic ${Buffer.from(`${username}:${accessKey}`, 'utf8').toString('base64')}`;

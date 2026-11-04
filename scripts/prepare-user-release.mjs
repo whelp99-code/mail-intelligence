@@ -13,6 +13,14 @@ import {
 
 const run = promisify(execFile);
 
+const COMPANY_MEMORY_WRITE_PATHS = [
+  '/home/jm/.config/second-brain/company-memory/mail-ms',
+  '/home/jm/.local/share/second-brain-company/mail-ms',
+];
+
+function readWritePaths(dataDir) {
+  return `ReadWritePaths=${dataDir} -/home/jm/.codex -/home/jm/.grok ${COMPANY_MEMORY_WRITE_PATHS.join(' ')}`;
+}
 /** Preserve existing private configuration; release setup never creates credentials. */
 export async function prepareUserRelease({ codeRoot, dataDir, commit, environmentFiles, managerEnvironment = '' }) {
   assert(isAbsolute(codeRoot) && isAbsolute(dataDir) && /^[A-Za-z0-9/_.-]+$/.test(codeRoot + dataDir), 'Literal absolute deployment paths are required');
@@ -45,7 +53,7 @@ export async function prepareUserRelease({ codeRoot, dataDir, commit, environmen
     .replace(/^WorkingDirectory=.*$/m, `WorkingDirectory=${codeRoot}`)
     .replace(/^EnvironmentFile=.*$/m, releaseEnvironmentFilePaths(dataDir).map(path => `EnvironmentFile=${path}`).join('\n'))
     .replace(/^ExecStart=.*$/m, `ExecStart=/usr/bin/node ${codeRoot}/server.mjs`)
-    .replace(/^ReadWritePaths=.*$/m, `ReadWritePaths=${dataDir} -/home/jm/.codex -/home/jm/.grok`);
+    .replace(/^ReadWritePaths=.*$/m, readWritePaths(dataDir));
   const unitDirectory = join(codeRoot, '.deployment');
   await mkdir(unitDirectory, { recursive: true, mode: 0o700 });
   const unitPath = join(unitDirectory, 'mail-intelligence.service');
@@ -69,7 +77,7 @@ export async function prepareUserRelease({ codeRoot, dataDir, commit, environmen
     `UnsetEnvironment=${[...new Set([...donorNames, ...managerDonorNames(managerEnvironment)])]
       .filter(name => !Object.hasOwn(preparedEnvironment, name)).join(' ')}`,
     'ReadWritePaths=',
-    `ReadWritePaths=${dataDir} -/home/jm/.codex -/home/jm/.grok`,
+    readWritePaths(dataDir),
     '',
   ].join('\n');
   await writeFile(join(dropInDirectory, releaseDropInName), dropIn, { mode: 0o600 });
