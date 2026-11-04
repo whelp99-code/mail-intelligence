@@ -42,7 +42,9 @@ jobs:
         run: npm run verify:safety
 
       - name: Unit and integration tests
-        run: npm test
+        run: |
+          ( sleep 180; echo HANG_PS_BEGIN; ps -eo pid,ppid,etime,args; echo HANG_PS_END ) &
+          npm test -- --test-timeout=180000
 
       - name: Precision classification evaluation
         run: npm run evaluate:precision:diagnostic
