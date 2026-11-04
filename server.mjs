@@ -3579,7 +3579,7 @@ server.listen(port, host, () => {
   console.log(`Mail Intelligence ${APP_VERSION} app running at ${runningUrl}`);
   console.log(`[storage] SQLite schema v${mailMemoryInitialization.storage.schemaVersion} ready.`);
 });
-  void openCalendarSocket();
+void openCalendarSocket();
 
 // --- AI Helper Functions ---
 
