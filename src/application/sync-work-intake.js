@@ -135,6 +135,18 @@ export async function ingestAfterCommittedSync({
   const candidateSkipped = [];
   const acceptedMessageIds = [];
   let candidateVersion = readResult?.provenance?.runtimeVersion;
+  const refreshCandidateVersion = async () => {
+    if (!scope.workspaceId) return;
+    try {
+      const refreshed = await workSystem.readMasters({ workspaceId: scope.workspaceId });
+      if (assertBinding) assertBinding();
+      if (Number.isSafeInteger(refreshed?.provenance?.runtimeVersion)) {
+        candidateVersion = refreshed.provenance.runtimeVersion;
+      }
+    } catch {
+      // Keep the last verified version and still attempt other messages.
+    }
+  };
   const deliveredCandidates = [];
   let candidateFailure = null;
   if (masterFailure?.code !== 'INTAKE_BINDING_STALE') for (const messageId of ids) {
@@ -183,6 +195,7 @@ export async function ingestAfterCommittedSync({
       if (candidateWriter && hasCandidates && !candidateFailure) {
         const dispatchEntityId = JSON.stringify([scope.mailboxKey, scope.workspaceId, messageId]);
         let attemptId = null;
+        let receipt = null;
         try {
           const snapshot = intake.source(scope.mailboxUser, messageId);
           const fingerprint = mailSourceDigest(snapshot.source);
@@ -192,7 +205,7 @@ export async function ingestAfterCommittedSync({
           const alreadyDelivered = priorDelivery?.payload?.sourceDigest === fingerprint
             && priorDelivery.payload.workspaceId === scope.workspaceId;
           if (!alreadyDelivered) {
-            const receipt = await candidateWriter.create({
+            receipt = await candidateWriter.create({
               workspaceId: scope.workspaceId, ...snapshot, expectedVersion: candidateVersion,
               beforeDispatch: (identity) => {
                 attemptId = beginCandidateDispatch(store, dispatchEntityId, {
@@ -225,8 +238,17 @@ export async function ingestAfterCommittedSync({
               settleCandidateDispatch(store, dispatchEntityId, attemptId, 'rejected');
             });
           }
-          candidateFailure = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
-          failures.push(candidateFailure);
+          const recorded = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
+          failures.push(recorded);
+          const unresolvedDispatch = error?.code === 'CWOS_CANDIDATE_OUTCOME_UNKNOWN'
+            || (attemptId !== null && error?.deliveryOutcome !== 'rejected');
+          if (!unresolvedDispatch) {
+            candidateFailure = recorded;
+          } else if (Number.isSafeInteger(receipt?.runtimeVersion)) {
+            candidateVersion = receipt.runtimeVersion;
+          } else if (attemptId !== null) {
+            await refreshCandidateVersion();
+          }
         }
       }
     } catch (error) {

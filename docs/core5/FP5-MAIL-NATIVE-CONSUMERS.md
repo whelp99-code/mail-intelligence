@@ -103,8 +103,12 @@ delivery settles that reservation atomically with the delivery audit. Explicit
 request rejection (including unresolved POST 409) settles as rejected in its own
 committed transaction, not delivered. A failed settlement commit leaves the
 reservation unresolved. Transport loss, server errors, unexpected success or invalid receipts
-leave the outcome unknown. Later automatic syncs, concurrent callers and process
-restarts refuse another POST with `CWOS_CANDIDATE_OUTCOME_UNKNOWN`; changing the
+leave the outcome unknown. That fence refuses another POST of the same mailbox,
+workspace and source message only. Other messages in the same batch and in later
+syncs stay deliverable; their CAS version is the last verified receipt, or a fresh
+reader version when the unresolved attempt may have advanced it. Later automatic
+syncs, concurrent callers and process restarts refuse another POST of that source
+with `CWOS_CANDIDATE_OUTCOME_UNKNOWN`; changing the
 source revision does not clear an unresolved reservation. No automatic retry,
 reconciliation GET or operator-clear endpoint is introduced. Existing uncertain
 attempts predating this reservation cannot be reconstructed from missing audits;

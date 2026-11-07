@@ -664,3 +664,94 @@ test('ambiguous existing local projects without candidate links do not append CR
   assert.equal(result.deliveredCandidates.length, 0);
   assert.equal(posts.length, 0);
 });
+
+function addReceivedMessage(store, messageId, subject) {
+  const mailbox = store.getMailbox('me');
+  const folder = store.db.prepare('SELECT id FROM mail_folders WHERE mailbox_id=?').get(mailbox.id);
+  store.applyDeltaPage({
+    mailboxId: mailbox.id,
+    folderId: folder.id,
+    syncRunId: store.startSyncRun({ mailboxId: mailbox.id, folderId: folder.id, runType: 'delta' }),
+    pageIndex: 0,
+    items: [normalizeGraphMessage({
+      id: messageId,
+      changeKey: 'v1',
+      subject,
+      from: { emailAddress: { address: 'sender@example.invalid' } },
+      receivedDateTime: '2026-10-09T01:00:00Z',
+      body: { contentType: 'text', content: `Please review ${subject}.` },
+    })],
+    deltaLink: `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?fixture=${messageId}`,
+  });
+}
+
+function acceptedCandidateResponse(body, runtimeVersion, idChar) {
+  return Response.json({
+    candidate: {
+      ...body,
+      id: `mail-candidate-${idChar.repeat(64)}`,
+      status: 'CANDIDATE',
+      confirmed: false,
+      freshness: 'producer_unverified',
+      createdByPrincipalId: 'writer',
+      version: 1,
+    },
+    runtimeVersion,
+  }, { status: 201 });
+}
+
+test('unknown delivery outcome does not replay that candidate and still delivers other messages', async (t) => {
+  const workspaceId = 'fixture-workspace';
+  const { store, binding, posts } = await fixture(t, { workspaceId });
+  addReceivedMessage(store, 'other', 'Example Project follow-up');
+  addReceivedMessage(store, 'later', 'Example Project later request');
+  let reads = 0;
+  const readMasters = binding.workSystem.cwosClient.readMasters;
+  binding.workSystem.cwosClient.readMasters = async (scope) => {
+    reads += 1;
+    const result = await readMasters(scope);
+    if (reads > 1) result.provenance = { runtimeVersion: 9 };
+    return result;
+  };
+  binding.candidateWriter.fetchImpl = async (url, options) => {
+    const body = JSON.parse(options.body);
+    posts.push({ path: url.pathname, method: options.method, body });
+    if (body.sourceLocator === 'mail') throw new TypeError('Synthetic response loss after remote commit');
+    return acceptedCandidateResponse(body, body.sourceLocator === 'other' ? 9 : 10, body.sourceLocator === 'other' ? 'c' : 'd');
+  };
+  const runIds = (messageIds) => ingestAfterCommittedSync({
+    store, ...binding, mailboxUser: 'me', workspaceId, messageIds,
+  });
+  const first = await runIds(['mail', 'other']);
+  assert.equal(first.failures.find((item) => item.messageId === 'mail')?.code, 'CWOS_CANDIDATE_UNAVAILABLE');
+  assert.equal(first.deliveredCandidates.find((item) => item.messageId === 'other')?.runtimeVersion, 9);
+  assert.equal(posts.filter((item) => item.body.sourceLocator === 'mail').length, 1);
+  assert.equal(posts.find((item) => item.body.sourceLocator === 'other').body.expectedVersion, 9);
+  const replay = await runIds(['mail', 'other']);
+  assert.equal(replay.failures.find((item) => item.messageId === 'mail')?.code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+  assert.equal(posts.filter((item) => item.body.sourceLocator === 'mail').length, 1);
+  assert.equal(posts.filter((item) => item.body.sourceLocator === 'other').length, 1);
+  assert.equal(replay.deliveredCandidates.length, 0);
+  const later = await runIds(['mail', 'later']);
+  assert.equal(later.failures.find((item) => item.messageId === 'mail')?.code, 'CWOS_CANDIDATE_OUTCOME_UNKNOWN');
+  assert.equal(later.deliveredCandidates.find((item) => item.messageId === 'later')?.runtimeVersion, 10);
+  assert.equal(posts.filter((item) => item.body.sourceLocator === 'later').length, 1);
+  assert.equal(posts.filter((item) => item.body.sourceLocator === 'mail').length, 1);
+});
+
+test('explicit candidate rejection still stops later messages in the same batch', async (t) => {
+  const workspaceId = 'fixture-workspace';
+  const { store, binding, posts } = await fixture(t, { workspaceId });
+  addReceivedMessage(store, 'other', 'Example Project follow-up');
+  binding.candidateWriter.fetchImpl = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    posts.push(body.sourceLocator);
+    return Response.json({ code: 'CWOS_CANDIDATE_DENIED' }, { status: 403 });
+  };
+  const result = await ingestAfterCommittedSync({
+    store, ...binding, mailboxUser: 'me', workspaceId, messageIds: ['mail', 'other'],
+  });
+  assert.equal(result.failures[0].code, 'CWOS_CANDIDATE_DENIED');
+  assert.deepEqual(posts, ['mail']);
+  assert.equal(result.deliveredCandidates.length, 0);
+});
