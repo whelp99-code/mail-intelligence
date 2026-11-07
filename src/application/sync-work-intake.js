@@ -12,6 +12,41 @@ function failure(error, fallbackCode) {
   };
 }
 
+function beginCandidateDispatch(store, entityId, payload) {
+  // A surrounding transaction could roll back after the remote effect.
+  if (store.txDepth) throw Object.assign(new Error('CWOS_CANDIDATE_TRANSACTION_OPEN'), {
+    code: 'CWOS_CANDIDATE_TRANSACTION_OPEN',
+  });
+  return store.transaction(() => {
+    // Use insertion order, not wall-clock time, for this durable state machine.
+    const latest = store.db.prepare(`
+      SELECT event_type FROM audit_events
+      WHERE entity_type = 'crm_candidate_dispatch' AND entity_id = ?
+      ORDER BY id DESC LIMIT 1
+    `).get(entityId);
+    if (latest && latest.event_type !== 'mail.crm_candidate.dispatch_settled') {
+      throw Object.assign(new Error('CWOS_CANDIDATE_OUTCOME_UNKNOWN'), {
+        code: 'CWOS_CANDIDATE_OUTCOME_UNKNOWN',
+      });
+    }
+    return store.audit('mail.crm_candidate.dispatch_started', {
+      entityType: 'crm_candidate_dispatch', entityId, payload,
+    }).id;
+  });
+}
+
+function settleCandidateDispatch(store, entityId, attemptId, outcome) {
+  store.audit('mail.crm_candidate.dispatch_settled', {
+    entityType: 'crm_candidate_dispatch', entityId, payload: { attemptId, outcome },
+  });
+}
+
+function commitCandidateSettlement(store, operation) {
+  if (store.txDepth) throw Object.assign(new Error('CWOS_CANDIDATE_TRANSACTION_OPEN'), {
+    code: 'CWOS_CANDIDATE_TRANSACTION_OPEN',
+  });
+  store.transaction(operation);
+}
 function readProviderIdentity(authorization) {
   if (typeof authorization?.identityProvenance !== 'function') return null;
   const identity = authorization.identityProvenance();
@@ -100,6 +135,18 @@ export async function ingestAfterCommittedSync({
   const candidateSkipped = [];
   const acceptedMessageIds = [];
   let candidateVersion = readResult?.provenance?.runtimeVersion;
+  const refreshCandidateVersion = async () => {
+    if (!scope.workspaceId) return;
+    try {
+      const refreshed = await workSystem.readMasters({ workspaceId: scope.workspaceId });
+      if (assertBinding) assertBinding();
+      if (Number.isSafeInteger(refreshed?.provenance?.runtimeVersion)) {
+        candidateVersion = refreshed.provenance.runtimeVersion;
+      }
+    } catch {
+      // Keep the last verified version and still attempt other messages.
+    }
+  };
   const deliveredCandidates = [];
   let candidateFailure = null;
   if (masterFailure?.code !== 'INTAKE_BINDING_STALE') for (const messageId of ids) {
@@ -146,6 +193,9 @@ export async function ingestAfterCommittedSync({
         projection[type]?.candidates?.some(item => item.status === 'candidate'))
         || projection.work?.classification?.projectResolution === 'candidate';
       if (candidateWriter && hasCandidates && !candidateFailure) {
+        const dispatchEntityId = JSON.stringify([scope.mailboxKey, scope.workspaceId, messageId]);
+        let attemptId = null;
+        let receipt = null;
         try {
           const snapshot = intake.source(scope.mailboxUser, messageId);
           const fingerprint = mailSourceDigest(snapshot.source);
@@ -155,8 +205,13 @@ export async function ingestAfterCommittedSync({
           const alreadyDelivered = priorDelivery?.payload?.sourceDigest === fingerprint
             && priorDelivery.payload.workspaceId === scope.workspaceId;
           if (!alreadyDelivered) {
-            const receipt = await candidateWriter.create({
+            receipt = await candidateWriter.create({
               workspaceId: scope.workspaceId, ...snapshot, expectedVersion: candidateVersion,
+              beforeDispatch: (identity) => {
+                attemptId = beginCandidateDispatch(store, dispatchEntityId, {
+                  ...identity, sourceDigest: fingerprint, workspaceId: scope.workspaceId,
+                });
+              },
               assertCurrent: () => {
                 if (assertBinding) assertBinding();
                 if (mailSourceDigest(intake.source(scope.mailboxUser, messageId).source) !== fingerprint) {
@@ -164,19 +219,36 @@ export async function ingestAfterCommittedSync({
                 }
               },
             });
+            commitCandidateSettlement(store, () => {
+              store.audit('mail.crm_candidate.delivered', {
+                entityType: 'message', entityId: messageId,
+                payload: {
+                  candidateId: receipt.id, workspaceId: scope.workspaceId,
+                  runtimeVersion: receipt.runtimeVersion, sourceDigest: fingerprint,
+                },
+              });
+              if (attemptId !== null) settleCandidateDispatch(store, dispatchEntityId, attemptId, 'delivered');
+            });
             candidateVersion = receipt.runtimeVersion;
             deliveredCandidates.push({ messageId, ...receipt });
-            store.audit('mail.crm_candidate.delivered', {
-              entityType: 'message', entityId: messageId,
-              payload: {
-                candidateId: receipt.id, workspaceId: scope.workspaceId,
-                runtimeVersion: receipt.runtimeVersion, sourceDigest: fingerprint,
-              },
-            });
           }
         } catch (error) {
-          candidateFailure = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
-          failures.push(candidateFailure);
+          if (attemptId !== null && error?.deliveryOutcome === 'rejected') {
+            commitCandidateSettlement(store, () => {
+              settleCandidateDispatch(store, dispatchEntityId, attemptId, 'rejected');
+            });
+          }
+          const recorded = { messageId, ...failure(error, 'CWOS_CANDIDATE_FAILED') };
+          failures.push(recorded);
+          const unresolvedDispatch = error?.code === 'CWOS_CANDIDATE_OUTCOME_UNKNOWN'
+            || (attemptId !== null && error?.deliveryOutcome !== 'rejected');
+          if (!unresolvedDispatch) {
+            candidateFailure = recorded;
+          } else if (Number.isSafeInteger(receipt?.runtimeVersion)) {
+            candidateVersion = receipt.runtimeVersion;
+          } else if (attemptId !== null) {
+            await refreshCandidateVersion();
+          }
         }
       }
     } catch (error) {
