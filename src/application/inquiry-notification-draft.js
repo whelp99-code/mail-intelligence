@@ -81,28 +81,70 @@ function storeHandle(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Set);
 }
 
-function functionSource(fn) {
-  try {
-    return Function.prototype.toString.call(fn);
-  } catch {
-    return '';
+const FIXED_BAND_SENT_AT = '2026-11-08T02:08:01.000Z';
+const fixedBandReceipts = new Map();
+
+function refuseLiveGraph() {
+  const error = new Error('INQUIRY_NOTIFY_LIVE_GRAPH_REFUSED');
+  error.code = 'INQUIRY_NOTIFY_LIVE_GRAPH_REFUSED';
+  throw error;
+}
+
+function fixedBandUrl(url) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || parsed.hostname !== GRAPH_HOST || parsed.username || parsed.password || parsed.hash) {
+    return null;
   }
+  return parsed;
 }
 
-function liveTransport(fetchImpl) {
-  if (typeof fetchImpl !== 'function' || fetchImpl === globalThis.fetch) return true;
-  if (fetchImpl.name === 'fetch' || fetchImpl.name === 'bound fetch') return true;
-  const source = functionSource(fetchImpl);
-  if (!source || source.includes('[native code]')) return true;
-  return /\bfetch\b|globalThis|graph\.microsoft\.com|\bhttps?:|XMLHttpRequest|node:http/i.test(source);
+// In-process fixture only. This function must not call or close over a caller fetch.
+async function fixedTestBandFetch(url, options = {}) {
+  const parsed = fixedBandUrl(url);
+  if (!parsed) refuseLiveGraph();
+  const method = options.method || 'GET';
+  if (method === 'POST' && parsed.pathname === '/v1.0/me/sendMail' && !parsed.search) {
+    const posted = JSON.parse(options.body);
+    const header = posted?.message?.internetMessageHeaders?.[0];
+    if (!header || header.name !== 'x-mi-draft-id' || typeof header.value !== 'string') refuseLiveGraph();
+    fixedBandReceipts.set(header.value, {
+      id: `fixed-band-${header.value}`,
+      isDraft: false,
+      subject: posted.message.subject,
+      body: posted.message.body,
+      toRecipients: posted.message.toRecipients,
+      ccRecipients: posted.message.ccRecipients,
+      internetMessageHeaders: [header],
+      sentDateTime: FIXED_BAND_SENT_AT,
+    });
+    return new Response(null, { status: 202 });
+  }
+  if (method === 'GET' && parsed.pathname === '/v1.0/me/mailFolders/sentitems/messages') {
+    return new Response(JSON.stringify({ value: [...fixedBandReceipts.values()] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  refuseLiveGraph();
 }
 
-function configReady(config, fetchImpl, store) {
+export function readInquiryNotificationTestBand() {
+  return [...fixedBandReceipts.values()].map((receipt) => ({
+    graphMessageId: receipt.id,
+    subject: receipt.subject,
+    body: receipt.body?.content,
+    to: receipt.toRecipients,
+    cc: receipt.ccRecipients,
+    headerName: receipt.internetMessageHeaders?.[0]?.name,
+    sentAt: receipt.sentDateTime,
+  }));
+}
+
+function configReady(config, store) {
   return Boolean(config)
     && config.notifyEnabled === true
     && typeof config.accessToken === 'string'
     && hasMailSendScope(config.accessToken)
-    && typeof fetchImpl === 'function'
     && storeHandle(store);
 }
 
@@ -123,18 +165,6 @@ function acceptedApproval(approval) {
 function correlationId(inquiryId) {
   const hex = createHash('sha256').update(`mi-inquiry-notify:${inquiryId}`).digest('hex').slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-function bandFetch(fetchImpl) {
-  return async (url, options) => {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || parsed.hostname !== GRAPH_HOST || parsed.username || parsed.password || parsed.hash) {
-      const error = new Error('INQUIRY_NOTIFY_LIVE_GRAPH_REFUSED');
-      error.code = 'INQUIRY_NOTIFY_LIVE_GRAPH_REFUSED';
-      throw error;
-    }
-    return fetchImpl(url, options);
-  };
 }
 
 function fromSendOnce(result) {
@@ -168,8 +198,8 @@ const PREFLIGHT_CODES = new Set([
   'MAIL_SEND_RECIPIENT_ALLOWLIST_INVALID',
 ]);
 
-// Test-band draft only. A Set or a new store handle is not a durable send record.
-// 202 is acceptance. confirmed/sent require GraphSendClient receipt match.
+// Test-band draft only. Caller-supplied fetch is never invoked.
+// The only transport is the in-process fixed test band. A Set or a new store handle is not a durable send record.
 export async function sendInquiryNotification({
   inquiry,
   recipient,
@@ -179,13 +209,13 @@ export async function sendInquiryNotification({
   testBand,
   approval,
 } = {}) {
-  if (!configReady(config, fetchImpl, store)) return failure('INQUIRY_NOTIFY_CONFIG_MISSING');
+  if (!configReady(config, store)) return failure('INQUIRY_NOTIFY_CONFIG_MISSING');
   if (!allowedRecipient(recipient)) return failure('INQUIRY_NOTIFY_RECIPIENT_REJECTED');
   const text = notificationText(inquiry);
   const inquiryId = typeof inquiry?.id === 'string' ? inquiry.id : '';
   if (!text || !INQUIRY_ID_PATTERN.test(inquiryId)) return failure('INQUIRY_NOTIFY_INVALID');
-  if (liveTransport(fetchImpl)) return failure('INQUIRY_NOTIFY_LIVE_GRAPH_REFUSED', { inquiryId });
   if (testBand !== INQUIRY_NOTIFY_TEST_BAND) return failure('INQUIRY_NOTIFY_TEST_BAND_REQUIRED', { inquiryId });
+  if (fetchImpl !== undefined) return failure('INQUIRY_NOTIFY_LIVE_GRAPH_REFUSED', { inquiryId });
   if (!acceptedApproval(approval)) return failure('INQUIRY_NOTIFY_APPROVAL_REQUIRED', { inquiryId });
   if (harnessLedger.has(inquiryId)) {
     return failure('INQUIRY_ALREADY_NOTIFIED', {
@@ -210,7 +240,7 @@ export async function sendInquiryNotification({
   try {
     const client = new GraphSendClient({
       accessToken: config.accessToken,
-      fetchImpl: bandFetch(fetchImpl),
+      fetchImpl: fixedTestBandFetch,
       recipientAllowlist: [INQUIRY_NOTIFY_RECIPIENT],
       companyDomains: ['blro.co.kr'],
     });
