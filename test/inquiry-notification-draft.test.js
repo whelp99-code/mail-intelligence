@@ -227,11 +227,12 @@ test('graph.microsoft.com 호출은 시험 대역이 아니면 거절', async ()
   assertHarnessContract(result);
 });
 
-test('server.mjs 미연결', () => {
+test('server.mjs 연결은 실발송 경로를 열지 않는다', () => {
   const source = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
   const draft = readFileSync(new URL('../src/application/inquiry-notification-draft.js', import.meta.url), 'utf8');
-  assert.equal(source.includes('inquiry-notification-draft'), false);
-  assert.equal(source.includes('sendInquiryNotification'), false);
+  assert.equal(source.includes('inquiry-notification-draft'), true);
+  assert.equal(source.includes('sendInquiryNotification'), true);
+  assert.equal(source.includes("sendInquiryNotification(inquiryNotificationInput(body))"), true);
   assert.equal(source.includes('/sendMail'), false);
   assert.equal(draft.includes('fetchImpl('), false);
   assert.equal(draft.includes('globalThis.fetch'), false);
