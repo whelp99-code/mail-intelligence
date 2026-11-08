@@ -44,36 +44,36 @@ async function portAvailable() {
 test('문의 접수 입력은 초안 함수에 승인·시험 대역·fetch 없이 도달하고 미승인은 발송하지 않는다', async () => {
   const before = readInquiryNotificationTestBand().length;
   const input = inquiryNotificationInput(inquiryBody);
-    assert.equal(input.recipient, INQUIRY_NOTIFY_RECIPIENT);
-    assert.equal(input.testBand, undefined);
-    assert.equal(input.fetchImpl, undefined);
-    assert.equal(input.approval, undefined);
-    assert.equal(input.config, undefined);
-    assert.equal(input.store.persistent, false);
-    assert.equal(input.store.durableDedup, false);
+  assert.equal(input.recipient, INQUIRY_NOTIFY_RECIPIENT);
+  assert.equal(input.testBand, undefined);
+  assert.equal(input.fetchImpl, undefined);
+  assert.equal(input.approval, undefined);
+  assert.equal(input.config, undefined);
+  assert.equal(input.store.persistent, false);
+  assert.equal(input.store.durableDedup, false);
 
-    const direct = await sendInquiryNotification(input);
-    const connection = inquiryIntakeConnectionResult(direct);
-    assert.equal(direct.sent, false);
-    assert.equal(direct.confirmed, false);
-    assert.equal(direct.failureCode, 'INQUIRY_NOTIFY_CONFIG_MISSING');
-    assert.equal(connection.operationalSend, false);
-    assert.equal(connection.persistentDedupRecorded, false);
-    assert.equal(connection.persistentDedup, 'absent');
-    assert.equal(connection.productionConnected, false);
-    assert.equal(connection.serverWired, true);
-    assert.equal(connection.testBandReceiptCount, before);
+  const direct = await sendInquiryNotification(input);
+  const connection = inquiryIntakeConnectionResult(direct);
+  assert.equal(direct.sent, false);
+  assert.equal(direct.confirmed, false);
+  assert.equal(direct.failureCode, 'INQUIRY_NOTIFY_CONFIG_MISSING');
+  assert.equal(connection.operationalSend, false);
+  assert.equal(connection.persistentDedupRecorded, false);
+  assert.equal(connection.persistentDedup, 'absent');
+  assert.equal(connection.productionConnected, false);
+  assert.equal(connection.serverWired, true);
+  assert.equal(connection.testBandReceiptCount, before);
 
-    const unapproved = await sendInquiryNotification({
-      ...input,
-      inquiry: { ...input.inquiry, id: 'inq-server-unapproved' },
-      config: readyConfig(),
-      store: { persistent: false, durableDedup: false },
-      testBand: 'inquiry-notification-test-band-only',
-    });
-    assert.equal(unapproved.sent, false);
-    assert.equal(unapproved.confirmed, false);
-    assert.equal(unapproved.failureCode, 'INQUIRY_NOTIFY_APPROVAL_REQUIRED');
+  const unapproved = await sendInquiryNotification({
+    ...input,
+    inquiry: { ...input.inquiry, id: 'inq-server-unapproved' },
+    config: readyConfig(),
+    store: { persistent: false, durableDedup: false },
+    testBand: 'inquiry-notification-test-band-only',
+  });
+  assert.equal(unapproved.sent, false);
+  assert.equal(unapproved.confirmed, false);
+  assert.equal(unapproved.failureCode, 'INQUIRY_NOTIFY_APPROVAL_REQUIRED');
   assert.equal(readInquiryNotificationTestBand().length, before);
 });
 

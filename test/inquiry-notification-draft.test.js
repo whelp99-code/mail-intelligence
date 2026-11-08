@@ -232,7 +232,7 @@ test('server.mjs 연결은 실발송 경로를 열지 않는다', () => {
   const draft = readFileSync(new URL('../src/application/inquiry-notification-draft.js', import.meta.url), 'utf8');
   assert.equal(source.includes('inquiry-notification-draft'), true);
   assert.equal(source.includes('sendInquiryNotification'), true);
-  assert.equal(source.includes("sendInquiryNotification(inquiryNotificationInput(body))"), true);
+  assert.equal(source.includes('sendInquiryNotification(inquiryNotificationInput(body))'), true);
   assert.equal(source.includes('/sendMail'), false);
   assert.equal(draft.includes('fetchImpl('), false);
   assert.equal(draft.includes('globalThis.fetch'), false);
