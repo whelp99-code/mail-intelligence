@@ -33,6 +33,8 @@ import { PersistentMailMemoryRuntime } from './src/application/persistent-mail-m
 import { createReadonlyIntegrityCheck, createSharedIntegrity, jarvisReaderStatusWithin } from './src/storage/shared-integrity.js';
 import { annotateReplyGaps, replyDraftsEnabled } from './src/application/reply-draft-pipeline.js';
 import { createMailSendApi } from './src/application/mail-send-api.js';
+import { sendInquiryNotification } from './src/application/inquiry-notification-draft.js';
+import { inquiryIntakeConnectionResult, inquiryNotificationInput } from './src/application/inquiry-intake-connection.js';
 import { GraphSendClient } from './src/adapters/microsoft-graph-send.js';
 import { createSendReconciliationWorker } from './src/application/send-reconciliation-worker.js';
 import {
@@ -3014,6 +3016,13 @@ async function handleApi(req, res) {
       });
     }
 
+    if (url.pathname === '/api/inquiries') {
+      if (req.method !== 'POST') throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+      requireStateChange(req);
+      const body = await readJsonBody(req);
+      const notification = await sendInquiryNotification(inquiryNotificationInput(body));
+      return json(res, 200, inquiryIntakeConnectionResult(notification));
+    }
     if (url.pathname === '/api/hooks/data-plane' && req.method === 'POST') {
       requireStateChange(req);
       assertMutationAllowed(safetyPolicy, 'dataPlaneWrite');
